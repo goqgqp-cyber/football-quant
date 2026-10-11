@@ -167,14 +167,37 @@ export function collectStream(
     return { abort: () => controller.abort() }
 }
 
+/**
+ * Bọc fetch với timeout để KHÔNG BAO GIỜ treo vô hạn.
+ * Nếu máy chủ không phản hồi (mạng đứng / function lỗi), promise sẽ reject
+ * sau `ms` — nhờ đó UI luôn thoát khỏi trạng thái "đang tải".
+ */
+async function fetchWithTimeout(
+    input: string,
+    init: RequestInit = {},
+    ms = 20000,
+): Promise<Response> {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), ms)
+    try {
+        return await fetch(input, { ...init, signal: ctrl.signal })
+    } finally {
+        clearTimeout(timer)
+    }
+}
+
 /** Gọi /api/auth/refresh, gộp nhiều request đồng thời vào một lần. */
 async function doRefresh(): Promise<boolean> {
     if (!refreshPromise) {
-        refreshPromise = fetch(`${BASE}/auth/refresh`, {
-            method: 'POST',
-            credentials: 'include',
-            headers: { 'x-csrf-token': readCsrfToken() ?? '' },
-        })
+        refreshPromise = fetchWithTimeout(
+            `${BASE}/auth/refresh`,
+            {
+                method: 'POST',
+                credentials: 'include',
+                headers: { 'x-csrf-token': readCsrfToken() ?? '' },
+            },
+            8000,
+        )
             .then((r) => r.ok)
             .catch(() => false)
             .finally(() => {
@@ -191,10 +214,12 @@ interface RequestOptions extends Omit<RequestInit, 'body'> {
     body?: unknown
     /** Bỏ qua bước tự refresh khi gặp 401 (dùng cho chính endpoint refresh). */
     skipRefresh?: boolean
+    /** Thời gian chờ tối đa (ms) trước khi huỷ request. Mặc định 20s. */
+    timeoutMs?: number
 }
 
 export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-    const { body, skipRefresh, headers, ...rest } = opts
+    const { body, skipRefresh, timeoutMs = 20000, headers, ...rest } = opts
 
     const send = async (): Promise<Response> => {
         const h = new Headers(headers)
@@ -204,25 +229,43 @@ export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Prom
         const csrf = readCsrfToken()
         if (csrf) h.set('x-csrf-token', csrf)
 
-        return fetch(`${BASE}${path}`, {
-            ...rest,
-            headers: h,
-            credentials: 'include',
-            body:
-                body === undefined
-                    ? undefined
-                    : body instanceof FormData
-                        ? body
-                        : JSON.stringify(body),
-        })
+        return fetchWithTimeout(
+            `${BASE}${path}`,
+            {
+                ...rest,
+                headers: h,
+                credentials: 'include',
+                body:
+                    body === undefined
+                        ? undefined
+                        : body instanceof FormData
+                            ? body
+                            : JSON.stringify(body),
+            },
+            timeoutMs,
+        )
     }
 
-    let res = await send()
+    let res: Response
+    try {
+        res = await send()
+    } catch (e) {
+        if (e instanceof DOMException && e.name === 'AbortError') {
+            throw new ApiError(408, 'Máy chủ không phản hồi (hết thời gian chờ).')
+        }
+        throw new ApiError(0, 'Không kết nối được máy chủ.')
+    }
 
     // Access token hết hạn (15 phút) → refresh một lần rồi thử lại
     if (res.status === 401 && !skipRefresh) {
         const ok = await doRefresh()
-        if (ok) res = await send()
+        if (ok) {
+            try {
+                res = await send()
+            } catch {
+                throw new ApiError(0, 'Không kết nối được máy chủ.')
+            }
+        }
     }
 
     if (!res.ok) {

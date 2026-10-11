@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { ApiError, api, type MeResponse } from '../lib/api'
+import { api, type MeResponse } from '../lib/api'
 
 export type AuthUser = MeResponse['user']
 
@@ -26,14 +26,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const { user: u } = await api.me()
             setUser(u)
         } catch (e) {
-            if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
-                setUser(null)
-            }
+            // 401/403 = chưa đăng nhập; 0/408 = mạng/timeout.
+            // Mọi trường hợp đều coi như chưa đăng nhập để KHÔNG kẹt màn "đang kiểm tra".
+            void e
+            setUser(null)
         }
     }, [])
 
     useEffect(() => {
-        refreshMe().finally(() => setLoading(false))
+        let cancelled = false
+        // Chốt an toàn: nếu mạng/function treo, tối đa 8s phải thoát màn "Đang kiểm tra phiên…"
+        const guard = window.setTimeout(() => {
+            if (!cancelled) setLoading(false)
+        }, 8000)
+        refreshMe()
+            .catch(() => {
+                /* đã xử lý trong refreshMe */
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    clearTimeout(guard)
+                    setLoading(false)
+                }
+            })
+        return () => {
+            cancelled = true
+            clearTimeout(guard)
+        }
     }, [refreshMe])
 
     const login = useCallback(async (email: string, password: string) => {

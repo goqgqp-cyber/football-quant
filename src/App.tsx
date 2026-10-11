@@ -1,6 +1,5 @@
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { BlackHole } from './components/BlackHole'
-import { CosmicDust } from './components/CosmicDust'
+import { Starfield } from './components/Starfield'
 import { RefractionFilter } from './components/ui/RefractionFilter'
 import { Nav, Sidebar } from './components/Nav'
 import { Footer } from './components/Footer'
@@ -20,12 +19,12 @@ const TITLES: Record<Route, string> = {
     account: 'Tài khoản',
 }
 
-/** Nền vũ trụ dùng chung: hố đen WebGL + trường bụi hút về kỳ dị. */
+/** Nền vũ trụ dùng chung: bầu trời sao + sao băng (canvas 2D, rất nhẹ). */
 function Cosmos() {
     return (
         <>
-            <BlackHole />
-            <CosmicDust />
+            <Starfield />
+            <div aria-hidden="true" className="star-vignette" />
         </>
     )
 }
