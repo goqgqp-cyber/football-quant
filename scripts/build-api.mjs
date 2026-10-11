@@ -8,12 +8,15 @@
  * chuỗi "Lỗi 500" rỗng (body không phải JSON).
  *
  * esbuild bundle toàn bộ (hono, jose, bcryptjs, zod, @upstash/redis…)
- * vào `api/[...route].js` để function không còn phụ thuộc vào việc
- * resolve module lúc chạy.
+ * vào MỘT file để function không còn phụ thuộc vào việc resolve module
+ * lúc chạy.
  *
- * Lưu ý tên file: Vercel Functions dùng catch-all `[...route]` (MỘT cặp
- * ngoặc vuông). Cú pháp `[[...route]]` là của Next.js, Vercel sẽ từ chối
- * config ngay khi validate → deploy lỗi tức thì.
+ * Tên file: `api/[...route].js` — catch-all của Vercel Functions, khớp MỌI
+ * đường dẫn dưới `/api/*` và GIỮ NGUYÊN path gốc (vd `/api/auth/login`)
+ * nên Hono định tuyến đúng. KHÔNG cần `rewrites` trong vercel.json, và
+ * KHÔNG dùng `[[...route]]` (cú pháp Next.js, Vercel từ chối).
+ *
+ * File output được COMMIT (không gitignore) để Vercel luôn thấy handler.
  */
 import { build } from 'esbuild'
 import { mkdir } from 'node:fs/promises'

@@ -1,14 +1,19 @@
 import { useEffect, useRef } from 'react'
 
 /* ==========================================================================
-   HỐ ĐEN — GLSL gravitational lensing (phong cách Gargantua / Interstellar)
+   HỐ ĐEN — dựng theo ảnh tham chiếu Gargantua (Interstellar)
    --------------------------------------------------------------------------
-   Kỹ thuật: raymarch trong không gian, mỗi bước lệch vector hướng về tâm
-   (mô phỏng uốn ánh sáng), xen kẽ bắt giao điểm với mặt phẳng đĩa để vẽ
-   "cầu vồng" đĩa hấp dẫn phía trên (lensing) — hiệu ứng đặc trưng của
-   hố đen quay. Doppler beaming: một bên đĩa tiến về phía người xem sáng
-   hơn, một bên lui xa tối hơn.
-   Đơn sắc tuyệt đối: mọi màu đều là thang xám lạnh (bạch kim).
+   Khác biệt so với bản cũ: dùng TÍCH PHÂN TRẮC ĐỊA đúng cho tia sáng
+   (null geodesic) trong không-thời gian Schwarzschild thay vì "uốn nhẹ":
+
+       a = -1.5 * h² * r_vec / |r|^5      (h² = |r × v|², bảo toàn)
+
+   Nhờ đó ánh sáng từ MẶT XA của đĩa bồi tụ bị bẻ cong vòng LÊN TRÊN và
+   XUỐNG DƯỚI hố đen, tạo "vòm" đặc trưng + VÒNG PHOTON mảnh rực sáng ôm
+   sát bóng đen. Đĩa nhìn gần như cạnh (edge-on), kéo dài hết khung, quay
+   Kepler LIÊN TỤC (omega ~ r^-1.5) nên không bao giờ đứng yên.
+
+   Đơn sắc tuyệt đối: mọi ánh sáng đều là thang xám lạnh (bạch kim).
    ========================================================================== */
 
 const VERT = `#version 300 es
@@ -31,14 +36,12 @@ uniform float uTime;
 uniform vec2  uPointer;   // -1..1, chuẩn hoá
 uniform float uLensAmt;   // 0..1 cường độ méo quanh con trỏ
 
-// --- hằng số vật lý (đơn vị quang học) ---
-const float RS       = 0.62;   // bán kính chân trời sự kiện (event horizon)
-const float DISK_IN  = 0.95;   // mặt trong đĩa hấp dẫn (ISCO)
-const float DISK_OUT = 3.40;   // mặt ngoài
-const float BEND     = 0.62;   // hằng số uốn quang học
-const float C_LIGHT  = 1.30;   // hằng số Doppler
+// --- hằng số hình học (RS = 1 cho gọn đơn vị) ---
+const float RS       = 1.60;   // bán kính chân trời sự kiện
+const float DISK_IN  = 3.20;   // mặt trong đĩa (ISCO)
+const float DISK_OUT = 11.00;  // mặt ngoài đĩa
 
-// ---------- tiện ích ----------
+// ---------- nhiễu ----------
 float hash31(vec3 p) {
     p = fract(p * 0.3183099 + vec3(0.71, 0.113, 0.419));
     p *= 17.0;
@@ -71,77 +74,75 @@ float fbm(vec2 p) {
     return s;
 }
 
-// ---------- nền sao (cũng bị uốn theo hố đen) ----------
+// ---------- nền sao ----------
 vec3 starField(vec3 rd) {
-    vec3 p  = rd * 140.0;
+    vec3 p  = rd * 160.0;
     vec3 id = floor(p);
     vec3 f  = fract(p) - 0.5;
 
     float n  = hash31(id);
-    float sp = step(0.9955, n);
-    float b  = 0.35 + 0.65 * hash31(id + 11.3);
+    float sp = step(0.9945, n);
+    float b  = 0.30 + 0.70 * hash31(id + 11.3);
     float d  = length(f);
-    float pt = smoothstep(0.30, 0.0, d) * sp;
+    float pt = smoothstep(0.34, 0.0, d) * sp;
 
     // Sương ngân hà cực mờ, đơn sắc
-    float neb = fbm(vec2(atan(rd.z, rd.x) * 1.7, rd.y * 2.6));
-    neb = smoothstep(0.42, 1.0, neb) * 0.028;
+    float neb = fbm(vec2(atan(rd.z, rd.x) * 1.6, rd.y * 2.4));
+    neb = smoothstep(0.45, 1.0, neb) * 0.030;
 
     vec3 col = vec3(0.96, 0.975, 1.0) * pt * b;
     col += vec3(0.85, 0.88, 0.95) * neb;
     return col;
 }
 
-// ---------- mật độ đĩa hấp dẫn ----------
-// r  : bán kính trong mặt phẳng đĩa
-// th : góc cực
-float diskDensity(float r, float th, float t) {
+// ---------- hồ sơ bán kính đĩa ----------
+float diskProfile(float r) {
     if (r < DISK_IN || r > DISK_OUT) return 0.0;
-    float rn = (r - DISK_IN) / (DISK_OUT - DISK_IN);
+    float t = (r - DISK_IN) / (DISK_OUT - DISK_IN);
+    float inner = smoothstep(0.0, 0.035, t);     // bờ trong sắc như dao (ISCO)
+    float outer = smoothstep(1.0, 0.55, t);      // mờ dần ra rìa ngoài
+    float bright = pow(1.0 - t, 1.35);           // sáng nhất ở vành trong
+    return inner * outer * (0.30 + bright);
+}
 
-    // Hồ sơ bán kính: bờ trong sắc như dao (ISCO), mỏng dần ra ngoài
-    float radial = pow(1.0 - rn, 1.6) * smoothstep(0.0, 0.07, rn);
-    radial *= smoothstep(1.0, 0.86, rn);          // cắt mềm rìa ngoài
-
-    // Vành sáng ISCO: mép trong rực nhất, đúng chất Gargantua
-    float rim = smoothstep(0.30, 0.02, rn) * (1.0 - smoothstep(0.0, 0.015, rn));
-
-    // Quay Kepler: omega ~ r^-1.5 — đĩa xoay LIÊN TỤC quanh hố đen
-    float omega = 1.35 / pow(r, 1.5);
-    float ang   = th - omega * t * 3.0;
-
-    // Dải xoáy ốc lớn + chi tiết mịn + vân siêu mịn (độ nét 4K)
-    float bands  = fbm(vec2(ang * 2.6 + rn * 9.0, rn * 4.0 - t * 0.16));
-    float spiral = 0.36 + 0.92 * bands;
-    float fine   = 0.72 + 0.46 * fbm(vec2(ang * 11.0, rn * 21.0 - t * 0.55));
-    float micro  = 0.82 + 0.36 * fbm(vec2(ang * 23.0 + rn * 34.0, rn * 44.0 - t * 1.1));
-
-    return radial * spiral * fine * micro + rim * (0.55 + 0.45 * fine);
+// ---------- mật độ vân đĩa (quay Kepler liên tục) ----------
+float diskNoise(float r, float phi, float t) {
+    float omega = 1.55 / pow(r, 1.5);            // omega ~ r^-1.5
+    float a = phi - omega * t;                   // kéo vân theo góc quay
+    float n1 = fbm(vec2(a * 2.1 + r * 1.0, r * 1.7 - t * 0.07));
+    float n2 = fbm(vec2(a * 6.2 - r * 1.8, r * 4.6 - t * 0.20));
+    float n3 = fbm(vec2(a * 14.0 + r * 4.4, r * 10.0 - t * 0.45));
+    return 0.50 + 0.95 * n1 + 0.42 * n2 + 0.24 * n3;
 }
 
 // ---------- Doppler beaming ----------
-// Ánh sáng bị tăng cường khi vật chất chuyển về phía người xem (và giảm khi đi xa).
-float doppler(vec3 p, vec3 dir) {
-    float r = length(p.xz);
-    float v = 0.42 / sqrt(max(r, 0.4));                 // |v| tương đối
-    vec3  vhat = normalize(vec3(-p.z, 0.0, p.x));        // hướng tốc độ tiếp tuyến
-    float beta = clamp(v / C_LIGHT, 0.0, 0.72);
-    float mu   = dot(vhat, -dir);                        // cos góc giữa v và hướng nhìn
-    float del  = clamp(1.0 - beta * mu, 0.22, 2.0);
-    return pow(del, -3.2);                               // cường độ ~ delta^-3..4
+float doppler(vec3 pc, vec3 dir) {
+    float r = length(pc.xz);
+    float beta = clamp(0.62 / sqrt(max(r, 1.0)), 0.0, 0.62);
+    vec3  vhat = normalize(vec3(-pc.z, 0.0, pc.x));   // vận tốc tiếp tuyến
+    float mu   = dot(vhat, -normalize(dir));
+    float del  = clamp(1.0 - beta * mu, 0.30, 1.70);
+    return pow(del, -2.4);                            // bên tiến về phía ta sáng hơn
 }
 
 void main() {
     // ---- Tọa độ pixel, khớp aspect ----
     vec2 uv = (gl_FragCoord.xy - 0.5 * uRes) / uRes.y;
 
-    // ---- Máy quay nhìn chếch xuống đĩa ----
-    vec3 ro = vec3(0.0, 0.42, -3.30);
-    vec3 rd = normalize(vec3(uv.x, uv.y, 1.35));
+    // ---- Méo không gian cục bộ quanh con trỏ (thấu kính) ----
+    vec2 pw = uPointer * vec2(uRes.x / uRes.y, 1.0) * 0.5;
+    vec2 toP = uv - pw;
+    float pd = length(toP);
+    float lens = uLensAmt * 0.10 * exp(-pd * pd * 9.0);
+    uv -= normalize(toP + 1e-6) * lens;
 
-    // ---- Nghiêng mặt phẳng đĩa theo con trỏ ----
-    float tiltX = uPointer.y * 0.26;
-    float tiltY = uPointer.x * 0.20;
+    // ---- Máy quay nằm gần mặt phẳng đĩa (edge-on), nghiêng nhẹ ----
+    vec3 ro = vec3(0.0, 1.15, 9.0);
+    vec3 rd = normalize(vec3(uv.x, uv.y + 0.050, -2.20));
+
+    // ---- Nghiêng theo con trỏ (pitch + yaw nhẹ) ----
+    float tiltX = uPointer.y * 0.22;
+    float tiltY = uPointer.x * 0.18;
     float cx = cos(tiltX), sx = sin(tiltX);
     rd = vec3(rd.x, rd.y * cx - rd.z * sx, rd.y * sx + rd.z * cx);
     ro = vec3(ro.x, ro.y * cx - ro.z * sx, ro.y * sx + ro.z * cx);
@@ -149,89 +150,80 @@ void main() {
     rd = vec3(rd.x * cy + rd.z * sy, rd.y, -rd.x * sy + rd.z * cy);
     ro = vec3(ro.x * cy + ro.z * sy, ro.y, -ro.x * sy + ro.z * cy);
 
-    // ---- Méo không gian cục bộ quanh con trỏ ----
-    vec2 pw = uPointer * vec2(uRes.x / uRes.y, 1.0) * 0.5;
-    vec2 toP = uv - pw;
-    float pd = length(toP);
-    float lens = uLensAmt * 0.09 * exp(-pd * pd * 9.0);
-    uv -= normalize(toP + 1e-6) * lens;
+    // ---- Tích phân trắc địa (null geodesic, Schwarzschild) ----
+    vec3 p = ro;
+    vec3 v = rd;
+    vec3 hv = cross(p, v);
+    float h2 = dot(hv, hv);          // hằng số bảo toàn của tia
 
-    vec3 col = vec3(0.0);
-    float trans = 1.0;      // truyền qua đĩa
-    float diskGlow = 0.0;   // quầng quang học quanh chân trời sự kiện
+    vec3  col = vec3(0.0);
+    float trans = 1.0;               // độ truyền qua đĩa
+    float ringGlow = 0.0;            // quầng photon
+    bool  captured = false;          // rơi vào chân trời sự kiện
 
-    vec3  p = ro;
-    vec3  dir = rd;
-    vec3  pPrev = p;
-    float t = 0.0;
-    float dt = 0.035;
-    bool  insideHorizon = false;
+    float dt = 0.055;
 
     for (int i = 0; i < ${steps}; i++) {
-        pPrev = p;
-        p += dir * dt;
-        t += dt;
+        vec3 pPrev = p;
+
+        // Gia tốc trắc địa: a = -1.5 h² r / |r|^5
+        float r2 = dot(p, p);
+        vec3 a = -1.5 * h2 * p / (r2 * r2 * sqrt(r2));
+
+        v += a * dt;
+        p += v * dt;
 
         float r = length(p);
 
-        // Rơi vào chân trời sự kiện -> bóng tối tuyệt đối
-        if (r < RS) { insideHorizon = true; break; }
-        if (r > 42.0) break;
+        // Rơi vào chân trời -> bóng tối tuyệt đối
+        if (r < RS) { captured = true; break; }
+        if (r > 90.0) break;
 
-        // --- Uốn quang học: hướng tia bị lệch về tâm theo ~ 1/r^2 ---
-        vec3 g = p / max(r, 1e-3);
-        dir = normalize(dir - g * (BEND * dt / (r * r)));
-
-        // --- Vòng photon: sợi sáng mảnh ôm sát chân trời sự kiện ---
-        float ring = smoothstep(RS * 1.004, RS * 1.018, r) * smoothstep(RS * 2.00, RS * 1.18, r);
-        diskGlow += ring * dt * 3.4 * trans;
+        // --- Vòng photon: tia quay quanh r ~ 1.5 RS càng lâu càng sáng ---
+        float pr = (r - 1.5 * RS) / (0.16 * RS);
+        ringGlow += exp(-pr * pr) * dt * 0.85 * trans;
 
         // --- Giao với mặt phẳng đĩa (y = 0) ---
-        if (p.y * pPrev.y < 0.0) {
+        if (pPrev.y * p.y < 0.0) {
             float f = pPrev.y / (pPrev.y - p.y);
             vec3  pc = mix(pPrev, p, f);
-            float rd2 = length(pc.xz);
+            float rr = length(pc.xz);
+            float prof = diskProfile(rr);
 
-            float th = atan(pc.z, pc.x);
-            float dens = diskDensity(rd2, th, uTime);
-
-            if (dens > 0.001) {
-                float dop = doppler(pc, dir);
-                // Ánh sáng bị hấp thụ + xung quang học gần chân trời
-                float shift = 1.0 / sqrt(max(1.0 - 2.0 * RS / rd2, 0.15));
+            if (prof > 0.001) {
+                float phi = atan(pc.z, pc.x);
+                float dens = prof * diskNoise(rr, phi, uTime);
+                float dop  = doppler(pc, v);
+                float shift = 1.0 / sqrt(max(1.0 - RS / rr, 0.10));  // dịch đỏ hấp dẫn
                 float emis = dens * dop * shift;
 
-                // Màu đơn sắc, hơi lệch sang bạch kim lạnh
-                vec3 emitCol = vec3(1.0, 1.0, 1.0) * emis;
-                col += emitCol * trans * 0.15;
-                trans *= exp(-dens * 0.50);
+                col += vec3(1.0, 1.0, 1.0) * emis * trans * 0.115;
+                trans *= exp(-dens * 0.85);
             }
         }
 
-        dt = clamp(dt * 1.022, 0.030, 0.16);
+        // Bước tiến thích ứng: xa thì bước lớn, gần thì mịn
+        dt = clamp(dt * 1.012, 0.045, 0.22);
     }
 
-    // Nền sao phía sau (bị méo bởi hố đen)
-    vec3 bg = starField(dir) * (insideHorizon ? 0.0 : 1.0);
+    // Quầng photon (bạch kim lạnh)
+    col += vec3(0.92, 0.95, 1.0) * ringGlow * 0.16;
 
-    // Quầng quang học viền chân trời (bạch kim)
-    col += vec3(0.92, 0.95, 1.0) * diskGlow * 0.10;
+    // Nền sao phía sau (bị méo bởi hố đen, tắt nếu bị nuốt)
+    col += starField(normalize(v)) * (captured ? 0.0 : 1.0);
 
-    // Ánh sáng toàn cảnh rò ra từ đĩa
-    col += bg;
-
-    // Bloom mềm: toàn bộ ánh sáng được nhấp nháy mờ
+    // Bloom mềm cho vùng sáng rực
     float lum = dot(col, vec3(0.2126, 0.7152, 0.0722));
-    col += col * smoothstep(0.35, 1.6, lum) * 0.55;
+    col += col * smoothstep(0.40, 2.0, lum) * 0.60;
 
-    // Vignette + gamma nhẹ để giữ tương phản cực đại
+    // Vignette giữ tương phản cực đại
     vec2 vv = gl_FragCoord.xy / uRes;
-    float vig = smoothstep(1.15, 0.25, length(vv - 0.5) * 1.55);
-    col *= mix(0.35, 1.0, vig);
+    float vig = smoothstep(1.20, 0.28, length(vv - 0.5) * 1.55);
+    col *= mix(0.32, 1.0, vig);
 
-    // Dither để loại bỏ banding trên nền tối
+    // Dither loại bỏ banding trên nền tối
     float dither = (hash21(gl_FragCoord.xy) - 0.5) / 255.0;
-    fragColor = vec4(pow(max(col, 0.0), vec3(0.92)) + dither, 1.0);
+    fragColor = vec4(pow(max(col, 0.0), vec3(0.94)) + dither, 1.0);
 }`
 
 function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader {
@@ -275,7 +267,7 @@ export function BlackHole() {
         let buf: WebGLBuffer | null = null
 
         const isSmall = window.matchMedia('(max-width: 768px)').matches
-        const steps = isSmall ? 120 : 210
+        const steps = isSmall ? 150 : 240
 
         try {
             const vs = compile(gl, gl.VERTEX_SHADER, VERT)
@@ -380,7 +372,7 @@ export function BlackHole() {
 
             gl.useProgram(program)
             gl.uniform2f(uRes, canvas.width, canvas.height)
-            gl.uniform1f(uTime, reduced ? 6.0 : (now - start) / 1000)
+            gl.uniform1f(uTime, reduced ? 12.0 : (now - start) / 1000)
             gl.uniform2f(uPointer, ptr.x, ptr.y)
             gl.uniform1f(uLensAmt, reduced ? 0 : ptr.lens * quality)
 

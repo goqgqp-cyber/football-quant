@@ -23,5 +23,5 @@ npm-debug.log*
 server/dist/
 .worktree/
 
-# Build output của function Vercel (tự sinh bởi `npm run build:api`)
-api/\[...route\].js
+# Lưu ý: api/index.js là bundle function Vercel được COMMIT (không ignore)
+# để Vercel luôn thấy handler, kể cả khi build step bị bỏ qua.
