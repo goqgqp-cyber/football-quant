@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { GlassCard } from '../components/ui/GlassCard'
 import { Button } from '../components/ui/Button'
@@ -6,12 +6,10 @@ import { Field, TextInput } from '../components/ui/Field'
 import { PickCard } from '../components/PickCard'
 import { ProgressSteps, type Step } from '../components/ui/ProgressSteps'
 import { Skeleton } from '../components/ui/RefractionFilter'
-import { ApiError, api, type ExtractedRow } from '../lib/api'
+import { ApiError, api, collectStream, type ExtractedRow } from '../lib/api'
 import { MOCK_MATCH_DATA, MOCK_MATCH_INPUT, MOCK_ODDS } from '../lib/mock'
 import { useSettings } from '../hooks/useSettings'
 import type { AnalysisResult, MatchData, MatchInput, OddsLine } from '../lib/types'
-
-type AnalysisStepId = 'collect' | 'extract' | 'compute' | 'explain'
 
 interface ConfirmRow {
     line: OddsLine
@@ -36,9 +34,11 @@ function toConfirmRow(r: ExtractedRow): ConfirmRow {
 }
 
 /**
- * Trang Phân tích (G2): form nhập + upload ảnh (placeholder G3) + bảng xác nhận số liệu.
- * Phần tính toán chạy trên server (`POST /api/analyze`) — engine thuần TS, KHÔNG dùng LLM.
- * SSE tiến trình thật sẽ có ở G4; G2 mô phỏng tiến trình rồi chờ kết quả server.
+ * Trang Phân tích.
+ *  - G3: upload ảnh → `POST /api/extract` (Gemini OCR) → bảng xác nhận kèo có confidence.
+ *  - G4: `POST /api/collect/stream` (SSE) — Bước A dùng Gemini + Google Search grounding
+ *    để lấy số liệu thật, phát tiến trình thật về UI, rồi engine thuần TS tính toán.
+ * Phần tính toán KHÔNG dùng LLM; Gemini chỉ thu thập dữ liệu và (G5) viết giải thích.
  */
 export function AnalyzePage() {
     const { settings } = useSettings()
@@ -67,6 +67,11 @@ export function AnalyzePage() {
     const [result, setResult] = useState<AnalysisResult | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [savedId, setSavedId] = useState<string | null>(null)
+    /** Text thô Gemini đang phát ra — cho người dùng thấy tiến trình thật. */
+    const [liveText, setLiveText] = useState('')
+    /** true khi đã nhận dữ liệu nền từ Google Search. */
+    const [grounded, setGrounded] = useState(false)
+    const abortRef = useRef<(() => void) | null>(null)
 
     const setStepStatus = (id: string, status: Step['status']) => {
         setSteps((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)))
@@ -76,24 +81,18 @@ export function AnalyzePage() {
         setSteps((prev) => prev.map((s) => ({ ...s, status: 'pending' as const })))
     }
 
-    const runAnalysis = async () => {
+    const runAnalysis = () => {
+        if (running || oddsLines.length === 0) return
         setRunning(true)
         setError(null)
         resetSteps()
         setResult(null)
         setSavedId(null)
+        setLiveText('')
+        setGrounded(false)
 
-        const ids: AnalysisStepId[] = ['collect', 'extract', 'compute', 'explain']
-        for (let i = 0; i < ids.length; i++) {
-            const id = ids[i]
-            setStepStatus(id, 'active')
-            // Mô phỏng tiến trình; G4 sẽ thay bằng SSE thật từ Gemini.
-            await new Promise<void>((r) => window.setTimeout(r, 350))
-            setStepStatus(id, 'done')
-        }
-
-        try {
-            const { result: r, recordId } = await api.analyze({
+        const { abort } = collectStream(
+            {
                 home: input.homeTeam,
                 away: input.awayTeam,
                 league: input.league,
@@ -101,15 +100,46 @@ export function AnalyzePage() {
                 lg_home: input.lg_home,
                 lg_away: input.lg_away,
                 oddsLines,
-            })
-            setResult(r)
-            setSavedId(recordId)
-        } catch (e) {
-            setError(e instanceof ApiError ? e.message : 'Phân tích thất bại. Kiểm tra backend đã chạy chưa.')
-        } finally {
-            setRunning(false)
-        }
+            },
+            (e) => {
+                switch (e.type) {
+                    case 'step':
+                        setStepStatus(e.id, e.status)
+                        break
+                    case 'delta':
+                        // Giới hạn độ dài để không dồn text vô hạn vào state
+                        setLiveText((prev) => (prev.length > 4000 ? prev : prev + e.text))
+                        break
+                    case 'data':
+                        setData(e.matchData)
+                        setGrounded(true)
+                        break
+                    case 'result':
+                        setResult(e.result)
+                        setSavedId(e.recordId)
+                        setRunning(false)
+                        abortRef.current = null
+                        break
+                    case 'error':
+                        setError(e.message)
+                        setRunning(false)
+                        abortRef.current = null
+                        break
+                }
+            },
+        )
+        abortRef.current = abort
     }
+
+    /** Dừng luồng đang chạy. */
+    const cancelAnalysis = () => {
+        abortRef.current?.()
+        abortRef.current = null
+        setRunning(false)
+    }
+
+    // Dừng luồng nếu người dùng rời trang khi đang chạy
+    useEffect(() => () => abortRef.current?.(), [])
 
     const runExtract = useCallback(
         async (files: File[]) => {
@@ -282,9 +312,9 @@ export function AnalyzePage() {
                             onChange={(e) => setBankroll(Number(e.target.value) || 0)}
                         />
                     </Field>
-                    <Field label="Nguồn (giả)">
+                    <Field label="Nguồn dữ liệu" hint={grounded ? 'Từ Google Search' : 'Chưa thu thập'}>
                         <TextInput
-                            value={`${data.sources.length} nguồn`}
+                            value={grounded ? `${data.sources.length} nguồn thật` : '— (dữ liệu mẫu)'}
                             readOnly
                             className="!bg-white/5"
                         />
@@ -299,20 +329,35 @@ export function AnalyzePage() {
                 </div>
             </GlassCard>
 
-            {/* Số liệu nền tảng (mock) */}
+            {/* Số liệu nền tảng: thật từ Google Search grounding (G4) hoặc dữ liệu mẫu */}
             <GlassCard>
-                <div className="flex items-center justify-between gap-2">
-                    <p className="font-display text-sm font-bold text-ink-100">Số liệu nền tảng (giả lập)</p>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                        <p className="font-display text-sm font-bold text-ink-100">Số liệu nền tảng</p>
+                        {grounded ? (
+                            <span className="rounded-full border border-value-400/40 bg-value-400/10 px-2 py-0.5 text-[11px] font-semibold text-value-400">
+                                Dữ liệu thật · Google Search
+                            </span>
+                        ) : (
+                            <span className="rounded-full border border-warn-400/40 bg-warn-400/10 px-2 py-0.5 text-[11px] font-semibold text-warn-400">
+                                Mẫu (giả lập)
+                            </span>
+                        )}
+                    </div>
                     <button
                         className="text-xs text-violet-400 hover:text-violet-300"
-                        onClick={() => setData(MOCK_MATCH_DATA)}
+                        onClick={() => {
+                            setData(MOCK_MATCH_DATA)
+                            setGrounded(false)
+                        }}
                     >
                         Nạp lại dữ liệu mẫu
                     </button>
                 </div>
                 <p className="mt-1 text-xs text-ink-500">
-                    G4 sẽ thay bằng Gemini + Google Search grounding, kèm nguồn và thời điểm. G2 dùng dữ liệu mẫu này
-                    để tính (có nhãn rõ, không giả là dữ liệu thật).
+                    {grounded
+                        ? 'Gemini tìm số liệu thật trên web (Google Search grounding). Không có số liệu nào được bịa; trường nào không tìm thấy sẽ nằm trong “Thiếu”.'
+                        : 'Chưa có dữ liệu thật. Bấm “Phân tích ngay” để Gemini tìm dữ liệu — bảng dưới chỉ là dữ liệu mẫu để xem trước.'}
                 </p>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <TeamBox label={`Chủ nhà: ${input.homeTeam}`} team={data.home} />
@@ -323,6 +368,28 @@ export function AnalyzePage() {
                 )}
                 {data.conflicts.length > 0 && (
                     <p className="mt-1 text-xs text-danger-400">Mâu thuẫn: {data.conflicts.join(' · ')}</p>
+                )}
+                {data.sources.length > 0 && (
+                    <details className="mt-3">
+                        <summary className="cursor-pointer text-xs text-violet-400">
+                            Nguồn ({data.sources.length})
+                        </summary>
+                        <ul className="mt-2 space-y-1">
+                            {data.sources.map((s) => (
+                                <li key={s.url} className="truncate text-xs">
+                                    <a
+                                        href={s.url}
+                                        target="_blank"
+                                        rel="noreferrer noopener"
+                                        className="text-ink-300 underline decoration-white/20 hover:text-violet-300"
+                                        title={s.url}
+                                    >
+                                        {s.title}
+                                    </a>
+                                </li>
+                            ))}
+                        </ul>
+                    </details>
                 )}
             </GlassCard>
 
@@ -503,10 +570,10 @@ export function AnalyzePage() {
                                         <td className="px-3 py-1.5">
                                             <span
                                                 className={`rounded-full px-2 py-1 text-[11px] font-semibold ${r.confidence >= 0.8
-                                                        ? 'bg-value-500/15 text-value-400'
-                                                        : r.confidence >= 0.6
-                                                            ? 'bg-warn-500/15 text-warn-400'
-                                                            : 'bg-danger-500/15 text-danger-400'
+                                                    ? 'bg-value-500/15 text-value-400'
+                                                    : r.confidence >= 0.6
+                                                        ? 'bg-warn-500/15 text-warn-400'
+                                                        : 'bg-danger-500/15 text-danger-400'
                                                     }`}
                                             >
                                                 {Math.round(r.confidence * 100)}%
@@ -611,10 +678,17 @@ export function AnalyzePage() {
                 )}
             </GlassCard>
 
-            {/* Stream tiến trình */}
+            {/* Stream tiến trình thật (SSE) */}
             {(running || result) && (
                 <GlassCard>
-                    <p className="font-display text-sm font-bold text-ink-100">Tiến trình phân tích</p>
+                    <div className="flex items-center justify-between gap-2">
+                        <p className="font-display text-sm font-bold text-ink-100">Tiến trình phân tích</p>
+                        {running && (
+                            <Button variant="ghost" onClick={cancelAnalysis}>
+                                Hủy
+                            </Button>
+                        )}
+                    </div>
                     <div className="mt-3">
                         {running ? (
                             <ProgressSteps steps={steps} />
@@ -624,6 +698,16 @@ export function AnalyzePage() {
                             </div>
                         )}
                     </div>
+                    {running && liveText && (
+                        <div className="mt-3 max-h-40 overflow-y-auto rounded-xl border border-white/10 bg-black/20 p-3">
+                            <p className="mb-1 text-[11px] uppercase tracking-wide text-ink-500">
+                                Gemini đang phát (thô)
+                            </p>
+                            <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-ink-400">
+                                {liveText}
+                            </pre>
+                        </div>
+                    )}
                 </GlassCard>
             )}
 

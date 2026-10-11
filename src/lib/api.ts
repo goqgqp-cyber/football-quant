@@ -8,6 +8,7 @@ import type {
     ActualResult,
     AnalysisResult,
     CalibrationBin,
+    MatchData,
     OddsLine,
     Pick,
     SettledPick,
@@ -31,6 +32,132 @@ function readCsrfToken(): string | undefined {
 }
 
 let refreshPromise: Promise<boolean> | null = null
+
+/** Sự kiện phát ra từ `POST /api/collect/stream` (SSE). */
+export type CollectEvent =
+    | { type: 'step'; id: string; status: 'active' | 'done' | 'error' }
+    | { type: 'delta'; text: string }
+    | { type: 'data'; matchData: MatchData }
+    | { type: 'result'; result: AnalysisResult; recordId: string }
+    | { type: 'error'; message: string }
+
+/**
+ * Chạy Bước A + tính toán qua SSE. Không dùng EventSource vì cần gửi
+ * header CSRF và body JSON; thay vào đó đọc ReadableStream của fetch.
+ *
+ * @returns hàm huỷ (abort) để người dùng có thể dừng giữa chừng.
+ */
+export function collectStream(
+    payload: AnalyzePayload,
+    onEvent: (e: CollectEvent) => void,
+): { abort: () => void } {
+    const controller = new AbortController()
+
+    const run = async () => {
+        let res: Response
+        try {
+            res = await fetch(`${BASE}/collect/stream`, {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'x-csrf-token': readCsrfToken() ?? '',
+                },
+                body: JSON.stringify(payload),
+                signal: controller.signal,
+            })
+        } catch (e) {
+            if (!controller.signal.aborted) {
+                onEvent({ type: 'error', message: 'Không kết nối được máy chủ.' })
+            }
+            void e
+            return
+        }
+
+        if (!res.ok || !res.body) {
+            let msg = `Lỗi ${res.status}`
+            try {
+                const j = (await res.json()) as { message?: string }
+                if (j.message) msg = j.message
+            } catch {
+                /* ignore */
+            }
+            onEvent({ type: 'error', message: msg })
+            return
+        }
+
+        const reader = res.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        try {
+            for (; ;) {
+                const { done, value } = await reader.read()
+                if (done) break
+                buffer += decoder.decode(value, { stream: true })
+
+                let idx: number
+                // SSE: các khối ngăn cách bởi dòng trống
+                while ((idx = buffer.indexOf('\n\n')) !== -1) {
+                    const block = buffer.slice(0, idx)
+                    buffer = buffer.slice(idx + 2)
+
+                    let eventName = 'message'
+                    let dataLine = ''
+                    for (const raw of block.split('\n')) {
+                        const line = raw.trimEnd()
+                        if (line.startsWith('event:')) eventName = line.slice(6).trim()
+                        else if (line.startsWith('data:')) dataLine += line.slice(5).trim()
+                    }
+                    if (!dataLine) continue
+
+                    let parsed: unknown
+                    try {
+                        parsed = JSON.parse(dataLine)
+                    } catch {
+                        continue
+                    }
+                    const o = parsed as Record<string, unknown>
+                    switch (eventName) {
+                        case 'step':
+                            onEvent({
+                                type: 'step',
+                                id: String(o.id ?? ''),
+                                status: (o.status as 'active' | 'done' | 'error') ?? 'active',
+                            })
+                            break
+                        case 'delta':
+                            onEvent({ type: 'delta', text: String(o.text ?? '') })
+                            break
+                        case 'data':
+                            onEvent({ type: 'data', matchData: o.matchData as MatchData })
+                            break
+                        case 'result':
+                            onEvent({
+                                type: 'result',
+                                result: o.result as AnalysisResult,
+                                recordId: String(o.recordId ?? ''),
+                            })
+                            break
+                        case 'error':
+                            onEvent({ type: 'error', message: String(o.message ?? 'Lỗi không xác định.') })
+                            break
+                    }
+                }
+            }
+        } catch (e) {
+            if (!controller.signal.aborted) {
+                onEvent({
+                    type: 'error',
+                    message: e instanceof Error ? e.message : 'Luồng bị ngắt.',
+                })
+            }
+        }
+    }
+
+    void run()
+    return { abort: () => controller.abort() }
+}
 
 /** Gọi /api/auth/refresh, gộp nhiều request đồng thời vào một lần. */
 async function doRefresh(): Promise<boolean> {

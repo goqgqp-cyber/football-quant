@@ -10,6 +10,7 @@
  */
 
 import { env } from './env.js'
+import type { H2H, MatchData, Source, TeamStats } from '../src/lib/types.js'
 
 const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models'
 
@@ -222,4 +223,243 @@ export async function extractOddsFromImages(
         note: typeof parsed.note === 'string' ? parsed.note.slice(0, 300) : undefined,
         model: env.geminiModel,
     }
+}
+
+// ===========================================================================
+// BƯỚC A — thu thập dữ liệu nền bằng Gemini + Google Search grounding
+// ===========================================================================
+
+export interface GroundedHint {
+    home: string
+    away: string
+    league?: string
+    kickoff?: string | null
+}
+
+const STEP_A_PROMPT = `Bạn là trợ lý thu thập DỮ LIỆU THẬT cho một trận bóng đá, dùng công cụ Google Search.
+
+Trận: {HOME} vs {AWAY}{LEAGUE_PART}{KICKOFF_PART}
+
+Hãy tìm kiếm trên web và trả về DUY NHẤT một object JSON (không markdown, không văn xuôi ngoài JSON).
+
+Yêu cầu tuyệt đối:
+- CHỈ điền số liệu tìm thấy thật trên web. KHÔNG được đoán, không nội suy, không bịa.
+- Trường nào không tìm được thì để null (với số) hoặc [] (với mảng), và GHI TÊN trường đó vào "missing".
+- Nếu hai nguồn mâu thuẫn nhau, ghi mô tả ngắn vào "conflicts".
+- Mọi số liệu phải là trung bình/trận và nêu rõ số trận mẫu n.
+
+Cấu trúc JSON:
+{
+  "home": {"xgf":null,"xga":null,"goals_for":null,"goals_against":null,"n":0,"injuries":[],"lineup_confirmed":false},
+  "away": {"xgf":null,"xga":null,"goals_for":null,"goals_against":null,"n":0,"injuries":[],"lineup_confirmed":false},
+  "h2h": {"n":0,"avg_goals":null,"btts_rate":null},
+  "conflicts": [],
+  "missing": []
+}`
+
+function numOrNull(v: unknown): number | null {
+    const n = num(v)
+    if (n === null) return null
+    // loại giá trị vô lý
+    if (n < 0 || n > 100) return null
+    return n
+}
+
+function strArray(v: unknown, max = 20): string[] {
+    if (!Array.isArray(v)) return []
+    return v
+        .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+        .map((s) => s.trim().slice(0, 160))
+        .slice(0, max)
+}
+
+function normalizeTeamStats(v: unknown): TeamStats {
+    const o = (v ?? {}) as Record<string, unknown>
+    const n = num(o.n)
+    return {
+        xgf: numOrNull(o.xgf),
+        xga: numOrNull(o.xga),
+        goals_for: numOrNull(o.goals_for),
+        goals_against: numOrNull(o.goals_against),
+        n: n !== null && n >= 0 && n <= 200 ? Math.round(n) : 0,
+        injuries: strArray(o.injuries),
+        lineup_confirmed: o.lineup_confirmed === true,
+    }
+}
+
+function normalizeH2H(v: unknown): H2H {
+    const o = (v ?? {}) as Record<string, unknown>
+    const n = num(o.n)
+    const btts = num(o.btts_rate)
+    return {
+        n: n !== null && n >= 0 && n <= 200 ? Math.round(n) : 0,
+        avg_goals: numOrNull(o.avg_goals),
+        btts_rate: btts !== null && btts >= 0 && btts <= 1 ? btts : null,
+    }
+}
+
+/** Ghi tên các trường còn thiếu để UI cảnh báo "không đủ dữ liệu". */
+function detectMissing(data: MatchData): string[] {
+    const miss: string[] = []
+    for (const [label, t] of [
+        ['home', data.home],
+        ['away', data.away],
+    ] as const) {
+        if (t.xgf === null && t.goals_for === null) miss.push(`${label}.xgf/goals_for`)
+        if (t.xga === null && t.goals_against === null) miss.push(`${label}.xga/goals_against`)
+        if (t.n === 0) miss.push(`${label}.n`)
+    }
+    if (data.h2h.n === 0) miss.push('h2h.n')
+    return miss
+}
+
+/** Chuẩn hoá JSON thô của Bước A thành MatchData an toàn. */
+function normalizeMatchData(raw: unknown, sources: Source[]): MatchData {
+    const o = (raw ?? {}) as Record<string, unknown>
+    const data: MatchData = {
+        home: normalizeTeamStats(o.home),
+        away: normalizeTeamStats(o.away),
+        h2h: normalizeH2H(o.h2h),
+        sources,
+        conflicts: strArray(o.conflicts),
+        missing: [],
+        origin: 'search',
+    }
+    data.missing = detectMissing(data)
+    return data
+}
+
+/** Rút nguồn web từ groundingMetadata của Gemini. */
+function extractSources(meta: unknown): Source[] {
+    const gm = meta as
+        | { groundingChunks?: Array<{ web?: { uri?: string; title?: string } }> }
+        | undefined
+    const chunks = gm?.groundingChunks ?? []
+    const now = new Date().toISOString()
+    const out: Source[] = []
+    const seen = new Set<string>()
+    for (const ch of chunks) {
+        const url = ch.web?.uri
+        if (!url || seen.has(url)) continue
+        seen.add(url)
+        out.push({ url, title: ch.web?.title?.slice(0, 200) ?? url, fetched_at: now })
+        if (out.length >= 12) break
+    }
+    return out
+}
+
+/**
+ * BƯỚC A có streaming: gọi Gemini + Google Search grounding, phát dần text cho
+ * client qua `onDelta`, cuối cùng trả MatchData đã chuẩn hoá.
+ *
+ * @throws {GeminiError} khi thiếu key / lỗi mạng / JSON hỏng.
+ */
+export async function streamCollectMatchData(
+    hint: GroundedHint,
+    onDelta: (chunk: string) => void,
+): Promise<MatchData> {
+    if (!env.geminiApiKey) {
+        throw new GeminiError('Chưa cấu hình GEMINI_API_KEY trên server.', 503)
+    }
+
+    const prompt = STEP_A_PROMPT.replace('{HOME}', hint.home)
+        .replace('{AWAY}', hint.away)
+        .replace('{LEAGUE_PART}', hint.league ? `, giải ${hint.league}` : '')
+        .replace('{KICKOFF_PART}', hint.kickoff ? `, thời điểm ${hint.kickoff}` : '')
+
+    const body = {
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        tools: [{ google_search: {} }],
+        generationConfig: {
+            temperature: 0.2,
+            responseMimeType: 'application/json',
+        },
+    }
+
+    let res: Response
+    try {
+        res = await fetch(`${ENDPOINT}/${env.geminiModel}:streamGenerateContent?alt=sse`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-goog-api-key': env.geminiApiKey,
+            },
+            body: JSON.stringify(body),
+        })
+    } catch (e) {
+        throw new GeminiError(
+            `Không gọi được Gemini: ${e instanceof Error ? e.message : 'lỗi mạng'}`,
+            502,
+        )
+    }
+
+    if (!res.ok || !res.body) {
+        const detail = await res.text().catch(() => '')
+        console.error('[gemini] step A HTTP', res.status, detail.slice(0, 500))
+        throw new GeminiError(`Gemini trả lỗi HTTP ${res.status}.`, 502)
+    }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let text = ''
+    const sources: Source[] = []
+
+    // Đọc SSE của Gemini: các dòng "data: {...}"
+    for (; ;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        let idx: number
+        while ((idx = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, idx).trim()
+            buffer = buffer.slice(idx + 1)
+            if (!line.startsWith('data:')) continue
+            const payload = line.slice(5).trim()
+            if (!payload || payload === '[DONE]') continue
+
+            let chunk: {
+                candidates?: Array<{
+                    content?: { parts?: Array<{ text?: string }> }
+                    groundingMetadata?: unknown
+                }>
+            }
+            try {
+                chunk = JSON.parse(payload)
+            } catch {
+                continue
+            }
+            const cand = chunk.candidates?.[0]
+            const piece = cand?.content?.parts?.map((p) => p.text ?? '').join('') ?? ''
+            if (piece) {
+                text += piece
+                onDelta(piece)
+            }
+            if (cand?.groundingMetadata) {
+                sources.push(...extractSources(cand.groundingMetadata))
+            }
+        }
+    }
+
+    if (!text.trim()) {
+        throw new GeminiError('Gemini không trả về dữ liệu cho trận này.', 502)
+    }
+
+    let parsed: unknown
+    try {
+        parsed = JSON.parse(stripJsonFence(text))
+    } catch {
+        throw new GeminiError('Gemini trả về JSON không hợp lệ ở Bước A.', 502)
+    }
+
+    // Khử trùng nguồn
+    const seen = new Set<string>()
+    const uniqSources = sources.filter((s) => {
+        if (seen.has(s.url)) return false
+        seen.add(s.url)
+        return true
+    })
+
+    return normalizeMatchData(parsed, uniqSources)
 }

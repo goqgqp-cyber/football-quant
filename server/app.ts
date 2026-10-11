@@ -6,6 +6,7 @@ import { pingRedis } from './redis.js'
 import { authApp } from './routes/auth.js'
 import { dataApp } from './routes/data.js'
 import { extractApp } from './routes/extract.js'
+import { streamApp } from './routes/stream.js'
 
 /**
  * App API chính.
@@ -71,6 +72,7 @@ app.get('/api/health', async (c) => {
 app.route('/api/auth', authApp)
 app.route('/api', dataApp)
 app.route('/api', extractApp)
+app.route('/api', streamApp)
 
 app.notFound((c) => c.json({ error: 'not_found' }, 404))
 app.onError((err, c) => {
