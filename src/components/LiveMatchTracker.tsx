@@ -5,11 +5,12 @@ import type { LiveMatchData, SettledMatchRecord } from '../lib/types'
 interface LiveMatchTrackerProps {
     home: string
     away: string
+    eventId?: number | string | null
     recordId?: string | null
     onSettled?: (settled: SettledMatchRecord) => void
 }
 
-export function LiveMatchTracker({ home, away, recordId, onSettled }: LiveMatchTrackerProps) {
+export function LiveMatchTracker({ home, away, eventId, recordId, onSettled }: LiveMatchTrackerProps) {
     const [liveData, setLiveData] = useState<LiveMatchData | null>(null)
     const [loading, setLoading] = useState(false)
     const [lastPoll, setLastPoll] = useState<Date | null>(null)
@@ -17,14 +18,25 @@ export function LiveMatchTracker({ home, away, recordId, onSettled }: LiveMatchT
     const [settling, setSettling] = useState(false)
     const [settleError, setSettleError] = useState<string | null>(null)
 
+    // SofaScore Event ID nhập tay hoặc nhận từ SportAPI
+    const [customEventId, setCustomEventId] = useState<string>('')
+    const [showEmbed, setShowEmbed] = useState<boolean>(true)
+
     const pollTimerRef = useRef<number | null>(null)
     const autoSettleTriggeredRef = useRef(false)
+
+    // Xác định eventId đang hoạt động (nhập tay > prop eventId > SportAPI eventId)
+    const activeEventId =
+        customEventId.trim() ||
+        (eventId ? String(eventId).trim() : '') ||
+        (liveData?.eventId ? String(liveData.eventId) : '')
 
     const fetchLive = useCallback(async () => {
         if (!home.trim() || !away.trim()) return
         try {
             setLoading(true)
-            const data = await api.getLiveMatch(home.trim(), away.trim())
+            const numericId = activeEventId && !isNaN(Number(activeEventId)) ? Number(activeEventId) : undefined
+            const data = await api.getLiveMatch(home.trim(), away.trim(), numericId)
             setLiveData(data)
             setLastPoll(new Date())
 
@@ -60,7 +72,7 @@ export function LiveMatchTracker({ home, away, recordId, onSettled }: LiveMatchT
         } finally {
             setLoading(false)
         }
-    }, [home, away, recordId, autoSettled, onSettled])
+    }, [home, away, activeEventId, recordId, autoSettled, onSettled])
 
     // Polling tự động chu kỳ 20 giây/lần
     useEffect(() => {
@@ -78,7 +90,6 @@ export function LiveMatchTracker({ home, away, recordId, onSettled }: LiveMatchT
 
         // Lập lịch 20 giây một lần
         pollTimerRef.current = window.setInterval(() => {
-            // Chỉ fetch khi người dùng đang mở tab (document.visibilityState === 'visible')
             if (document.visibilityState === 'visible') {
                 void fetchLive()
             }
@@ -116,7 +127,7 @@ export function LiveMatchTracker({ home, away, recordId, onSettled }: LiveMatchT
     const isFinished = liveData?.isFinished
 
     return (
-        <div className="relative overflow-hidden rounded-xl border border-white/10 bg-gradient-to-b from-neutral-900/95 to-neutral-950/98 p-4 shadow-2xl border-white/16">
+        <div className="relative overflow-hidden rounded-xl border border-white/16 bg-gradient-to-b from-neutral-900/95 to-neutral-950/98 p-4 shadow-2xl">
             {/* Header thanh trạng thái live */}
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/8 pb-3">
                 <div className="flex items-center gap-2">
@@ -159,7 +170,7 @@ export function LiveMatchTracker({ home, away, recordId, onSettled }: LiveMatchT
                         type="button"
                         onClick={() => void fetchLive()}
                         disabled={loading}
-                        className="rounded p-1 hover:bg-white/5 text-slate-300 hover:text-white transition"
+                        className="rounded p-1 hover:bg-white/5 text-slate-400 hover:text-white transition"
                         title="Làm mới ngay"
                     >
                         🔄 {loading ? '...' : ''}
@@ -188,8 +199,8 @@ export function LiveMatchTracker({ home, away, recordId, onSettled }: LiveMatchT
                                 {liveData.score.home} - {liveData.score.away}
                             </span>
                             {liveData.periodScore?.htHome !== undefined && (
-                                <span className="text-[10px] text-slate-300 font-medium">
-                                    HT {liveData.periodScore.htHome}-{liveData.periodScore.htAway}
+                                <span className="text-[10px] text-slate-400">
+                                    HT: {liveData.periodScore.htHome} - {liveData.periodScore.htAway}
                                 </span>
                             )}
                         </div>
@@ -207,32 +218,32 @@ export function LiveMatchTracker({ home, away, recordId, onSettled }: LiveMatchT
                         </div>
                     </div>
 
-                    {/* Thanh chỉ số trực quan: Kiểm soát bóng, Sút trúng đích, Phạt góc */}
-                    <div className="mt-4 space-y-2.5 rounded-lg bg-black/40 p-3 border border-white/5">
-                        {/* 1. Tỷ lệ kiểm soát bóng */}
+                    {/* Thanh chỉ số trực quan (Comparison Bars) */}
+                    <div className="mt-4 space-y-2.5 rounded-lg bg-neutral-900/60 p-3 border border-white/8">
+                        {/* 1. Kiểm soát bóng */}
                         <div>
                             <div className="flex justify-between text-xs font-medium text-neutral-300 mb-1">
-                                <span>{possessionHome}%</span>
-                                <span className="text-slate-300 font-normal">Kiểm soát bóng (Possession)</span>
-                                <span>{possessionAway}%</span>
+                                <span className="font-bold text-indigo-400">{possessionHome}%</span>
+                                <span className="text-slate-300 font-normal">Kiểm soát bóng</span>
+                                <span className="font-bold text-indigo-400">{possessionAway}%</span>
                             </div>
-                            <div className="flex h-2 w-full overflow-hidden rounded-full bg-white/10">
+                            <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-white/10">
                                 <div
-                                    className="bg-blue-500 transition-all duration-500"
+                                    className="bg-indigo-500 transition-all duration-500"
                                     style={{ width: `${possessionHome}%` }}
                                 />
                                 <div
-                                    className="bg-indigo-400 transition-all duration-500"
+                                    className="bg-indigo-700 transition-all duration-500"
                                     style={{ width: `${possessionAway}%` }}
                                 />
                             </div>
                         </div>
 
-                        {/* 2. Cú sút trúng đích */}
+                        {/* 2. Sút trúng đích */}
                         <div>
                             <div className="flex justify-between text-xs font-medium text-neutral-300 mb-1">
                                 <span className="font-bold text-emerald-400">{shotsHome}</span>
-                                <span className="text-slate-300 font-normal">Sút trúng đích (Shots on target)</span>
+                                <span className="text-slate-300 font-normal">Sút trúng đích</span>
                                 <span className="font-bold text-emerald-400">{shotsAway}</span>
                             </div>
                             <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-white/10">
@@ -281,6 +292,94 @@ export function LiveMatchTracker({ home, away, recordId, onSettled }: LiveMatchT
                 <div className="my-2 py-3 text-center text-xs text-slate-300">
                     <p>Đang tìm kiếm luồng dữ liệu trực tiếp cho trận <strong className="text-white">{home}</strong> vs <strong className="text-white">{away}</strong>...</p>
                     <p className="mt-1 text-[11px] text-slate-400">(Tự động làm mới mỗi 20s qua SportAPI RapidAPI)</p>
+                </div>
+            )}
+
+            {/* Thanh điều khiển SofaScore Event ID */}
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/8 pt-2.5 text-xs">
+                <div className="flex items-center gap-2">
+                    <span className="text-slate-400 font-medium">SofaScore Event ID:</span>
+                    <input
+                        type="text"
+                        placeholder={liveData?.eventId ? String(liveData.eventId) : "vd: 11868359"}
+                        value={customEventId}
+                        onChange={(e) => setCustomEventId(e.target.value.trim())}
+                        className="rounded-lg border border-white/12 bg-neutral-900/90 px-2.5 py-1 text-xs text-white placeholder-slate-500 focus:border-white/50 focus:outline-none w-36 font-mono shadow-inner"
+                    />
+                    {customEventId && (
+                        <button
+                            type="button"
+                            onClick={() => setCustomEventId('')}
+                            className="text-slate-400 hover:text-white text-xs px-1"
+                            title="Quay lại ID tự động từ SportAPI"
+                        >
+                            ✕
+                        </button>
+                    )}
+                </div>
+
+                {activeEventId && (
+                    <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+                        WebSocket SofaScore trực tiếp · 0s độ trễ
+                    </span>
+                )}
+            </div>
+
+            {/* SofaScore Attack Momentum & Live Match Radar Iframe */}
+            {activeEventId && (
+                <div className="mt-3.5 overflow-hidden rounded-xl border border-white/14 bg-black shadow-2xl">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 bg-neutral-900/90 px-3.5 py-2">
+                        <div className="flex items-center gap-2">
+                            <span className="relative flex h-2 w-2">
+                                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-rose-400 opacity-75"></span>
+                                <span className="relative inline-flex h-2 w-2 rounded-full bg-rose-500"></span>
+                            </span>
+                            <span className="text-xs font-bold text-white tracking-wide">
+                                SofaScore Live Attack Momentum
+                            </span>
+                            <span className="rounded bg-white/10 px-1.5 py-0.5 text-[10px] font-mono text-neutral-300">
+                                ID: {activeEventId}
+                            </span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setShowEmbed((v) => !v)}
+                                className="text-[11px] font-medium text-slate-300 hover:text-white transition"
+                            >
+                                {showEmbed ? 'Thu gọn ▲' : 'Mở rộng ▼'}
+                            </button>
+                            <a
+                                href={`https://www.sofascore.com/event/${activeEventId}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[11px] text-indigo-300 hover:text-indigo-200 underline transition"
+                            >
+                                Mở trên SofaScore ↗
+                            </a>
+                        </div>
+                    </div>
+                    {showEmbed && (
+                        <div className="relative w-full bg-black" style={{ height: '480px' }}>
+                            <iframe
+                                id={`sofascore-embed-${activeEventId}`}
+                                src={`https://www.sofascore.com/event/${activeEventId}/attack-momentum/embed`}
+                                width="100%"
+                                height="480px"
+                                style={{
+                                    border: 'none',
+                                    width: '100%',
+                                    height: '480px',
+                                    display: 'block',
+                                    borderRadius: '0 0 12px 12px',
+                                }}
+                                title={`SofaScore Live Attack Momentum - ${home} vs ${away}`}
+                                loading="lazy"
+                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                            />
+                        </div>
+                    )}
                 </div>
             )}
 
