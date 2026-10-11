@@ -18,15 +18,26 @@ export const XKIRO_CLIENT_API_KEY = (
 ).trim()
 
 /**
- * 2. Fast & Sharp Client-Side Canvas Pre-processing
- * - Nếu width > 1600px, thu nhỏ tỉ lệ về max width 1600px
- * - Xuất image/jpeg chất lượng 0.88
- * - Giảm payload từ nhiều MB xuống ~250KB, giữ sắc nét từng số thập phân odds và dấu (+/-).
+ * Client-Side Canvas Pre-Compression (OddsUpload / Image Upload)
+ * - Load image vào HTML Image object
+ * - Thu nhỏ tỉ lệ về max width 1280px:
+ *     let width = img.naturalWidth || img.width;
+ *     let height = img.naturalHeight || img.height;
+ *     if (width > MAX_WIDTH) {
+ *       height = Math.round((height * MAX_WIDTH) / width);
+ *       width = MAX_WIDTH;
+ *     }
+ * - Xuất image/jpeg chất lượng 0.80 (payload size ~150KB)
+ * - Giảm thời gian inference xKiro xuống 3-5s, chống 504 trên Vercel.
  */
-export async function preprocessImageToDataUrl(file: File): Promise<string> {
+export async function compressImageToJpegBase64(
+    file: File,
+    maxWidth = 1280,
+    quality = 0.8,
+): Promise<{ mimeType: string; data: string; dataUrl: string }> {
     return new Promise((resolve, reject) => {
         if (!file.type.startsWith('image/')) {
-            reject(new Error('File tải lên không phải là ảnh hợp lệ.'))
+            reject(new Error('Tệp tải lên không phải là ảnh hợp lệ.'))
             return
         }
 
@@ -35,12 +46,12 @@ export async function preprocessImageToDataUrl(file: File): Promise<string> {
 
         img.onload = () => {
             URL.revokeObjectURL(objectUrl)
-            const MAX_WIDTH = 1600
-            let { width, height } = img
+            let width = img.naturalWidth || img.width
+            let height = img.naturalHeight || img.height
 
-            if (width > MAX_WIDTH) {
-                height = Math.round((height * MAX_WIDTH) / width)
-                width = MAX_WIDTH
+            if (width > maxWidth) {
+                height = Math.round((height * maxWidth) / width)
+                width = maxWidth
             }
 
             const canvas = document.createElement('canvas')
@@ -60,8 +71,13 @@ export async function preprocessImageToDataUrl(file: File): Promise<string> {
             ctx.drawImage(img, 0, 0, width, height)
 
             try {
-                const dataUrl = canvas.toDataURL('image/jpeg', 0.88)
-                resolve(dataUrl)
+                const dataUrl = canvas.toDataURL('image/jpeg', quality)
+                const base64Data = dataUrl.replace(/^data:image\/jpeg;base64,/, '')
+                resolve({
+                    mimeType: 'image/jpeg',
+                    data: base64Data,
+                    dataUrl,
+                })
             } catch (err) {
                 reject(err instanceof Error ? err : new Error('Lỗi mã hóa canvas toDataURL.'))
             }
@@ -69,7 +85,7 @@ export async function preprocessImageToDataUrl(file: File): Promise<string> {
 
         img.onerror = () => {
             URL.revokeObjectURL(objectUrl)
-            reject(new Error('Không thể tải dữ liệu ảnh từ thiết bị.'))
+            reject(new Error('Không thể đọc dữ liệu ảnh từ thiết bị.'))
         }
 
         img.src = objectUrl
@@ -101,8 +117,8 @@ export async function extractOddsDirectClient(
         throw new Error('Vui lòng chọn ít nhất 1 ảnh bảng kèo.')
     }
 
-    // 1. Tiền xử lý tất cả ảnh qua Canvas (max width 1600px, JPEG 0.88)
-    const dataUrls = await Promise.all(files.map((f) => preprocessImageToDataUrl(f)))
+    // 1. Tiền xử lý tất cả ảnh qua Canvas (max width 1280px, JPEG 0.80)
+    const compressedList = await Promise.all(files.map((f) => compressImageToJpegBase64(f, 1280, 0.8)))
 
     // 2. Chuẩn bị prompt bóc tách
     const promptText = `Bạn là Chuyên gia Thị giác Máy tính và OCR Bảng Kèo Bóng Đá.
@@ -139,9 +155,9 @@ CẤU TRÚC JSON MẪU:
 
     const contentParts: Array<{ type: 'text' | 'image_url'; text?: string; image_url?: { url: string } }> = [
         { type: 'text', text: promptText },
-        ...dataUrls.map((url) => ({
+        ...compressedList.map((item) => ({
             type: 'image_url' as const,
-            image_url: { url },
+            image_url: { url: item.dataUrl },
         })),
     ]
 

@@ -16,7 +16,7 @@ import type {
     SettledMatchRecord,
     SettledPick,
 } from './types'
-import { extractOddsDirectClient } from './ocr-client'
+import { compressImageToJpegBase64 } from './ocr-client'
 
 const BASE = '/api'
 
@@ -598,14 +598,33 @@ export const api = {
 
     suggestedLines: () => apiFetch<{ lines: OddsLine[] }>('/suggested-lines'),
 
-    /** Gửi ảnh bảng kèo trực tiếp qua xKiro Vision từ trình duyệt (loại bỏ hoàn toàn trần 10s Vercel / 504 timeout). */
-    extract: (files: File[], hint: { home?: string; away?: string; league?: string }) => {
-        return extractOddsDirectClient(files, hint)
+    /** Gửi ảnh bảng kèo qua Server Proxy /api/ocr-odds sau khi nén canvas client (loại bỏ hoàn toàn CORS & 504 timeout). */
+    extract: async (files: File[], hint: { home?: string; away?: string; league?: string }) => {
+        // Nén ảnh trên Canvas client về max-width 1280px, jpeg 0.80 (~150KB/ảnh)
+        const compressed = await Promise.all(
+            files.map((file) => compressImageToJpegBase64(file, 1280, 0.8)),
+        )
+
+        const payload = {
+            images: compressed.map((c) => ({
+                mimeType: c.mimeType,
+                data: c.data,
+            })),
+            home: hint.home,
+            away: hint.away,
+            league: hint.league,
+        }
+
+        return apiFetch<ExtractResponse>('/ocr-odds', {
+            method: 'POST',
+            body: payload,
+            timeoutMs: 60000,
+        })
     },
 
-    /** Alias gọi OCR Odds trực tiếp từ trình duyệt */
-    ocrOdds: (files: File[], hint: { home?: string; away?: string; league?: string }) => {
-        return extractOddsDirectClient(files, hint)
+    /** Alias gọi OCR Odds qua Server Route */
+    ocrOdds: async (files: File[], hint: { home?: string; away?: string; league?: string }) => {
+        return api.extract(files, hint)
     },
 
     // --- Quản trị viên (Admin) ---

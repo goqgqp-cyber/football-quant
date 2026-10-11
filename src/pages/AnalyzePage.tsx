@@ -811,10 +811,10 @@ export function AnalyzePage() {
                         <div className="flex flex-col items-center gap-1.5 py-1">
                             <span className="flex h-3 w-3 rounded-full bg-violet-400 animate-ping mb-1" />
                             <p className="text-sm font-semibold text-violet-300 animate-pulse">
-                                {extractStatusText || 'AI đang bóc tách trực tiếp ma trận kèo qua Qwen Omni Flash...'}
+                                {extractStatusText || 'AI đang nén ảnh và bóc tách bảng kèo qua Qwen Omni Flash...'}
                             </p>
                             <span className="text-xs text-neutral-400">
-                                Kết nối trực tiếp xKiro Vision API (bỏ qua trần 10s Vercel, triệt tiêu lỗi 504)...
+                                Đã nén Canvas (~150KB) · Proxy server /api/ocr-odds (xử lý trong 3-5s, không lo CORS & 504)...
                             </span>
                         </div>
                     ) : (
@@ -826,7 +826,7 @@ export function AnalyzePage() {
                         className={`mt-3 inline-flex cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-black ${extracting ? 'cursor-not-allowed bg-white/35 text-ink-500' : 'bg-white hover:bg-platinum-300'
                             }`}
                     >
-                        {extracting ? 'Đang bóc tách trực tiếp qua xKiro…' : 'Chọn ảnh'}
+                        {extracting ? 'Đang bóc tách ma trận kèo…' : 'Chọn ảnh'}
                         <input
                             ref={fileInputRef}
                             type="file"

@@ -331,13 +331,14 @@ export async function extractOddsFromImages(
         })
     }
 
-    // Mô hình thị giác độ chính xác cao (High-Precision Vision Models):
-    // Sử dụng 'qwen/qwen-2.5-vl-72b-instruct' (fallback 'qwen/qwen3.8-max', 'qwen/qwen3.8-omni-flash', XKIRO_MODEL)
-    // max_tokens: 2048, temperature: 0.0 (trích xuất OCR thuần túy sự thật, không suy đoán)
+    // Mô hình thị giác siêu tốc (Fast Vision Models):
+    // Ưu tiên 'qwen/qwen3.8-omni-flash' (3-5s response), fallback 'qwen/qwen3.8-omni-flash:free', 'qwen/qwen3.8-max'
+    // max_tokens: 1500, temperature: 0.0 (trích xuất OCR chuẩn xác, độ trễ cực thấp)
     const candidateVisionModels = [
-        'qwen/qwen-2.5-vl-72b-instruct',
-        'qwen/qwen3.8-max',
         'qwen/qwen3.8-omni-flash',
+        'qwen/qwen3.8-omni-flash:free',
+        'qwen/qwen3.8-max',
+        'qwen/qwen-2.5-vl-72b-instruct',
         XKIRO_MODEL,
     ]
 
@@ -353,7 +354,7 @@ export async function extractOddsFromImages(
                 {
                     model,
                     temperature: 0.0,
-                    maxTokens: 2048,
+                    maxTokens: 1500,
                 },
             )
             if (res && res.ok) break
