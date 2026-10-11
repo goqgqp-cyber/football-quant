@@ -3,6 +3,14 @@
  * G1 dùng dữ liệu giả (mock) theo đúng schema này; G2+ thay bằng dữ liệu thật.
  */
 
+export type {
+    TeamInfo,
+    MatchScore,
+    MatchDetailedStats,
+    ExtractedOddsLine,
+    QuantRecommendation,
+} from '../types/football'
+
 /** Số liệu một đội (từ AI hoặc từ ảnh đã xác nhận). Trường thiếu = null. */
 export interface TeamStats {
     /** Bàn thắng kỳ vọng mỗi trận (nếu có nguồn xG) */
