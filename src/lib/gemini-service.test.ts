@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { sanitizeCleanText, GEMINI_MODEL, GEMINI_ENDPOINT, GEMINI_STREAM_ENDPOINT } from '../../server/services/gemini.js'
+import {
+    sanitizeCleanText,
+    GEMINI_MODEL,
+    GEMINI_ENDPOINT,
+    GEMINI_STREAM_ENDPOINT,
+    appendApiKey,
+    getModelCandidates,
+} from '../../server/services/gemini.js'
 
 describe('sanitizeCleanText (Payload Hygiene)', () => {
     it('giữ nguyên văn bản text sạch thông thường', () => {
@@ -44,5 +51,20 @@ describe('Gemini Model & Endpoint Standards', () => {
         expect(GEMINI_STREAM_ENDPOINT).toBe(
             `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse`,
         )
+    })
+
+    it('appendApiKey gắn query param key chính xác cho cả endpoint thường và stream', () => {
+        const url1 = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent'
+        expect(appendApiKey(url1, 'my-key')).toBe(`${url1}?key=my-key`)
+
+        const url2 = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent?alt=sse'
+        expect(appendApiKey(url2, 'my-key')).toBe(`${url2}&key=my-key`)
+    })
+
+    it('getModelCandidates chứa model chính và các model dự phòng chuẩn', () => {
+        const candidates = getModelCandidates()
+        expect(candidates.length).toBeGreaterThanOrEqual(2)
+        expect(candidates[0]).toBe(GEMINI_MODEL)
+        expect(candidates).toContain('gemini-2.0-flash')
     })
 })

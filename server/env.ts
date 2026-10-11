@@ -96,10 +96,11 @@ export const env = {
         if (raw.startsWith('models/')) {
             raw = raw.replace(/^models\//, '')
         }
-        if (raw === 'gemini-2.0-flash' || raw === 'gemini-2.0-flash-001') {
-            return 'gemini-2.0-flash'
+        // Cho phép các model chính thức (gemini-1.5-flash, gemini-2.0-flash, gemini-2.5-flash...)
+        if (raw && !raw.includes('experimental') && !raw.includes('preview')) {
+            return raw
         }
-        // Luôn trả về đúng chuẩn chính thức gemini-1.5-flash
+        // Mặc định chuẩn chính thức
         return 'gemini-1.5-flash'
     })(),
     storeOriginalImages: bool('STORE_ORIGINAL_IMAGES', false),

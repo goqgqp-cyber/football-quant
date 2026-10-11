@@ -135,6 +135,19 @@ export function sanitizeCleanText(text: string): string {
  *   tự động chờ 2.5 giây và thử lại tối đa 2 lần (tổng cộng 3 lượt gọi).
  * - Nếu gặp lỗi mạng tạm thời: cũng chờ 2.5 giây và thử lại tối đa 2 lần.
  */
+
+export function appendApiKey(url: string, key: string): string {
+    if (!key || url.includes('key=')) return url
+    const sep = url.includes('?') ? '&' : '?'
+    return `${url}${sep}key=${encodeURIComponent(key)}`
+}
+
+export function getModelCandidates(): string[] {
+    const primary = GEMINI_MODEL
+    const list = [primary, 'gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-1.5-flash']
+    return list.filter((v, i, a) => a.indexOf(v) === i)
+}
+
 export async function callGeminiApiWithRetry(
     endpointUrl: string,
     body: unknown,
@@ -151,8 +164,9 @@ export async function callGeminiApiWithRetry(
 
     while (true) {
         let res: Response
+        const targetUrl = appendApiKey(endpointUrl, env.geminiApiKey)
         try {
-            res = await fetch(endpointUrl, {
+            res = await fetch(targetUrl, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -188,7 +202,20 @@ export async function callGeminiApiWithRetry(
 
         if (!res.ok) {
             const detail = await res.text().catch(() => '')
+            let googleMessage = ''
+            try {
+                const parsed = JSON.parse(detail)
+                if (parsed?.error?.message) {
+                    googleMessage = ` (${parsed.error.message})`
+                }
+            } catch {
+                if (detail.trim()) {
+                    googleMessage = ` (${detail.slice(0, 160)})`
+                }
+            }
+
             console.error(`[gemini:${contextName}] HTTP ${res.status}`, detail.slice(0, 500))
+
             if (res.status === 429) {
                 throw new GeminiError(
                     'Gemini API vượt quá giới hạn lượt gọi (429 Rate Limit/Quota). Đã tự động thử lại 2 lần nhưng chưa thành công, vui lòng thử lại sau 1-2 phút.',
@@ -201,7 +228,25 @@ export async function callGeminiApiWithRetry(
                     503,
                 )
             }
-            throw new GeminiError(`Gemini trả lỗi HTTP ${res.status}.`, 502)
+            if (res.status === 404) {
+                throw new GeminiError(
+                    `Gemini trả lỗi HTTP 404: Không tìm thấy model hoặc endpoint${googleMessage}.`,
+                    404,
+                )
+            }
+            if (res.status === 400) {
+                throw new GeminiError(
+                    `Gemini trả lỗi HTTP 400 (Yêu cầu không hợp lệ)${googleMessage}. Vui lòng kiểm tra lại GEMINI_API_KEY.`,
+                    400,
+                )
+            }
+            if (res.status === 401 || res.status === 403) {
+                throw new GeminiError(
+                    `Gemini trả lỗi HTTP ${res.status} (Xác thực thất bại)${googleMessage}. Vui lòng kiểm tra lại GEMINI_API_KEY.`,
+                    res.status,
+                )
+            }
+            throw new GeminiError(`Gemini trả lỗi HTTP ${res.status}${googleMessage}.`, 502)
         }
 
         return res
@@ -232,7 +277,7 @@ export async function extractOddsFromImages(
 
     for (const img of images) {
         parts.push({
-            inline_data: { mime_type: img.mimeType, data: img.data },
+            inlineData: { mimeType: img.mimeType, data: img.data },
         })
     }
 
@@ -244,11 +289,37 @@ export async function extractOddsFromImages(
         },
     }
 
-    const res = await callGeminiApiWithRetry(
-        GEMINI_ENDPOINT,
-        body,
-        'ocr-extract',
-    )
+    const candidates = getModelCandidates()
+    let lastError: unknown = null
+    let res: Response | null = null
+    let activeModel = GEMINI_MODEL
+
+    for (let i = 0; i < candidates.length; i++) {
+        const candidateModel = candidates[i]
+        const candidateEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent`
+        try {
+            res = await callGeminiApiWithRetry(
+                candidateEndpoint,
+                body,
+                `ocr-extract:${candidateModel}`,
+            )
+            activeModel = candidateModel
+            break
+        } catch (e) {
+            lastError = e
+            if (e instanceof GeminiError && e.status === 404 && i < candidates.length - 1) {
+                console.warn(
+                    `[gemini:ocr-extract] Model ${candidateModel} trả HTTP 404. Tự động thử fallback sang ${candidates[i + 1]}...`,
+                )
+                continue
+            }
+            throw e
+        }
+    }
+
+    if (!res) {
+        throw (lastError || new GeminiError('Không gọi được Gemini API.', 502))
+    }
 
     const json = (await res.json()) as {
         candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
@@ -307,7 +378,7 @@ export async function extractOddsFromImages(
         meta,
         lowConfidence: rows.some((r) => r.confidence < 0.8),
         note: typeof parsed.note === 'string' ? parsed.note.slice(0, 300) : undefined,
-        model: env.geminiModel,
+        model: activeModel,
     }
 }
 
@@ -517,11 +588,35 @@ export async function streamCollectMatchData(
         },
     }
 
-    const res = await callGeminiApiWithRetry(
-        GEMINI_STREAM_ENDPOINT,
-        body,
-        'step-a-collect',
-    )
+    const candidates = getModelCandidates()
+    let lastError: unknown = null
+    let res: Response | null = null
+
+    for (let i = 0; i < candidates.length; i++) {
+        const candidateModel = candidates[i]
+        const streamEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:streamGenerateContent?alt=sse`
+        try {
+            res = await callGeminiApiWithRetry(
+                streamEndpoint,
+                body,
+                `step-a-collect:${candidateModel}`,
+            )
+            break
+        } catch (e) {
+            lastError = e
+            if (e instanceof GeminiError && e.status === 404 && i < candidates.length - 1) {
+                console.warn(
+                    `[gemini:step-a-collect] Model ${candidateModel} trả HTTP 404. Tự động thử fallback sang ${candidates[i + 1]}...`,
+                )
+                continue
+            }
+            throw e
+        }
+    }
+
+    if (!res) {
+        throw (lastError || new GeminiError('Không gọi được Gemini API.', 502))
+    }
 
     const { text, sources } = await readGeminiStream(res, onDelta)
 
@@ -633,11 +728,37 @@ export async function generateExplanation(
         },
     }
 
-    const res = await callGeminiApiWithRetry(
-        GEMINI_STREAM_ENDPOINT,
-        body,
-        'step-c-explain',
-    )
+    const candidates = getModelCandidates()
+    let lastError: unknown = null
+    let res: Response | null = null
+    let activeModel = GEMINI_MODEL
+
+    for (let i = 0; i < candidates.length; i++) {
+        const candidateModel = candidates[i]
+        const streamEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:streamGenerateContent?alt=sse`
+        try {
+            res = await callGeminiApiWithRetry(
+                streamEndpoint,
+                body,
+                `step-c-explain:${candidateModel}`,
+            )
+            activeModel = candidateModel
+            break
+        } catch (e) {
+            lastError = e
+            if (e instanceof GeminiError && e.status === 404 && i < candidates.length - 1) {
+                console.warn(
+                    `[gemini:step-c-explain] Model ${candidateModel} trả HTTP 404. Tự động thử fallback sang ${candidates[i + 1]}...`,
+                )
+                continue
+            }
+            throw e
+        }
+    }
+
+    if (!res) {
+        throw (lastError || new GeminiError('Không gọi được Gemini API.', 502))
+    }
 
     const { text } = await readGeminiStream(res, onDelta ?? (() => { }))
 
@@ -670,6 +791,6 @@ export async function generateExplanation(
         verified: unverifiedNumbers.length === 0,
         unverifiedNumbers,
         caveats,
-        model: env.geminiModel,
+        model: activeModel,
     }
 }
