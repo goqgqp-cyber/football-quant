@@ -14,6 +14,8 @@ interface GlassCardProps {
     magnetic?: boolean
     /** Nghiêng 3D theo con trỏ */
     tilt?: boolean
+    /** Hiệu ứng khúc xạ cong ở rìa (SVG #refraction) */
+    refract?: boolean
     onClick?: () => void
 }
 
@@ -31,6 +33,7 @@ export function GlassCard({
     interactive = false,
     magnetic = false,
     tilt = false,
+    refract = false,
     onClick,
 }: GlassCardProps) {
     const reduced = useReducedMotion()
@@ -78,8 +81,8 @@ export function GlassCard({
             onClick={onClick}
             whileHover={interactive && !reduced ? { y: -3 } : undefined}
             whileTap={interactive && !reduced ? { scale: 0.99 } : undefined}
-            style={
-                live3d
+            style={{
+                ...(live3d
                     ? {
                         rotateX: tilt ? rotateX : 0,
                         rotateY: tilt ? rotateY : 0,
@@ -87,8 +90,9 @@ export function GlassCard({
                         y: magnetic ? ty : 0,
                         transformPerspective: 1000,
                     }
-                    : undefined
-            }
+                    : {}),
+                ...(refract ? { filter: 'url(#refraction)' } : {}),
+            }}
             transition={{ type: 'spring', stiffness: 420, damping: 30 }}
             className={[
                 'glass',

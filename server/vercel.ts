@@ -1,16 +1,98 @@
 /**
- * Entry cho function Vercel.
+ * Entry cho Vercel Serverless Function (runtime NODE, không phải Edge).
+ * --------------------------------------------------------------------------
+ * Vercel Node runtime gọi handler bằng `(req: IncomingMessage, res: ServerResponse)`
+ * — KHÔNG phải Web `Request`/`Response`. Vì vậy `hono/vercel` (adapter Edge) sẽ
+ * crash với lỗi `this.raw.headers.get is not a function`.
  *
- * Được esbuild bundle (xem `scripts/build-api.mjs`) thành `api/[[...route]].js`
- * — MỘT file JS self-contained, không còn import tương đối kiểu NodeNext
- * (`./app.js` trỏ tới `app.ts`). Đây là lý do trước đây function crash lúc
- * khởi tạo trên Vercel → client chỉ thấy "Lỗi 500" trống.
+ * Ở đây tự chuyển đổi:
+ *   IncomingMessage  → Web Request   (method, url, headers, body)
+ *   Web Response     → ServerResponse(status, headers, body)
  *
- * `dotenv.js` chỉ đọc `.env` khi file tồn tại (môi trường dev). Trên Vercel
- * biến môi trường do platform bơm trực tiếp nên loader là no-op.
+ * Body được STREAM từng chunk về `res` để endpoint SSE
+ * (`/api/collect/stream`) vẫn đẩy dữ liệu về client theo thời gian thực.
  */
 import './dotenv.js'
-import { handle } from 'hono/vercel'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import { app } from './app.js'
 
-export default handle(app)
+/** Đọc toàn bộ body của request Node thành Buffer (rỗng với GET/HEAD). */
+async function readBody(req: IncomingMessage): Promise<Buffer | undefined> {
+    const method = (req.method ?? 'GET').toUpperCase()
+    if (method === 'GET' || method === 'HEAD') return undefined
+    const chunks: Buffer[] = []
+    for await (const chunk of req) chunks.push(chunk as Buffer)
+    return chunks.length > 0 ? Buffer.concat(chunks) : undefined
+}
+
+/** Dựng URL tuyệt đối từ request Node (Vercel luôn có x-forwarded-*). */
+function buildUrl(req: IncomingMessage): string {
+    const host = (req.headers['x-forwarded-host'] as string) ?? req.headers.host ?? 'localhost'
+    const proto = (req.headers['x-forwarded-proto'] as string) ?? 'https'
+    return `${proto}://${host}${req.url ?? '/'}`
+}
+
+/** Chuyển header Node (có thể là mảng) sang Web Headers. */
+function toHeaders(req: IncomingMessage): Headers {
+    const headers = new Headers()
+    for (const [key, value] of Object.entries(req.headers)) {
+        if (value === undefined) continue
+        if (Array.isArray(value)) {
+            for (const v of value) headers.append(key, v)
+        } else {
+            headers.set(key, value)
+        }
+    }
+    return headers
+}
+
+/** Lấy danh sách Set-Cookie (giữ được NHIỀU cookie, vd fq_at + fq_rt + fq_csrf). */
+function getSetCookies(res: Response): string[] {
+    const anyHeaders = res.headers as Headers & { getSetCookie?: () => string[] }
+    if (typeof anyHeaders.getSetCookie === 'function') return anyHeaders.getSetCookie()
+    const single = res.headers.get('set-cookie')
+    return single ? [single] : []
+}
+
+export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    try {
+        const body = await readBody(req)
+        const request = new Request(buildUrl(req), {
+            method: req.method,
+            headers: toHeaders(req),
+            body: body ? new Uint8Array(body) : undefined,
+            redirect: 'manual',
+        })
+
+        const response = await app.fetch(request)
+
+        res.statusCode = response.status
+
+        response.headers.forEach((value, key) => {
+            // set-cookie xử lý riêng bên dưới để không bị gộp thành 1 dòng
+            if (key.toLowerCase() === 'set-cookie') return
+            res.setHeader(key, value)
+        })
+
+        const cookies = getSetCookies(response)
+        if (cookies.length > 0) res.setHeader('set-cookie', cookies)
+
+        // Stream body (hỗ trợ SSE); không có body thì kết thúc ngay.
+        if (response.body) {
+            const reader = response.body.getReader()
+            for (; ;) {
+                const { done, value } = await reader.read()
+                if (done) break
+                if (value) res.write(Buffer.from(value))
+            }
+        }
+        res.end()
+    } catch (err) {
+        console.error('[api] handler error', err)
+        if (!res.headersSent) {
+            res.statusCode = 500
+            res.setHeader('content-type', 'application/json; charset=utf-8')
+        }
+        res.end(JSON.stringify({ error: 'internal', message: 'Lỗi máy chủ.' }))
+    }
+}

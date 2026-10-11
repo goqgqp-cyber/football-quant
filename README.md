@@ -31,9 +31,10 @@ npm install
 npm run dev        # frontend Vite http://localhost:5173 (proxy /api -> 8787)
 npm run dev:api    # backend Hono http://localhost:8787
 npm run dev:all    # chạy cả hai song song
-npm test           # vitest: 16 test (calc 7 + explain 9)
+npm test           # vitest: 36 test (calc 7 + explain 9 + settle 11 + engine 9)
+npm run smoke      # kiểm tra handler Vercel Node (health, auth, CSRF)
 npm run typecheck  # tsc -b + tsc -p tsconfig.server.json
-npm run build      # typecheck + build production
+npm run build      # typecheck + build frontend + bundle API cho Vercel
 ```
 
 Copy `.env.example` thành `.env` rồi điền khóa thật (không commit `.env`).
@@ -113,15 +114,29 @@ Edge < 0 nhưng odds cao → gắn cờ `TRAP`.
 **Mức vốn:** 25% Kelly, chặn trong **1.0%–2.5%** tổng vốn; tin cậy Thấp → 1.0%.
 ROI / Brier / calibration **chỉ tính trên pick có `stakePct > 0`** (pick `noBet` bị loại).
 
-### Unit test (16 test, tất cả xanh)
+### Unit test (36 test, tất cả xanh)
 
-- Tổng ma trận = 1
-- `thắng + hoàn + thua = 1` cho Tài/Xỉu (2.5, 3.0, 1/4 2.75) và chấp châu Á (0, −0.5, −0.25, 0.75)
-- Mốc 1/4 chia đúng: `P(2.75) = (P(2.5) + P(3.0)) / 2`
-- `Edge = EV / odds`
-- Đối soát mốc 1/4: `over 2.75` với tổng 3 bàn → **thắng nửa**; `over 3.0` → **hoàn**
-- `explain.ts` (9 test): `fmt()`, `buildFacts()` sinh token `{{U..}}` + nhãn, `substituteFacts()`
-  thay token và xóa token lạ `{{U999}}`, `verifyNumbers()` bỏ qua số cấu trúc 0–4 và bắt số bịa.
+- **calc.ts (7 test):**
+  - Tổng ma trận xác suất = 1
+  - `thắng + hoàn + thua = 1` cho Tài/Xỉu (2.5, 3.0, 1/4 2.75) và chấp châu Á (0, −0.5, −0.25, 0.75)
+  - Mốc 1/4 chia đúng: `P(2.75) = (P(2.5) + P(3.0)) / 2`
+  - `Edge = EV / odds`
+- **explain.ts (9 test):**
+  - `fmt()`, `buildFacts()` sinh token `{{U..}}` + nhãn
+  - `substituteFacts()` thay token và xóa token lạ `{{U999}}`
+  - `verifyNumbers()` bỏ qua số cấu trúc 0–4 và bắt số bịa
+- **settle.ts (11 test):**
+  - Đối soát chấp châu Á (0, -0.25, +0.25, -0.75) với các trường hợp thắng, hoà, thua, thắng nửa, thua nửa
+  - Đối soát Tài/Xỉu mốc 1/4 (over 2.75, under 2.25, under 2.75)
+  - Đối soát theo hiệp 1 (`ht`) và cả trận (`ft`)
+  - `totalProfit`, `binLabel` (5% buckets), `brierScore`, `buildCalibration`
+- **engine.ts (9 test):**
+  - `pImplied` và loại vig `pImpliedNoVig` giữa 2 cửa đối xứng
+  - Công thức EV và Edge
+  - Mức tin cậy `confidenceScore` (high, medium, low) theo số trận mẫu, số nguồn, độ lệch thị trường
+  - Quản lý vốn `stakePct` theo 25% Kelly, chặn [1.0%, 2.5%]
+  - Phân tích `analyzeMatch()`, phát hiện bẫy `trap`, và trả cờ `noBet` khi không đạt điều kiện
+  - Danh sách kèo gợi ý `suggestedLines()`
 
 ---
 
@@ -167,10 +182,12 @@ Xem [`.env.example`](.env.example). Không commit `.env` thật (đã có trong 
 
 Repo đã kèm sẵn cấu hình để cả frontend **và** backend chạy trên cùng một project Vercel:
 
-- `vercel.json` ghim `framework: vite`, build `npm run build` → `dist/`, và rewrite mọi
-  request `/api/(.*)` về function serverless `/api/index`.
-- `api/index.ts` bọc Hono app bằng adapter `hono/vercel` (`export default handle(app)`),
-  nên toàn bộ route `/api/*` (auth, analyze, collect/stream SSE, extract) chạy như function.
+- `vercel.json` ghim `framework: vite`, build `npm run build` → `dist/`, và cấu hình `maxDuration: 60`
+  cho các function API để luồng SSE phân tích (Gemini + Grounding) không bị timeout.
+- Adapter Node Runtime (`server/vercel.ts`) được esbuild tự động bundle (qua `scripts/build-api.mjs`)
+  thành `api/[...route].js` và `api/index.js` độc lập, đầy đủ dependency (Hono, Jose, Bcryptjs, Zod...).
+  Hỗ trợ chunk streaming thời gian thực cho SSE `/api/collect/stream` và xử lý triệt để lỗi
+  `this.raw.headers.get is not a function` của Edge adapter cũ.
 - Frontend gọi same-origin `/api` (xem `src/lib/api.ts`) → **không cần `CORS_ORIGINS`** khi
   chạy trên Vercel.
 
@@ -178,8 +195,7 @@ Repo đã kèm sẵn cấu hình để cả frontend **và** backend chạy trê
 
 1. Trên Vercel: **Settings → Build and Deployment → Framework Preset = Vite**,
    Root Directory = `.`, Build Command = `npm run build`, Output Directory = `dist`.
-2. Thêm biến môi trường (mục dưới), rồi **Redeploy**. Các deploy cũ báo *Error* thường do
-   project bị nhận là Next.js và không có entry serverless — hai file trên đã khắc phục.
+2. Thêm biến môi trường (mục dưới), rồi **Redeploy**.
 3. Kiểm tra: mở `https://<domain>/api/health` → phải thấy `{"ok":true,...}`.
 
 ### Chạy self-host (Cloud Run / VPS)

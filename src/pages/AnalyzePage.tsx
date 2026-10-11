@@ -620,6 +620,7 @@ export function AnalyzePage() {
                     </div>
                     <div className="mt-3 flex gap-2">
                         <Button
+                            refract
                             onClick={() => {
                                 if (confirmRows) {
                                     setOddsLines(confirmRows.map((r) => r.line))
@@ -687,7 +688,7 @@ export function AnalyzePage() {
                     </div>
                 )}
                 <div className="mt-4">
-                    <Button onClick={() => void runAnalysis()} disabled={running || oddsLines.length === 0}>
+                    <Button refract onClick={() => void runAnalysis()} disabled={running || oddsLines.length === 0}>
                         {running ? 'Đang phân tích…' : 'Phân tích ngay'}
                     </Button>
                 </div>

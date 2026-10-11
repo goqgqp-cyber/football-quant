@@ -19,7 +19,7 @@
  * File output được COMMIT (không gitignore) để Vercel luôn thấy handler.
  */
 import { build } from 'esbuild'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 const outfile = 'api/[...route].js'
@@ -44,3 +44,8 @@ await build({
 })
 
 console.log(`[build-api] wrote ${outfile}`)
+
+// api/index.js cho route gốc /api và /api/ trên Vercel
+const indexFile = 'api/index.js'
+await writeFile(indexFile, "export { default } from './[...route].js'\n", 'utf8')
+console.log(`[build-api] wrote ${indexFile}`)

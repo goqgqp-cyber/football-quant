@@ -87,7 +87,7 @@ export function LoginPage() {
                             </div>
                         )}
 
-                        <Button type="submit" disabled={busy} className="mt-1 w-full">
+                        <Button refract type="submit" disabled={busy} className="mt-1 w-full">
                             {busy
                                 ? 'Đang xử lý…'
                                 : mode === 'login'
