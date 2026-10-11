@@ -10,5 +10,19 @@
         "api/index.js": {
             "maxDuration": 60
         }
-    }
+    },
+    "rewrites": [
+        {
+            "source": "/api/(.*)",
+            "destination": "/api/[...route]"
+        },
+        {
+            "source": "/api",
+            "destination": "/api/index"
+        },
+        {
+            "source": "/((?!api).*)",
+            "destination": "/index.html"
+        }
+    ]
 }

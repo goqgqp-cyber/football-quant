@@ -13,7 +13,8 @@
  *
  * Tên file: `api/[...route].js` — catch-all của Vercel Functions, khớp MỌI
  * đường dẫn dưới `/api/*` và GIỮ NGUYÊN path gốc (vd `/api/auth/login`)
- * nên Hono định tuyến đúng. KHÔNG cần `rewrites` trong vercel.json, và
+ * nên Hono định tuyến đúng. Trong vercel.json đã cấu hình rewrite `/api/(.*)`
+ * trỏ vào `/api/[...route]` và các route còn lại trỏ vào `/index.html` cho Vite SPA.
  * KHÔNG dùng `[[...route]]` (cú pháp Next.js, Vercel từ chối).
  *
  * File output được COMMIT (không gitignore) để Vercel luôn thấy handler.
