@@ -582,27 +582,17 @@ export function LiveMatchTracker({ home, away, eventId, recordId, onSettled }: L
             </div>
 
             {/* ── Mặt Sân 2D SVG (Tọa độ chính xác theo sự kiện thực tế) ── */}
-            {!isLive && !liveData.isFinished ? (
-                <div className="my-3 rounded-lg border border-dashed border-white/10 bg-neutral-900/60 p-8 text-center text-neutral-400">
-                    <p className="text-sm font-medium text-neutral-300">
-                        Chưa có dữ liệu trận đấu. Hãy tải ảnh bảng cược hoặc nhập SofaScore Event ID để bắt đầu phân tích.
-                    </p>
-                    <p className="mt-1 text-xs text-neutral-500">
-                        {liveData.statusDescription || 'Trận đấu đang ở trạng thái chờ / ngoại tuyến.'}
-                    </p>
+            <div className="relative overflow-hidden rounded-lg border border-white/10 bg-[#0a2312]">
+                {/* Thanh thông báo sự kiện trên sân */}
+                <div className="absolute left-1/2 top-2.5 z-10 -translate-x-1/2 rounded-full border border-white/15 bg-black/80 px-3.5 py-1 text-xs font-medium text-white backdrop-blur-sm max-w-[90%] truncate">
+                    <span className={
+                        currentAction.team === 'home' ? 'text-sky-300 font-semibold' :
+                        currentAction.team === 'away' ? 'text-amber-300 font-semibold' :
+                        'text-neutral-200'
+                    }>
+                        {currentAction.label}
+                    </span>
                 </div>
-            ) : (
-                <div className="relative overflow-hidden rounded-lg border border-white/10 bg-[#0a2312]">
-                    {/* Thanh thông báo sự kiện trên sân */}
-                    <div className="absolute left-1/2 top-2.5 z-10 -translate-x-1/2 rounded-full border border-white/15 bg-black/80 px-3.5 py-1 text-xs font-medium text-white backdrop-blur-sm max-w-[90%] truncate">
-                        <span className={
-                            currentAction.team === 'home' ? 'text-sky-300 font-semibold' :
-                            currentAction.team === 'away' ? 'text-amber-300 font-semibold' :
-                            'text-neutral-200'
-                        }>
-                            {currentAction.label}
-                        </span>
-                    </div>
 
                     <svg viewBox="0 0 600 320" className="h-auto w-full select-none" style={{ maxHeight: '360px' }}>
                         <defs>
@@ -701,7 +691,6 @@ export function LiveMatchTracker({ home, away, eventId, recordId, onSettled }: L
                         </g>
                     </svg>
                 </div>
-            )}
 
             {/* ── Attack Momentum (Tính 100% từ dữ liệu incidents thật) ── */}
             <div className="mt-3 rounded-lg border border-white/8 bg-neutral-900 p-3">

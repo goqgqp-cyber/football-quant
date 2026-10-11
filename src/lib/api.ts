@@ -573,6 +573,33 @@ export const api = {
     getSofaEvent: (eventId: number | string) =>
         apiFetch<{ event?: Record<string, unknown> }>(`/sofascore/event/${eventId}`),
 
+    /** Lấy toàn bộ trạng thái trực tiếp trận đấu (tỉ số, phút, statistics, incidents) từ SofaScore proxy */
+    getSofaEventLive: (eventId: number | string) =>
+        apiFetch<{
+            found: boolean
+            eventId: number
+            homeTeam?: string
+            awayTeam?: string
+            league?: string
+            status?: 'notstarted' | 'inprogress' | 'finished'
+            statusDescription?: string
+            minute?: number | string
+            score: { home: number; away: number }
+            periodScore?: { htHome?: number; htAway?: number; ftHome?: number; ftAway?: number }
+            matchStats?: {
+                corners: { home: number; away: number; total: number }
+                cards: { yellowHome: number; yellowAway: number; redHome: number; redAway: number }
+                shotsOnTarget: { home: number; away: number }
+                shotsTotal?: { home: number; away: number }
+                possession: { home: number; away: number }
+                fouls?: { home: number; away: number }
+                accuratePasses?: { home: number; away: number }
+            }
+            incidents?: Array<Record<string, unknown>>
+            isFinished: boolean
+            lastUpdated: number
+        }>(`/sofascore/event/${eventId}/live`),
+
     /** Tự động đối soát kết quả trận đấu khi kết thúc (FT) và lưu vào Redis settled_matches */
     autoSettle: (payload: {
         recordId: string

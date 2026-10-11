@@ -9,8 +9,9 @@ import { Skeleton } from '../components/ui/RefractionFilter'
 import { api, collectStream, type ExtractedRow } from '../lib/api'
 import { useSettings } from '../hooks/useSettings'
 import { LiveMatchTracker } from '../components/LiveMatchTracker'
-import { filterRecommendedPicks } from '../lib/engine'
+import { analyzeMatch, filterRecommendedPicks } from '../lib/engine'
 import { prependLocalHistoryItem } from '../lib/historyStorage'
+import { useLiveMatchSync } from '../hooks/useLiveMatchSync'
 import type { AnalysisResult, Explanation, MatchData, MatchInput, OddsLine } from '../lib/types'
 
 interface ConfirmRow {
@@ -133,6 +134,23 @@ export function AnalyzePage() {
                 league: data.league || prev.league,
                 kickoff: data.kickoff || prev.kickoff,
             }))
+            if (data.status === 'inprogress') {
+                setIsLive(true)
+            }
+            if (data.score) {
+                setCurrentScore(data.score)
+            }
+            if (data.minute !== undefined) {
+                const parsedM = typeof data.minute === 'number'
+                    ? data.minute
+                    : typeof data.minute === 'string' && !isNaN(parseInt(data.minute, 10))
+                        ? parseInt(data.minute, 10)
+                        : null
+                setCurrentMinute(parsedM)
+            }
+            if (data.statusDescription) {
+                setPeriod(data.statusDescription)
+            }
             setSofaMsg({
                 type: 'success',
                 text: `Đã nạp tự động: ${data.homeTeam} vs ${data.awayTeam}${data.league ? ` (${data.league})` : ''}`,
@@ -146,6 +164,48 @@ export function AnalyzePage() {
             setFetchingSofa(false)
         }
     }, [])
+
+    // Hook theo dõi & đồng bộ dữ liệu thời gian thực (Live In-Play Sync)
+    const { liveData: currentLiveData } = useLiveMatchSync({
+        home: input.homeTeam,
+        away: input.awayTeam,
+        eventId: sofaEventId,
+        isLive,
+        pollIntervalMs: 15000,
+        onStatsUpdate: (ld) => {
+            if (ld.found) {
+                if (ld.score) setCurrentScore(ld.score)
+                if (ld.minute !== undefined) {
+                    const parsedM = typeof ld.minute === 'number'
+                        ? ld.minute
+                        : typeof ld.minute === 'string' && !isNaN(parseInt(ld.minute, 10))
+                            ? parseInt(ld.minute, 10)
+                            : null
+                    setCurrentMinute(parsedM)
+                }
+                if (ld.statusDescription) setPeriod(ld.statusDescription)
+                if (ld.status === 'inprogress') setIsLive(true)
+                if (ld.isFinished) setIsLive(false)
+            }
+        },
+        onScoreChange: (newScore, _prevScore, minute) => {
+            // TỰ ĐỘNG TÁI TÍNH TOÁN ENGINE KHI CÓ BÀN THẮNG TRỰC TIẾP (LIVE GOAL DETECTED)
+            if (data && oddsLines.length > 0) {
+                const freshResult = analyzeMatch(
+                    data,
+                    oddsLines,
+                    input.lg_home,
+                    input.lg_away,
+                    {
+                        isLive: true,
+                        currentMinute: minute,
+                        currentScore: newScore,
+                    },
+                )
+                setResult(freshResult)
+            }
+        },
+    })
 
     const setStepStatus = (id: string, status: Step['status']) => {
         setSteps((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)))
@@ -643,18 +703,42 @@ export function AnalyzePage() {
                 </div>
 
                 {isLive && (
-                    <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-950/20 px-3.5 py-2 text-xs text-rose-300">
-                        <span className="flex h-2 w-2 rounded-full bg-rose-500 animate-ping" />
-                        <span className="font-bold">Đang đá trực tiếp (In-Play)</span>
-                        {period && <span className="rounded bg-rose-500/20 px-1.5 py-0.5 font-medium">{period}</span>}
-                        {currentMinute != null && (
-                            <span className="font-mono font-semibold">Phút {currentMinute}&apos;</span>
-                        )}
-                        {currentScore && (
-                            <span className="font-mono font-bold text-white">
-                                Tỉ số: {currentScore.home} - {currentScore.away}
-                            </span>
-                        )}
+                    <div className="mb-3 space-y-2 rounded-xl border border-rose-500/30 bg-rose-950/20 p-3.5 text-xs text-rose-300">
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-rose-500/20 pb-2">
+                            <div className="flex items-center gap-2">
+                                <span className="flex h-2.5 w-2.5 rounded-full bg-rose-500 animate-ping" />
+                                <span className="font-bold text-white tracking-wide">TRỰC TIẾP (IN-PLAY)</span>
+                                {period && <span className="rounded bg-rose-500/20 px-1.5 py-0.5 font-medium">{period}</span>}
+                            </div>
+                            <div className="font-mono text-sm font-black text-white">
+                                {input.homeTeam || 'Chủ'} {currentScore ? `${currentScore.home} - ${currentScore.away}` : '0 - 0'} {input.awayTeam || 'Khách'}
+                                {currentMinute != null && (
+                                    <span className="ml-2 text-rose-400 font-semibold">(Phút {currentMinute}&apos;)</span>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* Bảng thống kê trực tiếp thời gian thực */}
+                        <div className="grid grid-cols-3 gap-2 pt-1 text-center font-medium">
+                            <div className="rounded-lg bg-black/40 p-2">
+                                <p className="text-[11px] text-neutral-400">Phạt góc</p>
+                                <p className="mt-0.5 font-mono text-sm font-bold text-sky-400">
+                                    {currentLiveData?.corners?.home ?? 0} - {currentLiveData?.corners?.away ?? 0}
+                                </p>
+                            </div>
+                            <div className="rounded-lg bg-black/40 p-2">
+                                <p className="text-[11px] text-neutral-400">Sút trúng đích (Tổng sút)</p>
+                                <p className="mt-0.5 font-mono text-sm font-bold text-amber-400">
+                                    {currentLiveData?.shotsOnTarget?.home ?? 0} ({currentLiveData?.shotsTotal?.home ?? 0}) - {currentLiveData?.shotsOnTarget?.away ?? 0} ({currentLiveData?.shotsTotal?.away ?? 0})
+                                </p>
+                            </div>
+                            <div className="rounded-lg bg-black/40 p-2">
+                                <p className="text-[11px] text-neutral-400">Kiểm soát bóng</p>
+                                <p className="mt-0.5 font-mono text-sm font-bold text-emerald-400">
+                                    {currentLiveData?.possession?.home ?? 50}% - {currentLiveData?.possession?.away ?? 50}%
+                                </p>
+                            </div>
+                        </div>
                     </div>
                 )}
 

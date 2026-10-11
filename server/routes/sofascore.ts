@@ -12,10 +12,12 @@
 
 import { Hono } from 'hono'
 import {
+    computeMinute,
     fetchSofaScore,
     getEventH2H,
     getEventStatsAndIncidents,
     searchSofaMatch,
+    type RawEvent,
 } from '../services/sofascore.js'
 
 export const sofascoreApp = new Hono()
@@ -104,14 +106,60 @@ sofascoreApp.get('/event/:eventId/incidents', async (c) => {
     return c.json(data)
 })
 
-// GET /api/sofascore/event/:eventId
-sofascoreApp.get('/event/:eventId', async (c) => {
-    const eventId = c.req.param('eventId')
-    const data = await fetchSofaScore(`event/${eventId}`, 15)
-    if (!data) {
-        return c.json({ error: 'not_found', message: 'Không tìm thấy thông tin trận đấu.' }, 404)
+// GET /api/sofascore/event/:eventId/live — Lấy toàn bộ trạng thái trực tiếp: info, statistics & incidents
+sofascoreApp.get('/event/:eventId/live', async (c) => {
+    const eventIdParam = c.req.param('eventId')
+    const eventId = Number(eventIdParam)
+    if (!eventId || isNaN(eventId)) {
+        return c.json({ error: 'missing_eventId', message: 'Vui lòng cung cấp eventId hợp lệ.' }, 400)
     }
-    return c.json(data)
+    const [eventData, statsIncidents] = await Promise.all([
+        fetchSofaScore<{ event?: RawEvent }>(`event/${eventId}`, 15),
+        getEventStatsAndIncidents(eventId),
+    ])
+
+    const ev = eventData?.event
+    if (!ev && (!statsIncidents || (!statsIncidents.statistics && statsIncidents.incidents.length === 0))) {
+        return c.json({ error: 'not_found', message: 'Không tìm thấy dữ liệu trực tiếp của trận đấu.' }, 404)
+    }
+
+    const statusType = (ev?.status?.type || '').toLowerCase()
+    const statusDesc = ev?.status?.description || ''
+    const isFinished =
+        statusType === 'finished' ||
+        /ended|finished|ft/i.test(statusDesc) ||
+        (ev?.status?.code ?? 0) === 100
+
+    const homeScoreVal = Number(ev?.homeScore?.current ?? ev?.homeScore?.display ?? 0)
+    const awayScoreVal = Number(ev?.awayScore?.current ?? ev?.awayScore?.display ?? 0)
+    const htHome = ev?.homeScore?.period1
+    const htAway = ev?.awayScore?.period1
+    const ftHome = isFinished ? homeScoreVal : undefined
+    const ftAway = isFinished ? awayScoreVal : undefined
+
+    let minute: number | string = '—'
+    if (isFinished) {
+        minute = 'FT'
+    } else if (ev) {
+        minute = computeMinute(ev.time, statusDesc)
+    }
+
+    return c.json({
+        found: true,
+        eventId,
+        homeTeam: ev?.homeTeam?.name,
+        awayTeam: ev?.awayTeam?.name,
+        league: ev?.tournament?.name,
+        status: isFinished ? 'finished' : statusType === 'inprogress' ? 'inprogress' : 'notstarted',
+        statusDescription: statusDesc,
+        minute,
+        score: { home: homeScoreVal, away: awayScoreVal },
+        periodScore: { htHome, htAway, ftHome, ftAway },
+        matchStats: statsIncidents.statistics,
+        incidents: statsIncidents.incidents,
+        isFinished,
+        lastUpdated: Date.now(),
+    })
 })
 
 
