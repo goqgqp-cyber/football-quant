@@ -18,7 +18,7 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { z } from 'zod'
-import { GeminiError, generateExplanation, streamCollectMatchData } from '../gemini.js'
+import { GeminiError, generateExplanation, sanitizeCleanText, streamCollectMatchData } from '../services/gemini.js'
 import { requireAuth, type Vars } from '../middleware.js'
 import { saveHistory } from '../store.js'
 import { analyzeMatch } from '../../src/lib/engine.js'
@@ -28,23 +28,27 @@ export const streamApp = new Hono<{ Variables: Vars }>()
 
 streamApp.use('*', requireAuth)
 
-const oddsLineSchema = z.object({
-    id: z.string().min(1),
-    kind: z.enum(['totals', 'ah']),
-    side: z.enum(['over', 'under', 'home', 'away']),
-    line: z.number(),
-    odds: z.coerce.number().min(1.01).max(500),
-})
+const oddsLineSchema = z
+    .object({
+        id: z.string().min(1).max(100),
+        kind: z.enum(['totals', 'ah']),
+        side: z.enum(['over', 'under', 'home', 'away']),
+        line: z.number(),
+        odds: z.coerce.number().min(1.01).max(500),
+    })
+    .strip()
 
-const collectSchema = z.object({
-    home: z.string().min(1).max(80),
-    away: z.string().min(1).max(80),
-    league: z.string().max(80).optional().default(''),
-    kickoff: z.string().max(64).nullable().optional().default(null),
-    lg_home: z.coerce.number().positive().optional(),
-    lg_away: z.coerce.number().positive().optional(),
-    oddsLines: z.array(oddsLineSchema).max(60).default([]),
-})
+const collectSchema = z
+    .object({
+        home: z.string().min(1).max(80),
+        away: z.string().min(1).max(80),
+        league: z.string().max(80).optional().default(''),
+        kickoff: z.string().max(64).nullable().optional().default(null),
+        lg_home: z.coerce.number().positive().optional(),
+        lg_away: z.coerce.number().positive().optional(),
+        oddsLines: z.array(oddsLineSchema).max(60).default([]),
+    })
+    .strip()
 
 streamApp.post('/collect/stream', async (c) => {
     const auth = c.get('user')
@@ -55,6 +59,11 @@ streamApp.post('/collect/stream', async (c) => {
     }
     const input = parsed.data
     const userId = auth.userId
+
+    // Làm sạch text đầu vào, loại bỏ hoàn toàn chuỗi base64 hoặc blob
+    const home = sanitizeCleanText(input.home)
+    const away = sanitizeCleanText(input.away)
+    const league = sanitizeCleanText(input.league ?? '')
 
     return streamSSE(c, async (stream) => {
         const step = async (id: string, status: 'active' | 'done' | 'error') => {
@@ -69,9 +78,9 @@ streamApp.post('/collect/stream', async (c) => {
             await step('collect', 'active')
             const matchData: MatchData = await streamCollectMatchData(
                 {
-                    home: input.home,
-                    away: input.away,
-                    league: input.league || undefined,
+                    home,
+                    away,
+                    league: league || undefined,
                     kickoff: input.kickoff,
                 },
                 (chunk) => {
@@ -104,7 +113,7 @@ streamApp.post('/collect/stream', async (c) => {
             let explanation: Explanation | null = null
             try {
                 explanation = await generateExplanation(
-                    { home: input.home, away: input.away, league: input.league },
+                    { home, away, league },
                     matchData,
                     result,
                     (chunk) => {
@@ -128,9 +137,9 @@ streamApp.post('/collect/stream', async (c) => {
             // ---- Lưu lịch sử (kèm giải thích nếu có) ----
             const record = await saveHistory(userId, {
                 meta: {
-                    home: input.home,
-                    away: input.away,
-                    league: input.league,
+                    home,
+                    away,
+                    league,
                     kickoff: input.kickoff,
                 },
                 analysis: result,

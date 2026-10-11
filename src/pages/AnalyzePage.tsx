@@ -99,15 +99,23 @@ export function AnalyzePage() {
         setExplanationError(null)
         setExplaining(false)
 
+        const cleanOddsLines: OddsLine[] = oddsLines.map((o) => ({
+            id: String(o.id),
+            kind: o.kind,
+            side: o.side,
+            line: Number(o.line),
+            odds: Number(o.odds),
+        }))
+
         const { abort } = collectStream(
             {
-                home: input.homeTeam,
-                away: input.awayTeam,
-                league: input.league,
+                home: input.homeTeam.trim(),
+                away: input.awayTeam.trim(),
+                league: input.league?.trim() || undefined,
                 kickoff: input.kickoff || null,
                 lg_home: input.lg_home,
                 lg_away: input.lg_away,
-                oddsLines,
+                oddsLines: cleanOddsLines,
             },
             (e) => {
                 switch (e.type) {

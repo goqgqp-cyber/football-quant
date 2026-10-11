@@ -13,32 +13,40 @@ import {
 import { getUserById } from '../auth.js'
 import { analyzeMatch, suggestedLines } from '../../src/lib/engine.js'
 import { MOCK_MATCH_DATA } from '../../src/lib/mock.js'
-import type { MatchData, OddsLine } from '../../src/lib/types.js'
+import type { Explanation, MatchData, OddsLine } from '../../src/lib/types.js'
+
+import { env } from '../env.js'
+import { generateExplanation, sanitizeCleanText } from '../services/gemini.js'
 
 export const dataApp = new Hono<{ Variables: Vars }>()
 
 // Mọi route trong đây đều yêu cầu đăng nhập
 dataApp.use('*', requireAuth)
 
-const oddsLineSchema = z.object({
-    id: z.string().min(1),
-    kind: z.enum(['totals', 'ah']),
-    side: z.enum(['over', 'under', 'home', 'away']),
-    line: z.number(),
-    odds: z.coerce.number().min(1.01).max(500),
-})
+const oddsLineSchema = z
+    .object({
+        id: z.string().min(1).max(100),
+        kind: z.enum(['totals', 'ah']),
+        side: z.enum(['over', 'under', 'home', 'away']),
+        line: z.number(),
+        odds: z.coerce.number().min(1.01).max(500),
+    })
+    .strip()
 
-const analyzeSchema = z.object({
-    home: z.string().min(1).max(80),
-    away: z.string().min(1).max(80),
-    league: z.string().max(80).optional().default(''),
-    kickoff: z.string().max(64).nullable().optional().default(null),
-    lg_home: z.coerce.number().positive().optional(),
-    lg_away: z.coerce.number().positive().optional(),
-    oddsLines: z.array(oddsLineSchema).max(60).default([]),
-    /** Dữ liệu nền (Bước A). Chưa có Gemini ở G2 nên có thể bỏ trống → dùng mock. */
-    matchData: z.unknown().optional(),
-})
+const analyzeSchema = z
+    .object({
+        home: z.string().min(1).max(80),
+        away: z.string().min(1).max(80),
+        league: z.string().max(80).optional().default(''),
+        kickoff: z.string().max(64).nullable().optional().default(null),
+        lg_home: z.coerce.number().positive().optional(),
+        lg_away: z.coerce.number().positive().optional(),
+        oddsLines: z.array(oddsLineSchema).max(60).default([]),
+        /** Dữ liệu nền (Bước A). Nếu không có sẽ dùng mock an toàn. */
+        matchData: z.unknown().optional(),
+        withExplanation: z.boolean().optional().default(false),
+    })
+    .strip()
 
 /** GET /api/me */
 dataApp.get('/me', async (c) => {
@@ -107,6 +115,11 @@ dataApp.post('/analyze', async (c) => {
     }
     const input = parsed.data
 
+    // Làm sạch text đầu vào, loại bỏ triệt để chuỗi base64 hoặc blob nhị phân
+    const home = sanitizeCleanText(input.home)
+    const away = sanitizeCleanText(input.away)
+    const league = sanitizeCleanText(input.league ?? '')
+
     // G2 chưa có Bước A (Gemini). Nếu client không gửi matchData → dùng mock có nhãn rõ.
     const matchData = (input.matchData as MatchData | undefined) ?? MOCK_MATCH_DATA
     const oddsLines = input.oddsLines as OddsLine[]
@@ -118,19 +131,33 @@ dataApp.post('/analyze', async (c) => {
         input.lg_away ?? undefined,
     )
 
+    let explanation: Explanation | null = null
+    if (input.withExplanation && env.geminiApiKey) {
+        try {
+            explanation = await generateExplanation(
+                { home, away, league },
+                matchData,
+                result,
+            )
+        } catch (e) {
+            console.error('[analyze] Bước C sinh giải thích gặp lỗi:', e)
+        }
+    }
+
     const record = await saveHistory(auth.userId, {
         meta: {
-            home: input.home,
-            away: input.away,
-            league: input.league,
+            home,
+            away,
+            league,
             kickoff: input.kickoff,
         },
         analysis: result,
         picks: result.picks,
         result: null,
+        explanation,
     })
 
-    return c.json({ result, recordId: record.id })
+    return c.json({ result, recordId: record.id, explanation })
 })
 
 /** POST /api/settle — nhập tỉ số thực tế cho một lượt phân tích. */

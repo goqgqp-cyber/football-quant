@@ -87,7 +87,24 @@ export const env = {
         ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY'],
         '',
     ),
-    geminiModel: optional('GEMINI_MODEL', 'gemini-flash-latest'),
+    /**
+     * Chuẩn hóa model: đảm bảo luôn dùng gemini-1.5-flash chuẩn xác
+     * (tránh các model experimental hoặc preview/flash-latest dễ bị rate-limit bất chợt).
+     */
+    geminiModel: (() => {
+        const raw = (process.env.GEMINI_MODEL || '').trim()
+        if (
+            !raw ||
+            raw === 'gemini-flash-latest' ||
+            raw.includes('experimental') ||
+            raw.includes('preview') ||
+            raw.includes('exp') ||
+            raw.includes('2.0')
+        ) {
+            return 'gemini-1.5-flash'
+        }
+        return raw
+    })(),
     storeOriginalImages: bool('STORE_ORIGINAL_IMAGES', false),
 
     /** Origin frontend được phép gọi API (dùng cho CORS). */

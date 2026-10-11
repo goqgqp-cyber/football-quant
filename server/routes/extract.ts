@@ -11,7 +11,7 @@
 
 import { Hono } from 'hono'
 import { z } from 'zod'
-import { GeminiError, extractOddsFromImages, type ImageInput } from '../gemini.js'
+import { GeminiError, extractOddsFromImages, type ImageInput } from '../services/gemini.js'
 import { requireAuth, type Vars } from '../middleware.js'
 
 export const extractApp = new Hono<{ Variables: Vars }>()
