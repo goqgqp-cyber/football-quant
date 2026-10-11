@@ -78,31 +78,61 @@ export async function getHistoryItem(
     return (await redis.get(keys.historyItem(userId, id))) as unknown as HistoryRecord | null
 }
 
-/** Lưu bản ghi trận đấu đã settle vĩnh viễn vào Redis danh sách settled_matches */
+/** Lưu bản ghi trận đấu đã settle vĩnh viễn vào Redis danh sách settled_matches (Zero Duplicate) */
 export async function saveSettledMatch(record: SettledMatchRecord): Promise<void> {
+    const fixId = record.eventId || (record.id && !isNaN(Number(record.id)) ? Number(record.id) : undefined)
+    const existing = await listSettledMatches(150)
+    const isDup = existing.some((x) => {
+        if (fixId && x.eventId && x.eventId === fixId) return true
+        if (record.recordId && x.recordId && x.recordId === record.recordId) return true
+        if (record.id && x.id && x.id === record.id) return true
+        if (
+            x.home &&
+            record.home &&
+            x.away &&
+            record.away &&
+            x.home.trim().toLowerCase() === record.home.trim().toLowerCase() &&
+            x.away.trim().toLowerCase() === record.away.trim().toLowerCase()
+        ) {
+            return true
+        }
+        return false
+    })
+    if (isDup) return // Đã tồn tại trận đấu, từ chối ghi trùng lặp
+
     const serialized = typeof record === 'string' ? record : JSON.stringify(record)
-    // Lưu vào danh sách toàn cục settled_matches (đáp ứng đúng spec)
     await redis.lpush(keys.settledMatches(), serialized)
     if (record.userId) {
         await redis.lpush(keys.userSettledMatches(record.userId), serialized)
     }
 }
 
-/** Lấy danh sách các trận đã settle từ Redis list settled_matches */
+/** Lấy danh sách các trận đã settle từ Redis list settled_matches, chuẩn hóa deduplicate 1 fixture = 1 row */
 export async function listSettledMatches(limit = 100): Promise<SettledMatchRecord[]> {
-    const raw: unknown = await redis.lrange(keys.settledMatches(), 0, limit - 1)
+    const raw: unknown = await redis.lrange(keys.settledMatches(), 0, Math.max(limit * 3, 200))
     const list = (Array.isArray(raw) ? raw : []) as unknown[]
     const records: SettledMatchRecord[] = []
+    const seen = new Set<string>()
+
     for (const item of list) {
         if (!item) continue
         try {
             const obj = (typeof item === 'string' ? JSON.parse(item) : item) as SettledMatchRecord
             if (obj && obj.home && obj.away) {
-                records.push(obj)
+                const uniqueKey = obj.eventId
+                    ? `fix:${obj.eventId}`
+                    : obj.recordId
+                        ? `rec:${obj.recordId}`
+                        : `${obj.home.trim().toLowerCase()}_vs_${obj.away.trim().toLowerCase()}`
+                if (!seen.has(uniqueKey)) {
+                    seen.add(uniqueKey)
+                    records.push(obj)
+                }
             }
         } catch {
             /* ignore invalid json */
         }
+        if (records.length >= limit) break
     }
     return records
 }

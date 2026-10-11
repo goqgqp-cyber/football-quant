@@ -52,7 +52,19 @@ export function PerformancePage() {
     const stakedTotal = staked.reduce((sum, s) => sum + s.pick.stakePct, 0)
     const roi = stats?.roi ?? (stakedTotal ? (profit / stakedTotal) * 100 : 0)
 
-    const settledMatches = stats?.settledMatches ?? []
+    const settledMatches = useMemo(() => {
+        const list = stats?.settledMatches ?? []
+        const seen = new Set<string>()
+        const out: typeof list = []
+        for (const m of list) {
+            const key = m.eventId ? `fix:${m.eventId}` : m.recordId ? `rec:${m.recordId}` : `${m.home.trim().toLowerCase()}_${m.away.trim().toLowerCase()}`
+            if (!seen.has(key)) {
+                seen.add(key)
+                out.push(m)
+            }
+        }
+        return out
+    }, [stats?.settledMatches])
     const pendingMatches = useMemo(() => historyItems.filter((h) => h.result == null), [historyItems])
 
     const bins = useMemo(() => stats?.calibration ?? [], [stats])

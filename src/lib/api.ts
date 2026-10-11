@@ -12,6 +12,7 @@ import type {
     Explanation,
     LiveMatchData,
     MatchData,
+    MatchEventItem,
     OddsLine,
     Pick,
     SettledMatchRecord,
@@ -395,6 +396,13 @@ export interface HistoryItem {
     result: (ActualResult & { note?: string }) | null
     /** Văn giải thích 4 phần (Bước C) — null nếu chưa/bỏ qua. */
     explanation?: Explanation | null
+    /** Snapshot temporal metadata để đếm ngược Minute-100 Quota Guard */
+    capturedAt?: number
+    capturedMinute?: number | null
+    isLive?: boolean
+    fixtureId?: number | null
+    estimatedFinishAt?: number
+    nextRetryAt?: number
 }
 
 export interface StatsResponse {
@@ -587,6 +595,12 @@ export const api = {
             fixtureId: number
             homeTeam?: string
             awayTeam?: string
+            homeLogo?: string
+            awayLogo?: string
+            homeTeamId?: number
+            awayTeamId?: number
+            homeForm?: string[]
+            awayForm?: string[]
             league?: string
             status?: 'notstarted' | 'inprogress' | 'finished'
             statusDescription?: string
@@ -608,6 +622,7 @@ export const api = {
                 statistics: Array<{ type: string; value: number | string | null }>
             }>
             incidents?: Array<Record<string, unknown>>
+            events?: MatchEventItem[]
             isFinished: boolean
             lastUpdated: number
         }>(`/football/fixtures/${fixtureId}/live`),

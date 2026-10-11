@@ -74,6 +74,20 @@ export function PickCard({
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.05, type: 'spring', stiffness: 320, damping: 30 }}
             >
+                {pick.rankLabel && (
+                    <div className="mb-2">
+                        <span
+                            className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-bold tracking-wide ${
+                                pick.rankLabel.includes('TOP 1')
+                                    ? 'border border-emerald-400/50 bg-emerald-500/20 text-emerald-300 shadow-[0_0_10px_rgba(16,185,129,0.25)]'
+                                    : 'border border-sky-400/50 bg-sky-500/20 text-sky-300'
+                            }`}
+                        >
+                            {pick.rankLabel.includes('TOP 1') ? '👑 ' : '⚡ '}
+                            {pick.rankLabel}
+                        </span>
+                    </div>
+                )}
                 <div className="flex items-start justify-between gap-2">
                     <div>
                         <p className="text-base font-bold text-ink-100">{title}</p>

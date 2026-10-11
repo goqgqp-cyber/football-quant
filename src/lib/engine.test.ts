@@ -127,17 +127,18 @@ describe('analyzeMatch - integration & filtering', () => {
         expect(trapPick?.status).toBe('trap')
     })
 
-    it('returns noBet when empty or no value meets criteria', () => {
+    it('returns noBet only when empty and forces Top 1 pick otherwise', () => {
         const emptyRes = analyzeMatch(sampleMatchData(), [])
         expect(emptyRes.noBet).toBe(true)
         expect(emptyRes.noBetReasons[0]).toContain('Chưa nhập kèo')
 
-        // Kèo có odds quá thấp (< 1.50)
+        // Kèo có odds thấp (< 1.50) vẫn luôn được engine xếp hạng và chọn Top 1 Value bắt buộc
         const lowOdds: OddsLine[] = [
             { id: 'lo', kind: 'totals', side: 'over', line: 0.5, odds: 1.10 },
         ]
         const res = analyzeMatch(sampleMatchData(), lowOdds)
-        expect(res.noBet).toBe(true)
+        expect(res.noBet).toBe(false)
+        expect(res.picks[0].rankLabel).toBe('[KÈO TỐI ƯU NHẤT - TOP 1 VALUE]')
     })
 
     it('suggestedLines returns predefined common lines', () => {

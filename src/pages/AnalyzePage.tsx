@@ -73,11 +73,9 @@ export function AnalyzePage() {
 
     // ---- Ảnh → Qwen OCR đọc kèo (G3) ----
     const [imagePreviews, setImagePreviews] = useState<string[]>([])
-    const [confirmRows, setConfirmRows] = useState<ConfirmRow[] | null>(null)
     const [parseHint, setParseHint] = useState<string | null>(null)
     const [extracting, setExtracting] = useState(false)
     const [extractStatusText, setExtractStatusText] = useState<string>('AI đang bóc tách trực tiếp ma trận kèo qua Qwen Omni Flash...')
-    const [extractNote, setExtractNote] = useState<string | null>(null)
 
     // ---- Stream + kết quả ----
     const [steps, setSteps] = useState<Step[]>([
@@ -106,6 +104,7 @@ export function AnalyzePage() {
 
     // ---- API-Football Fixture ID ----
     const [fixtureId, setFixtureId] = useState('')
+    const [showEditOdds, setShowEditOdds] = useState(false)
 
     // Hook theo dõi & đồng bộ dữ liệu thời gian thực (One-Shot Snapshot từ API-Football)
     const { liveData: currentLiveData } = useLiveMatchSync({
@@ -276,6 +275,10 @@ export function AnalyzePage() {
                                     picks: recPicks,
                                     result: null,
                                     explanation: latestExplanationRef.current,
+                                    capturedAt: Date.now(),
+                                    capturedMinute: inPlay?.currentMinute ?? null,
+                                    isLive: Boolean(inPlay?.isLive),
+                                    fixtureId: evId ?? (fixtureId ? Number(fixtureId) : null),
                                 })
                             } catch {
                                 /* ignore */
@@ -313,8 +316,6 @@ export function AnalyzePage() {
             setExtractStatusText('AI đang bóc tách trực tiếp ma trận kèo qua Qwen Omni Flash...')
             setParseHint(null)
             setError(null)
-            setExtractNote(null)
-            setConfirmRows(null)
             try {
                 const hint = {
                     home: input.homeTeam.trim() || undefined,
@@ -350,12 +351,11 @@ export function AnalyzePage() {
                 if (res.period !== undefined) setPeriod(res.period)
 
                 const rows = res.rows.map(toConfirmRow)
-                setConfirmRows(rows)
                 const cleanLines = rows.map((r) => r.line)
+                // Auto-confirm: Trực tiếp nạp ma trận kèo, bỏ qua modal review cản trở
                 setOddsLines(cleanLines)
-                setExtractNote(res.note ?? null)
                 setError(null)
-                setParseHint(null)
+                setParseHint(res.note ?? null)
 
                 if (rows.length === 0) {
                     setParseHint(
@@ -497,8 +497,6 @@ export function AnalyzePage() {
                 fileInputRef.current.value = ''
             }
             // Reset toàn bộ thông tin kèo OCR và trạng thái đội về rỗng
-            setConfirmRows(null)
-            setExtractNote(null)
             setOddsLines([])
             setInput((prev) => ({
                 ...prev,
@@ -531,8 +529,6 @@ export function AnalyzePage() {
         if (fileInputRef.current) {
             fileInputRef.current.value = ''
         }
-        setConfirmRows(null)
-        setExtractNote(null)
         setOddsLines([])
         setInput((prev) => ({
             ...prev,
@@ -567,19 +563,9 @@ export function AnalyzePage() {
         return () => window.removeEventListener('paste', onPaste)
     })
 
-    // LỌC SẠCH KÈO RÁC: Chỉ giữ các kèo value đạt chuẩn (Edge >= 5%, EV > 0, Odds >= 1.50, confidence !== 'low')
+    // BẮT BUỘC ĐƯA RA KÈO TỐI ƯU (Eliminate NO BET): Luôn lấy Top 1 Value và Top 2 Dự phòng
     const qualifyingPicks = useMemo(
-        () =>
-            result
-                ? result.picks.filter(
-                      (p) =>
-                          p.status === 'value' &&
-                          p.edge >= 0.05 &&
-                          p.ev > 0 &&
-                          p.odds >= 1.50 &&
-                          p.confidence !== 'low',
-                  )
-                : [],
+        () => (result ? filterRecommendedPicks(result.picks) : []),
         [result],
     )
 
@@ -875,22 +861,20 @@ export function AnalyzePage() {
                 )}
             </GlassCard>
 
-            {/* Bảng xác nhận số liệu AI đọc từ ảnh */}
-            {confirmRows && (
+            {/* Bảng tùy chọn chỉnh sửa tỷ lệ cược (mở khi bấm 'Chỉnh sửa tỷ lệ cược') */}
+            {showEditOdds && oddsLines.length > 0 && (
                 <GlassCard>
                     <div className="flex items-center justify-between gap-2">
                         <p className="font-display text-sm font-bold text-ink-100">
-                            Xác nhận số liệu AI đọc được
+                            Chỉnh sửa chi tiết các mốc cược
                         </p>
                         <span className="rounded-full bg-warn-500/15 px-2 py-1 text-[11px] font-semibold text-warn-400">
                             Sửa nếu sai rồi mới xác nhận
                         </span>
                     </div>
                     <p className="mt-1 text-xs text-ink-500">
-                        Đây là gợi ý do AI đọc từ ảnh, KHÔNG tự động tin. Cột “Tin cậy” là mức tự chấm của model —
-                        dòng dưới 80% nên kiểm tra kỹ.
+                        Chỉnh sửa mốc hoặc tỷ lệ cược theo bảng kèo thực tế trước khi bấm phân tích.
                     </p>
-                    {extractNote && <p className="mt-1 text-xs text-ink-500">Ghi chú AI: {extractNote}</p>}
                     <div className="mt-3 overflow-x-auto rounded-xl border border-white/10">
                         <table className="min-w-full text-sm">
                             <thead className="bg-white/5 text-xs text-ink-500">
@@ -899,36 +883,26 @@ export function AnalyzePage() {
                                     <th className="px-3 py-2 text-left">Bên</th>
                                     <th className="px-3 py-2 text-left">Mốc</th>
                                     <th className="px-3 py-2 text-left">Odds</th>
-                                    <th className="px-3 py-2 text-left">Tin cậy</th>
-                                    <th className="px-3 py-2 text-left">Ghi chú</th>
-                                    <th className="px-3 py-2" />
+                                    <th className="px-3 py-2 text-center">Xóa</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                {confirmRows.map((r, idx) => (
-                                    <tr key={r.line.id} className="border-t border-white/8">
+                                {oddsLines.map((o, idx) => (
+                                    <tr key={o.id} className="border-t border-white/8">
                                         <td className="px-3 py-1.5">
                                             <select
-                                                value={r.line.kind}
+                                                value={o.kind}
                                                 onChange={(e) =>
-                                                    setConfirmRows((prev) =>
-                                                        prev
-                                                            ? prev.map((x, j) =>
-                                                                j === idx
-                                                                    ? {
-                                                                        ...x,
-                                                                        line: {
-                                                                            ...x.line,
-                                                                            kind: e.target.value as OddsLine['kind'],
-                                                                            side:
-                                                                                e.target.value === 'totals'
-                                                                                    ? 'over'
-                                                                                    : 'home',
-                                                                        },
-                                                                    }
-                                                                    : x,
-                                                            )
-                                                            : prev,
+                                                    setOddsLines((prev) =>
+                                                        prev.map((x, j) =>
+                                                            j === idx
+                                                                ? {
+                                                                    ...x,
+                                                                    kind: e.target.value as OddsLine['kind'],
+                                                                    side: e.target.value === 'totals' ? 'over' : 'home',
+                                                                }
+                                                                : x,
+                                                        ),
                                                     )
                                                 }
                                                 className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-ink-100"
@@ -939,32 +913,24 @@ export function AnalyzePage() {
                                         </td>
                                         <td className="px-3 py-1.5">
                                             <select
-                                                value={r.line.side}
+                                                value={o.side}
                                                 onChange={(e) =>
-                                                    setConfirmRows((prev) =>
-                                                        prev
-                                                            ? prev.map((x, j) =>
-                                                                j === idx
-                                                                    ? {
-                                                                        ...x,
-                                                                        line: {
-                                                                            ...x.line,
-                                                                            side: e.target.value as OddsLine['side'],
-                                                                        },
-                                                                    }
-                                                                    : x,
-                                                            )
-                                                            : prev,
+                                                    setOddsLines((prev) =>
+                                                        prev.map((x, j) =>
+                                                            j === idx
+                                                                ? { ...x, side: e.target.value as OddsLine['side'] }
+                                                                : x,
+                                                        ),
                                                     )
                                                 }
                                                 className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-ink-100"
                                             >
-                                                {(r.line.kind === 'totals'
+                                                {(o.kind === 'totals'
                                                     ? ['over', 'under']
                                                     : ['home', 'away']
                                                 ).map((s) => (
                                                     <option key={s} value={s}>
-                                                        {s}
+                                                        {s === 'over' ? 'Tài' : s === 'under' ? 'Xỉu' : s === 'home' ? (input.homeTeam || 'Chủ') : (input.awayTeam || 'Khách')}
                                                     </option>
                                                 ))}
                                             </select>
@@ -973,10 +939,10 @@ export function AnalyzePage() {
                                             <TextInput
                                                 type="number"
                                                 step={0.25}
-                                                value={String(r.line.line)}
+                                                value={String(o.line)}
                                                 onChange={(e) =>
-                                                    setConfirmRows((prev) =>
-                                                        prev ? prev.map((x, j) => (j === idx ? { ...x, line: { ...x.line, line: Number(e.target.value) } } : x)) : prev,
+                                                    setOddsLines((prev) =>
+                                                        prev.map((x, j) => (j === idx ? { ...x, line: Number(e.target.value) } : x)),
                                                     )
                                                 }
                                                 className="!py-1.5"
@@ -986,35 +952,20 @@ export function AnalyzePage() {
                                             <TextInput
                                                 type="number"
                                                 step={0.05}
-                                                value={String(r.line.odds)}
+                                                value={String(o.odds)}
                                                 onChange={(e) =>
-                                                    setConfirmRows((prev) =>
-                                                        prev ? prev.map((x, j) => (j === idx ? { ...x, line: { ...x.line, odds: Number(e.target.value) } } : x)) : prev,
+                                                    setOddsLines((prev) =>
+                                                        prev.map((x, j) => (j === idx ? { ...x, odds: Number(e.target.value) } : x)),
                                                     )
                                                 }
                                                 className="!py-1.5"
                                             />
                                         </td>
-                                        <td className="px-3 py-1.5">
-                                            <span
-                                                className={`rounded-full px-2 py-1 text-[11px] font-semibold ${r.confidence >= 0.8
-                                                    ? 'bg-value-500/15 text-value-400'
-                                                    : r.confidence >= 0.6
-                                                        ? 'bg-warn-500/15 text-warn-400'
-                                                        : 'bg-danger-500/15 text-danger-400'
-                                                    }`}
-                                            >
-                                                {Math.round(r.confidence * 100)}%
-                                            </span>
-                                        </td>
-                                        <td className="px-3 py-1.5 text-xs text-ink-500">{r.note || '—'}</td>
                                         <td className="px-3 py-1.5 text-center">
                                             <button
                                                 className="text-danger-400 hover:text-danger-300"
                                                 onClick={() =>
-                                                    setConfirmRows((prev) =>
-                                                        prev ? prev.filter((_, j) => j !== idx) : prev,
-                                                    )
+                                                    setOddsLines((prev) => prev.filter((_, j) => j !== idx))
                                                 }
                                             >
                                                 ×
@@ -1026,19 +977,8 @@ export function AnalyzePage() {
                         </table>
                     </div>
                     <div className="mt-3 flex gap-2">
-                        <Button
-                            onClick={() => {
-                                if (confirmRows) {
-                                    setOddsLines(confirmRows.map((r) => r.line))
-                                    setConfirmRows(null)
-                                }
-                            }}
-                            disabled={confirmRows.length === 0}
-                        >
-                            Xác nhận và đưa vào tính ({confirmRows.length})
-                        </Button>
-                        <Button variant="ghost" onClick={() => setConfirmRows(null)}>
-                            Hủy
+                        <Button variant="ghost" onClick={() => setShowEditOdds(false)}>
+                            Đóng bảng sửa
                         </Button>
                     </div>
                 </GlassCard>
@@ -1047,16 +987,24 @@ export function AnalyzePage() {
             {/* Danh sách odds hiện tại */}
             <GlassCard>
                 <div className="flex items-center justify-between gap-2">
-                    <p className="font-display text-sm font-bold text-ink-100">Kèo đã nhập</p>
-                    <Button
-                        variant="ghost"
-                        onClick={() => {
-                            const id = `x-${Date.now()}`
-                            setOddsLines((prev) => [...prev, { id, kind: 'totals', side: 'over', line: 2.5, odds: 1.95 }])
-                        }}
-                    >
-                        + Thêm kèo
-                    </Button>
+                    <p className="font-display text-sm font-bold text-ink-100">Kèo đã nhập ({oddsLines.length})</p>
+                    <div className="flex items-center gap-2">
+                        <Button
+                            variant="ghost"
+                            onClick={() => setShowEditOdds((prev) => !prev)}
+                        >
+                            {showEditOdds ? 'Đóng chỉnh sửa' : 'Chỉnh sửa tỷ lệ cược'}
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            onClick={() => {
+                                const id = `x-${Date.now()}`
+                                setOddsLines((prev) => [...prev, { id, kind: 'totals', side: 'over', line: 2.5, odds: 1.95 }])
+                            }}
+                        >
+                            + Thêm kèo
+                        </Button>
+                    </div>
                 </div>
                 {oddsLines.length === 0 ? (
                     <p className="mt-2 text-sm text-ink-500">Chưa có kèo nào.</p>
@@ -1160,29 +1108,19 @@ export function AnalyzePage() {
             {result && (
                 <>
                     {qualifyingPicks.length === 0 ? (
-                        <GlassCard className="border border-amber-500/30 bg-gradient-to-r from-amber-950/40 via-neutral-900/60 to-neutral-900/40 p-5 shadow-lg">
-                            <div className="flex items-start gap-3.5">
-                                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-500/40 bg-amber-500/20 text-xl font-bold text-amber-400">
-                                    ⚠️
-                                </span>
-                                <div>
-                                    <h3 className="font-display text-base font-bold text-amber-300">
-                                        NO BET — Thị trường không có kèo nào đạt biên an toàn (Edge &gt;= 5%, EV &gt; 0). Khuyến nghị bỏ qua trận này.
-                                    </h3>
-                                    <p className="mt-1 text-xs text-neutral-400">
-                                        Toàn bộ các mốc cược trên thị trường hiện tại đều bị âm kỳ vọng (EV ≤ 0), lệch tỷ lệ hoặc có rủi ro bẫy giá (TRAP). Không giải ngân vốn vào trận đấu này.
-                                    </p>
-                                </div>
-                            </div>
+                        <GlassCard className="border border-white/10 p-5">
+                            <p className="text-center text-sm text-neutral-400">
+                                Chưa có mốc kèo nào được nhập. Hãy tải ảnh bảng kèo hoặc thêm kèo thủ công để phân tích.
+                            </p>
                         </GlassCard>
                     ) : (
                         <div className="flex flex-col gap-3">
                             <div className="flex items-center justify-between gap-2">
                                 <h3 className="font-display text-sm font-bold text-ink-100">
-                                    KÈO VALUE KHUYẾN NGHỊ ({qualifyingPicks.length})
+                                    KÈO TỐI ƯU KHUYẾN NGHỊ ({qualifyingPicks.length})
                                 </h3>
-                                <span className="rounded-full border border-value-400/30 bg-value-400/10 px-2.5 py-0.5 text-[11px] font-semibold text-value-400">
-                                    Edge ≥ 5% · EV &gt; 0 · Odds ≥ 1.50
+                                <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-400">
+                                    Top Value Engine · Composite Score (EV + Edge)
                                 </span>
                             </div>
                             <div className="grid gap-3 md:grid-cols-2">

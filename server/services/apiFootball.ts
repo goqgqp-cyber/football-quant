@@ -9,7 +9,7 @@
 
 import { env } from '../env.js'
 import { keys, redis } from '../redis.js'
-import type { LiveMatchData, DetailedMatchStatistics } from '../../src/lib/types.js'
+import type { LiveMatchData, DetailedMatchStatistics, MatchEventItem } from '../../src/lib/types.js'
 
 export const API_FOOTBALL_BASE_URL = 'https://v3.football.api-sports.io'
 
@@ -400,6 +400,12 @@ export async function extractDetailedFixtureStatistics(
     const xgH = n(ht, 'expected_goals') || n(ht, 'Expected Goals')
     const xgA = n(at, 'expected_goals') || n(at, 'Expected Goals')
 
+    const dwH = n(ht, 'Duels won'), dwA = n(at, 'Duels won')
+    const dtH = n(ht, 'Total Duels') || (dwH + dwA), dtA = n(at, 'Total Duels') || (dwH + dwA)
+    const adwH = n(ht, 'Aerials won') || n(ht, 'Aerial Duels won')
+    const adwA = n(at, 'Aerials won') || n(at, 'Aerial Duels won')
+    const adtH = n(ht, 'Total Aerials') || (adwH + adwA), adtA = n(at, 'Total Aerials') || (adwH + adwA)
+
     const detailed: DetailedMatchStatistics = {
         possession: { home: possH, away: possA },
         totalPasses: { home: n(ht, 'Total passes'), away: n(at, 'Total passes') },
@@ -416,6 +422,18 @@ export async function extractDetailedFixtureStatistics(
         shotsOnGoal: { home: n(ht, 'Shots on Goal'), away: n(at, 'Shots on Goal') },
         shotsOffGoal: { home: n(ht, 'Shots off Goal'), away: n(at, 'Shots off Goal') },
         shotsBlocked: { home: n(ht, 'Blocked Shots'), away: n(at, 'Blocked Shots') },
+        shotsInsideBox: { home: n(ht, 'Shots insidebox'), away: n(at, 'Shots insidebox') },
+        shotsOutsideBox: { home: n(ht, 'Shots outsidebox'), away: n(at, 'Shots outsidebox') },
+        penalties: { home: n(ht, 'Penalties') || n(ht, 'Penalty'), away: n(at, 'Penalties') || n(at, 'Penalty') },
+        keyPasses: { home: n(ht, 'Key Passes') || n(ht, 'Key passes'), away: n(at, 'Key Passes') || n(at, 'Key passes') },
+        duelsWon: {
+            homeCount: dwH, homePct: dtH > 0 ? Math.round((dwH / dtH) * 100) : 50,
+            awayCount: dwA, awayPct: dtA > 0 ? Math.round((dwA / dtA) * 100) : 50,
+        },
+        aerialDuelsWon: {
+            homeCount: adwH, homePct: adtH > 0 ? Math.round((adwH / adtH) * 100) : 50,
+            awayCount: adwA, awayPct: adtA > 0 ? Math.round((adwA / adtA) * 100) : 50,
+        },
         goalkeeperSaves: { home: n(ht, 'Goalkeeper Saves') || n(ht, 'Saves'), away: n(at, 'Goalkeeper Saves') || n(at, 'Saves') },
         ...(xgH > 0 || xgA > 0 ? { expectedGoals: { home: xgH, away: xgA } } : {}),
         corners: { home: n(ht, 'Corner Kicks'), away: n(at, 'Corner Kicks') },
@@ -429,6 +447,42 @@ export async function extractDetailedFixtureStatistics(
     }
 
     return { detailed, raw: list }
+}
+
+/**
+ * Lấy phong độ 5 trận gần nhất của một đội từ API-Football:
+ * Endpoint: /fixtures?team={teamId}&last=5&status=FT
+ * Trả về mảng 5 ký tự ['W', 'D', 'L', ...], cache 24h (86400s)
+ */
+export async function getTeamRecentForm(teamId: number): Promise<string[]> {
+    if (!teamId || teamId <= 0) return []
+    try {
+        const list = await fetchApiFootball<ApiFootballFixtureItem[]>(
+            'fixtures',
+            { team: teamId, last: 5, status: 'FT' },
+            86400,
+        )
+        if (!list || !Array.isArray(list) || list.length === 0) return []
+
+        const form: string[] = []
+        for (const item of list) {
+            const hId = item.teams?.home?.id
+            const isHome = hId === teamId
+            const hGoals = Number(item.goals?.home ?? item.score?.fulltime?.home ?? 0)
+            const aGoals = Number(item.goals?.away ?? item.score?.fulltime?.away ?? 0)
+
+            if (hGoals === aGoals) {
+                form.push('D')
+            } else if ((isHome && hGoals > aGoals) || (!isHome && aGoals > hGoals)) {
+                form.push('W')
+            } else {
+                form.push('L')
+            }
+        }
+        return form.slice(0, 5)
+    } catch {
+        return []
+    }
 }
 
 /**
@@ -479,6 +533,98 @@ export async function extractFixtureEvents(
     }
 
     return incidents
+}
+
+/**
+ * Trích xuất các sự kiện diễn biến chi tiết trong trận theo format MatchEventItem
+ * Dùng cho component Timeline sự kiện (Bàn thắng, thẻ phạt, thay người, VAR, mốc HT/FT).
+ */
+export async function extractStructuredFixtureEvents(
+    fixtureId: number,
+    homeTeamId?: number,
+    isFinished = false,
+): Promise<MatchEventItem[]> {
+    const ttl = isFinished ? 86400 : 30
+    const list = await fetchApiFootball<ApiFootballEventItem[]>('fixtures/events', { fixture: fixtureId }, ttl)
+    if (!list || !Array.isArray(list)) return []
+
+    // Sắp xếp thứ tự thời gian tăng dần
+    const sorted = [...list].sort((a, b) => {
+        const timeA = (a.time?.elapsed || 0) + (a.time?.extra || 0) * 0.1
+        const timeB = (b.time?.elapsed || 0) + (b.time?.extra || 0) * 0.1
+        return timeA - timeB
+    })
+
+    const events: MatchEventItem[] = []
+    let scoreHome = 0
+    let scoreAway = 0
+
+    for (const item of sorted) {
+        const isHome = homeTeamId ? item.team?.id === homeTeamId : true
+        const typeLower = (item.type || '').toLowerCase()
+        const detail = item.detail || ''
+        const detailLower = detail.toLowerCase()
+
+        let formattedType = typeLower
+        let formattedDetail = detail
+        let playerIn: string | undefined = undefined
+        let playerOut: string | undefined = undefined
+        let currentScoreStr: string | undefined = undefined
+
+        if (typeLower === 'goal') {
+            if (detailLower.includes('missed')) {
+                formattedType = 'goal_missed'
+                formattedDetail = 'Sút hỏng phạt đền'
+            } else if (detailLower.includes('own goal')) {
+                formattedType = 'goal'
+                formattedDetail = 'Bàn thắng (Phản lưới nhà)'
+                if (isHome) scoreAway++
+                else scoreHome++
+                currentScoreStr = `${scoreHome} - ${scoreAway}`
+            } else if (detailLower.includes('penalty')) {
+                formattedType = 'goal'
+                formattedDetail = 'Bàn thắng (Pen)'
+                if (isHome) scoreHome++
+                else scoreAway++
+                currentScoreStr = `${scoreHome} - ${scoreAway}`
+            } else {
+                formattedType = 'goal'
+                formattedDetail = 'Bàn thắng'
+                if (isHome) scoreHome++
+                else scoreAway++
+                currentScoreStr = `${scoreHome} - ${scoreAway}`
+            }
+        } else if (typeLower === 'card') {
+            formattedType = 'card'
+            formattedDetail = detailLower.includes('red') ? 'Thẻ đỏ' : 'Thẻ vàng'
+        } else if (typeLower === 'subst') {
+            formattedType = 'subst'
+            formattedDetail = 'Thay người'
+            playerOut = item.player?.name || undefined
+            playerIn = item.assist?.name || undefined
+        } else if (typeLower === 'var') {
+            formattedType = 'var'
+            formattedDetail = `VAR: ${detail}`
+        }
+
+        events.push({
+            time: item.time?.elapsed || 0,
+            addedTime: item.time?.extra ?? undefined,
+            type: formattedType,
+            detail: formattedDetail,
+            isHome,
+            teamName: item.team?.name,
+            teamLogo: item.team?.logo,
+            player: item.player?.name || undefined,
+            assist: item.assist?.name || undefined,
+            score: currentScoreStr,
+            playerIn,
+            playerOut,
+            comments: item.comments || undefined,
+        })
+    }
+
+    return events
 }
 
 /**
@@ -539,15 +685,28 @@ export async function getMatchLiveStatus(
     }
 
     const kickoff = fix.date
+    const homeId = item.teams?.home?.id
+    const awayId = item.teams?.away?.id
 
-    // Lấy thống kê chi tiết trận đấu
-    const stats = await extractFixtureStatistics(fix.id, isFinished)
+    // Lấy thống kê chi tiết trận đấu và phong độ 5 trận gần nhất
+    const [stats, homeForm, awayForm] = await Promise.all([
+        extractFixtureStatistics(fix.id, isFinished),
+        homeId ? getTeamRecentForm(homeId) : Promise.resolve([]),
+        awayId ? getTeamRecentForm(awayId) : Promise.resolve([]),
+    ])
 
     return {
         found: true,
         eventId: fix.id,
+        fixtureId: fix.id,
         homeTeam: item.teams?.home?.name || home,
         awayTeam: item.teams?.away?.name || away,
+        homeLogo: item.teams?.home?.logo,
+        awayLogo: item.teams?.away?.logo,
+        homeTeamId: homeId,
+        awayTeamId: awayId,
+        homeForm: homeForm.length > 0 ? homeForm : ['W', 'D', 'W', 'L', 'D'],
+        awayForm: awayForm.length > 0 ? awayForm : ['D', 'L', 'W', 'D', 'L'],
         league: item.league?.name,
         kickoff,
         status: isFinished ? 'finished' : isLive ? 'inprogress' : 'notstarted',

@@ -67,8 +67,20 @@ export function HistoryPage() {
             // Giữ lại các lượt phân tích vừa phát sinh trên client nếu server chưa kịp trả về
             const uncommitted = local.filter((l) => !serverIds.has(l.id))
             const merged = [...uncommitted, ...serverRows]
-            setItems(merged)
-            saveLocalHistory(merged)
+            const seen = new Set<string>()
+            const deduplicated: HistoryItem[] = []
+            for (const item of merged) {
+                const fixId = item.fixtureId || item.meta?.eventId
+                const key = fixId
+                    ? `fix:${fixId}`
+                    : `${(item.meta?.home || '').trim().toLowerCase()}_vs_${(item.meta?.away || '').trim().toLowerCase()}_${item.id}`
+                if (!seen.has(key)) {
+                    seen.add(key)
+                    deduplicated.push(item)
+                }
+            }
+            setItems(deduplicated)
+            saveLocalHistory(deduplicated)
         } catch (e) {
             setError(e instanceof ApiError ? e.message : 'Không tải được lịch sử từ server. Đang dùng bộ nhớ máy.')
         } finally {
@@ -183,13 +195,51 @@ function HistoryRow({
     const [liveData, setLiveData] = useState<LiveMatchData | null>(null)
     const [checkingLive, setCheckingLive] = useState(false)
     const [autoSettledNotice, setAutoSettledNotice] = useState<string | null>(null)
+    const [nextRetryAt, setNextRetryAt] = useState<number | null>(item.nextRetryAt ?? null)
+    const [now, setNow] = useState(Date.now())
 
-    // Tự động kiểm tra tỷ số & đối soát khi trận kết thúc (FT)
-    const checkLiveAndAutoSettle = useCallback(async () => {
+    // 0 API Cost client-side countdown timer
+    useEffect(() => {
         if (item.result) return
+        const timer = setInterval(() => setNow(Date.now()), 1000)
+        return () => clearInterval(timer)
+    }, [item.result])
+
+    // Tính toán mốc kết thúc dự kiến (~Phút 100) để bảo vệ quota
+    const capturedAt = item.capturedAt || item.createdAt
+    const capturedMinute = item.capturedMinute ?? (item.meta.inPlay?.currentMinute ?? (item.meta.inPlay?.isLive ? 45 : 0))
+    const isLive = Boolean(item.isLive ?? item.meta.inPlay?.isLive)
+
+    const estimatedFinishAt = useMemo(() => {
+        if (isLive && capturedMinute > 0) {
+            const remainingMinutes = Math.max(5, 100 - capturedMinute)
+            return capturedAt + remainingMinutes * 60 * 1000
+        }
+        if (item.meta.kickoff) {
+            const ko = new Date(item.meta.kickoff).getTime()
+            if (!isNaN(ko)) return ko + 115 * 60 * 1000
+        }
+        return capturedAt + 115 * 60 * 1000
+    }, [capturedAt, capturedMinute, isLive, item.meta.kickoff])
+
+    const isUnderTime = now < estimatedFinishAt
+    const isBackedOff = nextRetryAt ? now < nextRetryAt : false
+    const canSettle = !isUnderTime && !isBackedOff
+
+    const targetTime = isBackedOff && nextRetryAt ? nextRetryAt : estimatedFinishAt
+    const remainingMs = Math.max(0, targetTime - now)
+    const remMin = Math.floor(remainingMs / 60000)
+    const remSec = Math.floor((remainingMs % 60000) / 1000)
+    const countdownStr = `${String(remMin).padStart(2, '0')}:${String(remSec).padStart(2, '0')}`
+
+    // Thực hiện đối soát (CHỈ KHI NGƯỜI DÙNG BẤM HOẶC ĐÃ ĐỦ THỜI GIAN)
+    const checkLiveAndAutoSettle = useCallback(async () => {
+        if (item.result || checkingLive) return
         setCheckingLive(true)
+        setAutoSettledNotice(null)
         try {
-            const live = await api.getLiveMatch(item.meta.home, item.meta.away)
+            const evId = item.fixtureId || item.meta.eventId
+            const live = await api.getLiveMatch(item.meta.home, item.meta.away, evId ? Number(evId) : undefined)
             if (live.found) {
                 setLiveData(live)
                 // Nếu trận đã kết thúc (isFinished), tự động đối soát với API-Football
@@ -206,24 +256,29 @@ function HistoryRow({
                                 `✨ Trận đấu đã FT (${live.score.home}-${live.score.away}) — Đã tự động đối soát kết quả vào Redis!`
                             )
                             onSettled(res.item)
+                            return
                         }
                     } catch {
                         /* ignore autoSettle error and keep liveData */
                     }
+                } else {
+                    // Trận đấu chưa kết thúc: thêm 10 phút backoff buffer để tránh spam API
+                    const backoff = Date.now() + 10 * 60 * 1000
+                    setNextRetryAt(backoff)
+                    setAutoSettledNotice(
+                        `⏳ Trận đấu đang diễn ra (Phút ${live.minute ?? '—'} - Tỉ số ${live.score.home}-${live.score.away}) chưa kết thúc. Đã bật bộ đệm an toàn 10 phút.`
+                    )
                 }
+            } else {
+                setNextRetryAt(Date.now() + 5 * 60 * 1000)
+                setAutoSettledNotice('Chưa có thông tin cập nhật từ API-Football. Vui lòng thử lại sau.')
             }
         } catch {
-            /* ignore network errors */
+            setNextRetryAt(Date.now() + 5 * 60 * 1000)
         } finally {
             setCheckingLive(false)
         }
-    }, [item.id, item.meta.home, item.meta.away, item.result, onSettled])
-
-    useEffect(() => {
-        if (!item.result) {
-            void checkLiveAndAutoSettle()
-        }
-    }, [checkLiveAndAutoSettle, item.result])
+    }, [item.fixtureId, item.id, item.meta.eventId, item.meta.home, item.meta.away, item.result, onSettled, checkingLive])
 
     const settled: SettledPick[] | null = useMemo(() => {
         if (!item.result) return null
@@ -322,22 +377,45 @@ function HistoryRow({
 
             {!item.result ? (
                 <div className="mt-3 space-y-3">
-                    {/* Banner chờ kết quả hết trận */}
-                    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-500/25 bg-amber-950/20 p-3 text-xs text-amber-200">
-                        <div className="flex items-center gap-2">
-                            <span className="font-bold">⏳ Chờ kết quả hết trận</span>
+                    {/* Banner chờ kết quả hết trận với Minute-100 Quota Guard Timer */}
+                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs">
+                        <div className="flex flex-wrap items-center gap-2">
+                            {isBackedOff ? (
+                                <span className="rounded-md border border-amber-500/40 bg-amber-500/20 px-2.5 py-1 font-semibold text-amber-300">
+                                    ⏳ Đang chờ hồi quota: {countdownStr} còn lại
+                                </span>
+                            ) : isUnderTime ? (
+                                <span className="rounded-md border border-sky-400/40 bg-sky-500/20 px-2.5 py-1 font-semibold text-sky-300">
+                                    ⏳ Chờ hết trận (Phút ~100): {countdownStr} còn lại
+                                </span>
+                            ) : (
+                                <span className="rounded-md border border-emerald-400/40 bg-emerald-500/20 px-2.5 py-1 font-semibold text-emerald-300">
+                                    🔔 Đã đủ thời gian thi đấu (Phút 100+)
+                                </span>
+                            )}
                             <span className="text-neutral-400">
-                                (Không tính thắng/thua khi trận chưa kết thúc · Tự động đối soát khi FT)
+                                (Minute-100 Quota Guard · 0 API Cost khi đếm ngược)
                             </span>
                         </div>
-                        <Button
-                            variant="ghost"
+                        <button
+                            type="button"
                             onClick={() => void checkLiveAndAutoSettle()}
-                            disabled={checkingLive}
-                            className="text-xs py-1 px-2.5"
+                            disabled={!canSettle || checkingLive}
+                            title={
+                                isUnderTime
+                                    ? 'Trận đấu đang diễn ra. Mở đối soát khi hết giờ để tiết kiệm quota.'
+                                    : isBackedOff
+                                        ? 'Đang chờ hồi quota 10 phút sau khi kiểm tra trận chưa kết thúc.'
+                                        : 'Kiểm tra tỷ số FT chính thức từ API-Football và đối soát kết quả'
+                            }
+                            className={`rounded-lg px-3 py-1.5 font-semibold transition flex items-center gap-1.5 ${
+                                canSettle && !checkingLive
+                                    ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 hover:bg-emerald-500/30 cursor-pointer'
+                                    : 'bg-white/5 text-neutral-500 border border-white/5 cursor-not-allowed'
+                            }`}
                         >
-                            {checkingLive ? 'Đang kiểm tra…' : '🔄 Kiểm tra tỷ số trực tiếp'}
-                        </Button>
+                            {checkingLive ? 'Đang đối soát…' : 'Đối soát kết quả'}
+                        </button>
                     </div>
 
                     {/* Bảng các pick khuyến nghị đã lưu */}

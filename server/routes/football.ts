@@ -12,6 +12,7 @@ import {
     extractDetailedFixtureStatistics,
     extractFixtureEvents,
     extractFixtureStatistics,
+    extractStructuredFixtureEvents,
     fetchApiFootball,
     findFixture,
     getFixtureH2H,
@@ -101,8 +102,11 @@ footballApp.get('/fixtures/:id/events', async (c) => {
     if (!id || isNaN(id)) {
         return c.json({ error: 'invalid_id', message: 'ID trận đấu không hợp lệ.' }, 400)
     }
-    const events = await extractFixtureEvents(id)
-    return c.json({ fixtureId: id, events })
+    const [structuredEvents, incidents] = await Promise.all([
+        extractStructuredFixtureEvents(id),
+        extractFixtureEvents(id),
+    ])
+    return c.json({ fixtureId: id, events: structuredEvents, incidents })
 })
 
 // GET /api/football/fixtures/:id/live — Snapshot toàn diện (Live Status, Stats & Incidents)
@@ -113,8 +117,9 @@ footballApp.get('/fixtures/:id/live', async (c) => {
     }
 
     const isFinishedHint = false // không biết trước, để cache ngắn
-    const [statusData, eventsData, detailedResult] = await Promise.all([
+    const [statusData, structuredEvents, incidentsData, detailedResult] = await Promise.all([
         getMatchLiveStatus('', '', id),
+        extractStructuredFixtureEvents(id),
         extractFixtureEvents(id),
         extractDetailedFixtureStatistics(id, isFinishedHint),
     ])
@@ -129,6 +134,12 @@ footballApp.get('/fixtures/:id/live', async (c) => {
         fixtureId: id,
         homeTeam: statusData.homeTeam,
         awayTeam: statusData.awayTeam,
+        homeLogo: statusData.homeLogo,
+        awayLogo: statusData.awayLogo,
+        homeTeamId: statusData.homeTeamId,
+        awayTeamId: statusData.awayTeamId,
+        homeForm: statusData.homeForm,
+        awayForm: statusData.awayForm,
         league: statusData.league,
         kickoff: statusData.kickoff,
         status: statusData.status,
@@ -147,7 +158,8 @@ footballApp.get('/fixtures/:id/live', async (c) => {
         },
         detailedStats: detailedResult.detailed,
         rawStatistics: detailedResult.raw,
-        incidents: eventsData,
+        incidents: incidentsData,
+        events: structuredEvents,
         isFinished: statusData.isFinished,
         lastUpdated: statusData.lastUpdated,
     })

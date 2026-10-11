@@ -106,6 +106,10 @@ export interface Pick {
     flags: string[]
     /** lệch giữa xác suất mô hình và thị trường (điểm %) */
     marketDelta: number
+    /** Điểm xếp hạng tổng hợp EV (60%) + Edge (40%) */
+    compositeScore?: number
+    /** Nhãn xếp hạng bắt buộc: Top 1 tối ưu hoặc Top 2 dự phòng */
+    rankLabel?: '[KÈO TỐI ƯU NHẤT - TOP 1 VALUE]' | '[KÈO DỰ PHÒNG - TOP 2]'
 }
 
 /** Kết quả tính toán cho một trận. */
@@ -149,32 +153,55 @@ export interface AccurateWithPct {
 
 /** Thống kê chi tiết chuyên sâu chia 4 nhóm theo layout chuẩn API-Football */
 export interface DetailedMatchStatistics {
-    // Nhóm A: Kiểm soát bóng & Phân phối (Passing & Distribution)
+    // Nhóm 1: Sút bóng & Khung thành (Attacking & Goal Frame)
     possession: { home: number; away: number }
-    totalPasses: { home: number; away: number }
-    accuratePasses: AccurateWithPct
-    accurateCrosses: AccurateWithPct
-    accurateLongBalls: AccurateWithPct
-
-    // Nhóm B: Tấn công & Dứt điểm (Attacking & Threat)
     shotsTotal: { home: number; away: number }
     shotsOnGoal: { home: number; away: number }
     shotsOffGoal: { home: number; away: number }
     shotsBlocked: { home: number; away: number }
-    goalkeeperSaves: { home: number; away: number }
+    shotsInsideBox?: { home: number; away: number }
+    shotsOutsideBox?: { home: number; away: number }
+    penalties?: { home: number; away: number }
     expectedGoals?: { home: number; away: number }
 
-    // Nhóm C: Tình huống cố định & Tranh chấp (Discipline & Set Pieces)
-    corners: { home: number; away: number }
-    fouls: { home: number; away: number }
-    yellowCards: { home: number; away: number }
-    redCards: { home: number; away: number }
-    offsides: { home: number; away: number }
+    // Nhóm 2: Chuyền bóng & Kiến tạo (Passing & Playmaking)
+    totalPasses: { home: number; away: number }
+    keyPasses?: { home: number; away: number }
+    accuratePasses: AccurateWithPct
+    accurateCrosses: AccurateWithPct
+    accurateLongBalls: AccurateWithPct
 
-    // Nhóm D: Phòng ngự & Thu hồi bóng (Defensive Duels)
+    // Nhóm 3: Tranh chấp & Phòng ngự (Duels & Defense)
+    duelsWon?: AccurateWithPct
+    aerialDuelsWon?: AccurateWithPct
     tackles: { home: number; away: number }
     interceptions: { home: number; away: number }
     clearances: { home: number; away: number }
+    fouls: { home: number; away: number }
+    goalkeeperSaves: { home: number; away: number }
+
+    // Nhóm 4: Kỷ luật & Cố định (Discipline & Set Pieces)
+    corners: { home: number; away: number }
+    offsides: { home: number; away: number }
+    yellowCards: { home: number; away: number }
+    redCards: { home: number; away: number }
+}
+
+/** Dữ liệu sự kiện diễn biến trận đấu */
+export interface MatchEventItem {
+    time: number
+    addedTime?: number
+    type: 'goal' | 'card' | 'subst' | 'var' | string
+    detail: string
+    isHome: boolean
+    teamName?: string
+    teamLogo?: string
+    player?: string
+    assist?: string
+    score?: string
+    playerIn?: string
+    playerOut?: string
+    comments?: string
 }
 
 /** Dữ liệu trận đấu thời gian thực từ API-Football (v3.football.api-sports.io). */
@@ -186,6 +213,10 @@ export interface LiveMatchData {
     awayTeam?: string
     homeLogo?: string
     awayLogo?: string
+    homeTeamId?: number
+    awayTeamId?: number
+    homeForm?: string[]
+    awayForm?: string[]
     league?: string
     status?: 'notstarted' | 'inprogress' | 'finished'
     statusDescription?: string
@@ -204,6 +235,8 @@ export interface LiveMatchData {
         team: { id: number; name: string; logo?: string }
         statistics: Array<{ type: string; value: number | string | null }>
     }>
+    incidents?: Array<Record<string, unknown>>
+    events?: MatchEventItem[]
     isFinished: boolean
     kickoff?: string
     lastUpdated: number

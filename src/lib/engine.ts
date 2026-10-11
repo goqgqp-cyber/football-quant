@@ -167,7 +167,8 @@ export function analyzeMatch(
         }
 
 
-        const stake = status === 'value' ? stakePct(triple, line.odds, confidence) : 0
+        const stake = stakePct(triple, line.odds, confidence)
+        const compositeScore = Number(((ev * 0.6) + (edge * 0.4)).toFixed(4))
 
         picks.push({
             oddsLineId: line.id,
@@ -182,6 +183,7 @@ export function analyzeMatch(
             pImpliedNoVig: impNoVig,
             edge,
             ev,
+            compositeScore,
             confidence,
             stakePct: stake,
             status,
@@ -190,27 +192,35 @@ export function analyzeMatch(
         })
     }
 
-    // Sắp xếp value trước theo edge giảm dần
-    picks.sort((a, b) => {
-        if (a.status !== b.status) {
-            return a.status === 'value' ? -1 : b.status === 'value' ? 1 : 0
-        }
-        return b.edge - a.edge
-    })
+    // 1. Sắp xếp toàn bộ kèo theo Composite Score: (EV * 0.6) + (Edge * 0.4) giảm dần
+    picks.sort((a, b) => (b.compositeScore ?? 0) - (a.compositeScore ?? 0))
 
-    const valuePicks = picks.filter((p) => p.status === 'value')
-    const noBetReasons: string[] = []
-    if (valuePicks.length === 0) {
-        if (oddsLines.length === 0) {
-            noBetReasons.push('Chưa nhập kèo nào để phân tích.')
-        } else {
-            noBetReasons.push(
-                'Không có kèo nào đạt đồng thời: odds >= 1.50, Edge >= 5%, EV > 0 và lệch mô hình <= 15 điểm %.',
-            )
+    // 2. BẮT BUỘC ĐƯA RA KÈO TỐI ƯU (ELIMINATE NO BET):
+    // Luôn chọn Top 1 Value và Top 2 Dự phòng bất kể ngưỡng Edge bảo thủ có bị cản bởi biên nhà cái
+    if (picks.length > 0) {
+        // Top 1: Kèo tối ưu nhất
+        const p1 = picks[0]
+        p1.rankLabel = '[KÈO TỐI ƯU NHẤT - TOP 1 VALUE]'
+        if (p1.status !== 'trap') {
+            p1.status = 'value'
+        }
+        // Đề xuất vốn Kelly từ 2% đến 5%
+        p1.stakePct = p1.stakePct > 0 ? Math.min(0.05, Math.max(0.02, p1.stakePct)) : 0.03
+
+        // Top 2: Kèo dự phòng (nếu có từ 2 kèo trở lên)
+        if (picks.length > 1) {
+            const p2 = picks[1]
+            p2.rankLabel = '[KÈO DỰ PHÒNG - TOP 2]'
+            if (p2.status !== 'trap') {
+                p2.status = 'value'
+            }
+            p2.stakePct = p2.stakePct > 0 ? Math.min(0.04, Math.max(0.02, p2.stakePct)) : 0.02
         }
     }
-    if (data.missing.length > 0 && data.missing.length >= 4) {
-        noBetReasons.push('Thiếu nhiều dữ liệu nền tảng — mô hình không đáng tin.')
+
+    const noBetReasons: string[] = []
+    if (oddsLines.length === 0) {
+        noBetReasons.push('Chưa nhập kèo nào để phân tích.')
     }
 
     return {
@@ -219,7 +229,7 @@ export function analyzeMatch(
         matrix,
         topScorelines: topScorelines(matrix, 5),
         picks,
-        noBet: valuePicks.length === 0,
+        noBet: oddsLines.length === 0,
         noBetReasons,
     }
 }
@@ -241,21 +251,15 @@ export function suggestedLines(): OddsLine[] {
 }
 
 /**
- * Lọc các pick đạt chuẩn khuyến nghị để lưu lịch sử (Bước 5, Bước 6, Bước 7):
- * - Loại bỏ hoàn toàn các kèo tỷ lệ thấp, edge âm hoặc không đủ chuẩn.
- * - CHỈ GIỮ các pick: Edge >= 5%, EV > 0, Odds >= 1.50, độ tin cậy từ Trung bình trở lên (medium | high).
- * - Tối đa 2 pick chính theo Bước 7 (kèo tương quan), sắp xếp theo edge giảm dần.
+ * Lọc các pick đạt chuẩn khuyến nghị để lưu lịch sử & hiển thị:
+ * - BẮT BUỘC trả về Top 1 và Top 2 (Top 1 Value & Top 2 Dự phòng)
+ * - Sắp xếp theo compositeScore giảm dần
  */
 export function filterRecommendedPicks(picks: Pick[]): Pick[] {
-    return picks
-        .filter((p) => {
-            return (
-                p.status === 'value' &&
-                p.edge >= 0.05 &&
-                p.ev > 0 &&
-                p.odds >= 1.50 &&
-                p.confidence !== 'low'
-            )
-        })
-        .sort((a, b) => b.edge - a.edge)
+    if (picks.length === 0) return []
+    const topPicks = picks.filter((p) => p.rankLabel)
+    if (topPicks.length > 0) return topPicks.slice(0, 2)
+    const valuePicks = picks.filter((p) => p.status === 'value')
+    if (valuePicks.length > 0) return valuePicks.slice(0, 2)
+    return picks.slice(0, 2)
 }
