@@ -9,9 +9,11 @@ import type {
     AnalysisResult,
     CalibrationBin,
     Explanation,
+    LiveMatchData,
     MatchData,
     OddsLine,
     Pick,
+    SettledMatchRecord,
     SettledPick,
 } from './types'
 
@@ -388,6 +390,12 @@ export interface HistoryItem {
 export interface StatsResponse {
     settled: SettledPick[]
     profit: number
+    winRate: number
+    roi: number
+    winsCount: number
+    lossesCount: number
+    pushesCount: number
+    settledMatches: SettledMatchRecord[]
     calibration: CalibrationBin[]
 }
 
@@ -484,7 +492,42 @@ export const api = {
         htAway?: number
         ftHome: number
         ftAway: number
-    }) => apiFetch<{ item: HistoryItem }>('/settle', { method: 'POST', body: payload }),
+        cornersHome?: number
+        cornersAway?: number
+        eventId?: number
+    }) =>
+        apiFetch<{ item: HistoryItem; settledMatch?: SettledMatchRecord }>('/settle', {
+            method: 'POST',
+            body: payload,
+        }),
+
+    /** Lấy dữ liệu trận đấu thời gian thực từ SportAPI */
+    getLiveMatch: (home: string, away: string, eventId?: number) => {
+        const params = new URLSearchParams()
+        if (home) params.set('home', home)
+        if (away) params.set('away', away)
+        if (eventId) params.set('eventId', String(eventId))
+        return apiFetch<LiveMatchData>(`/live/match?${params.toString()}`)
+    },
+
+    /** Tự động đối soát kết quả trận đấu khi kết thúc (FT) và lưu vào Redis settled_matches */
+    autoSettle: (payload: {
+        recordId: string
+        eventId?: number
+        home?: string
+        away?: string
+    }) =>
+        apiFetch<{ ok: true; item: HistoryItem; settledMatch: SettledMatchRecord }>(
+            '/live/auto-settle',
+            {
+                method: 'POST',
+                body: payload,
+            },
+        ),
+
+    /** Lấy danh sách các trận đã settle lưu vĩnh viễn trong Redis */
+    settledMatches: (limit = 100) =>
+        apiFetch<{ matches: SettledMatchRecord[] }>(`/settled?limit=${limit}`),
 
     deleteHistory: (id: string) => apiFetch<{ ok: true }>(`/history/${id}`, { method: 'DELETE' }),
 

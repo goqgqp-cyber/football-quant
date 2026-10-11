@@ -33,6 +33,50 @@ export function settlePick(pick: Pick, r: ActualResult, period: 'ht' | 'ft'): Se
         return { pick, outcome, profit }
     }
 
+    if (pick.kind === 'corners') {
+        const cHome = r.cornersHome ?? 0
+        const cAway = r.cornersAway ?? 0
+        if (pick.side === 'over' || pick.side === 'under') {
+            const total = cHome + cAway
+            const quarter = Math.abs(pick.line * 2 - Math.round(pick.line * 2)) > 1e-9
+            const profitAt = (l: number): number => {
+                const dir = pick.side === 'over' ? 1 : -1
+                const diff = (total - l) * dir
+                if (Math.abs(diff) < 1e-9) return 0
+                return diff > 0 ? pick.odds - 1 : -1
+            }
+            if (quarter) {
+                const p1 = profitAt(pick.line - 0.25)
+                const p2 = profitAt(pick.line + 0.25)
+                const profit = (p1 + p2) / 2
+                const outcome =
+                    p1 === 0 && p2 === 0 ? 'push' : p1 > 0 && p2 > 0 ? 'win' : p1 < 0 && p2 < 0 ? 'lose' : p1 >= 0 ? 'win_half' : 'lose_half'
+                return { pick, outcome, profit }
+            }
+            const profit = profitAt(pick.line)
+            const outcome = profit === 0 ? 'push' : profit > 0 ? 'win' : 'lose'
+            return { pick, outcome, profit }
+        } else {
+            const quarter = Math.abs(pick.line * 2 - Math.round(pick.line * 2)) > 1e-9
+            const profitAt = (l: number): number => {
+                const adjusted = pick.side === 'home' ? cHome - cAway + l : cAway - cHome - l
+                if (Math.abs(adjusted) < 1e-9) return 0
+                return adjusted > 0 ? pick.odds - 1 : -1
+            }
+            if (quarter) {
+                const p1 = profitAt(pick.line - 0.25)
+                const p2 = profitAt(pick.line + 0.25)
+                const profit = (p1 + p2) / 2
+                const outcome =
+                    p1 === 0 && p2 === 0 ? 'push' : p1 > 0 && p2 > 0 ? 'win' : p1 < 0 && p2 < 0 ? 'lose' : p1 >= 0 ? 'win_half' : 'lose_half'
+                return { pick, outcome, profit }
+            }
+            const profit = profitAt(pick.line)
+            const outcome = profit === 0 ? 'push' : profit > 0 ? 'win' : 'lose'
+            return { pick, outcome, profit }
+        }
+    }
+
     // Asian handicap
     const quarter = Math.abs(pick.line * 2 - Math.round(pick.line * 2)) > 1e-9
     const profitAt = (l: number): number => {

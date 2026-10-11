@@ -57,7 +57,7 @@ export interface MatchInput {
 }
 
 /** Loại kèo */
-export type MarketKind = 'totals' | 'ah'
+export type MarketKind = 'totals' | 'ah' | 'corners'
 
 /** Một dòng odds người dùng nhập. */
 export interface OddsLine {
@@ -125,6 +125,12 @@ export interface ActualResult {
     htAway: number
     ftHome: number
     ftAway: number
+    cornersHome?: number
+    cornersAway?: number
+    shotsHome?: number
+    shotsAway?: number
+    status?: string
+    settledAt?: number
 }
 
 export interface SettledPick {
@@ -132,6 +138,52 @@ export interface SettledPick {
     outcome: 'win' | 'win_half' | 'push' | 'lose_half' | 'lose'
     /** lợi nhuận theo đơn vị (1 đơn vị = stake) */
     profit: number
+}
+
+/** Dữ liệu trận đấu thời gian thực từ SportAPI (RapidAPI). */
+export interface LiveMatchData {
+    found: boolean
+    eventId?: number
+    homeTeam?: string
+    awayTeam?: string
+    league?: string
+    status?: 'notstarted' | 'inprogress' | 'finished'
+    statusDescription?: string
+    minute?: number | string
+    score: { home: number; away: number }
+    periodScore?: { htHome?: number; htAway?: number; ftHome?: number; ftAway?: number }
+    corners: { home: number; away: number; total: number }
+    cards: { yellowHome: number; yellowAway: number; redHome: number; redAway: number }
+    shotsOnTarget: { home: number; away: number }
+    possession: { home: number; away: number }
+    isFinished: boolean
+    lastUpdated: number
+}
+
+/** Bản ghi trận đấu đã tự động đối soát (Auto-Settle) lưu trong Redis. */
+export interface SettledMatchRecord {
+    id: string
+    userId?: string
+    recordId?: string
+    eventId?: number
+    home: string
+    away: string
+    league?: string
+    settledAt: number
+    score: { htHome: number; htAway: number; ftHome: number; ftAway: number }
+    corners?: { home: number; away: number; total: number }
+    cards?: { yellowHome: number; yellowAway: number; redHome: number; redAway: number }
+    picks: Array<{
+        kind: MarketKind
+        side: string
+        line: number
+        odds: number
+        outcome: 'win' | 'win_half' | 'push' | 'lose_half' | 'lose'
+        profit: number
+        staked: boolean
+    }>
+    totalProfit: number
+    summaryOutcome: 'win' | 'push' | 'lose'
 }
 
 export interface CalibrationBin {

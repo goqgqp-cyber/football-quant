@@ -62,6 +62,9 @@ export const keys = {
     stats: (userId: string) => `u:${userId}:stats`,
     /** Bins calibration theo loại kèo (hash). */
     calibration: (userId: string) => `u:${userId}:calibration`,
+    /** Danh sách toàn cục các trận đã tự động đối soát (settled_matches list). */
+    settledMatches: () => 'settled_matches',
+    userSettledMatches: (userId: string) => `u:${userId}:settled_matches`,
 } as const
 
 /** Đảm bảo kết nối Redis hoạt động (dùng ở health check). */

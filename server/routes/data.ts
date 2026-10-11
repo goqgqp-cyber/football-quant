@@ -7,6 +7,7 @@ import {
     deleteHistory,
     getHistoryItem,
     listHistory,
+    listSettledMatches,
     saveHistory,
     settleHistory,
 } from '../store.js'
@@ -17,6 +18,7 @@ import type { Explanation, MatchData, OddsLine } from '../../src/lib/types.js'
 
 import { env } from '../env.js'
 import { generateExplanation, sanitizeCleanText } from '../services/gemini.js'
+import { getMatchLiveStatus } from '../services/sportapi.js'
 
 export const dataApp = new Hono<{ Variables: Vars }>()
 
@@ -26,7 +28,7 @@ dataApp.use('*', requireAuth)
 const oddsLineSchema = z
     .object({
         id: z.string().min(1).max(100),
-        kind: z.enum(['totals', 'ah']),
+        kind: z.enum(['totals', 'ah', 'corners']),
         side: z.enum(['over', 'under', 'home', 'away']),
         line: z.number(),
         odds: z.coerce.number().min(1.01).max(500),
@@ -160,6 +162,75 @@ dataApp.post('/analyze', async (c) => {
     return c.json({ result, recordId: record.id, explanation })
 })
 
+/** GET /api/live/match — lấy chỉ số thời gian thực từ SportAPI */
+dataApp.get('/live/match', async (c) => {
+    const home = (c.req.query('home') || '').trim()
+    const away = (c.req.query('away') || '').trim()
+    const eventIdStr = c.req.query('eventId')
+    const eventId = eventIdStr ? Number(eventIdStr) : undefined
+    const data = await getMatchLiveStatus(home, away, eventId)
+    return c.json(data)
+})
+
+/** POST /api/live/auto-settle — tự động đối soát kèo khi trận đấu kết thúc (FT) */
+dataApp.post('/live/auto-settle', async (c) => {
+    const auth = c.get('user')
+    const body = await c.req.json().catch(() => null)
+    const parsed = z
+        .object({
+            recordId: z.string().min(1),
+            eventId: z.coerce.number().optional(),
+            home: z.string().optional(),
+            away: z.string().optional(),
+        })
+        .safeParse(body)
+    if (!parsed.success) {
+        return c.json({ error: 'validation', issues: parsed.error.flatten() }, 400)
+    }
+    const { recordId, eventId, home, away } = parsed.data
+    const rec = await getHistoryItem(auth.userId, recordId)
+    if (!rec) return c.json({ error: 'not_found' }, 404)
+
+    const h = home || rec.meta.home
+    const a = away || rec.meta.away
+    const live = await getMatchLiveStatus(h, a, eventId)
+
+    // Nếu trận đã kết thúc hoặc có điểm số FT chính thức
+    const ftHome = live.periodScore?.ftHome ?? (live.isFinished ? live.score.home : undefined)
+    const ftAway = live.periodScore?.ftAway ?? (live.isFinished ? live.score.away : undefined)
+
+    if (ftHome === undefined || ftAway === undefined) {
+        return c.json(
+            {
+                error: 'not_finished',
+                message: 'Trận đấu chưa kết thúc (chưa có tỷ số FT chính thức).',
+                live,
+            },
+            400,
+        )
+    }
+
+    const settled = await settleHistory(auth.userId, recordId, {
+        htHome: live.periodScore?.htHome ?? 0,
+        htAway: live.periodScore?.htAway ?? 0,
+        ftHome,
+        ftAway,
+        cornersHome: live.corners.home,
+        cornersAway: live.corners.away,
+        eventId: live.eventId,
+    })
+
+    if (!settled) return c.json({ error: 'settle_failed' }, 500)
+    return c.json({ ok: true, item: settled.record, settledMatch: settled.settledMatch })
+})
+
+/** GET /api/settled — danh sách các trận đã settle lưu trong Upstash Redis */
+dataApp.get('/settled', async (c) => {
+    const limit = Math.min(200, Number.parseInt(c.req.query('limit') ?? '100', 10) || 100)
+    const matches = await listSettledMatches(limit)
+    return c.json({ matches })
+})
+
 /** POST /api/settle — nhập tỉ số thực tế cho một lượt phân tích. */
 dataApp.post('/settle', async (c) => {
     const auth = c.get('user')
@@ -171,15 +242,26 @@ dataApp.post('/settle', async (c) => {
             htAway: z.coerce.number().int().min(0).max(30).optional(),
             ftHome: z.coerce.number().int().min(0).max(30),
             ftAway: z.coerce.number().int().min(0).max(30),
+            cornersHome: z.coerce.number().int().min(0).max(100).optional(),
+            cornersAway: z.coerce.number().int().min(0).max(100).optional(),
+            eventId: z.coerce.number().optional(),
         })
         .safeParse(body)
     if (!parsed.success) {
         return c.json({ error: 'validation', issues: parsed.error.flatten() }, 400)
     }
-    const { id, htHome, htAway, ftHome, ftAway } = parsed.data
-    const row = await settleHistory(auth.userId, id, { htHome, htAway, ftHome, ftAway })
-    if (!row) return c.json({ error: 'not_found' }, 404)
-    return c.json({ item: row })
+    const { id, htHome, htAway, ftHome, ftAway, cornersHome, cornersAway, eventId } = parsed.data
+    const res = await settleHistory(auth.userId, id, {
+        htHome,
+        htAway,
+        ftHome,
+        ftAway,
+        cornersHome,
+        cornersAway,
+        eventId,
+    })
+    if (!res) return c.json({ error: 'not_found' }, 404)
+    return c.json({ item: res.record, settledMatch: res.settledMatch })
 })
 
 /** GET /api/stats — hiệu suất + calibration. */

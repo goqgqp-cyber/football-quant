@@ -9,6 +9,7 @@ import { Skeleton } from '../components/ui/RefractionFilter'
 import { ApiError, api, collectStream, type ExtractedRow } from '../lib/api'
 import { MOCK_MATCH_DATA, MOCK_MATCH_INPUT, MOCK_ODDS } from '../lib/mock'
 import { useSettings } from '../hooks/useSettings'
+import { LiveMatchTracker } from '../components/LiveMatchTracker'
 import type { AnalysisResult, Explanation, MatchData, MatchInput, OddsLine } from '../lib/types'
 
 interface ConfirmRow {
@@ -357,6 +358,18 @@ export function AnalyzePage() {
                     </Field>
                 </div>
             </GlassCard>
+
+            {/* Theo dõi trận đấu Live & Tự động đối soát (SportAPI RapidAPI 20s Polling) */}
+            {input.homeTeam.trim() && input.awayTeam.trim() && (
+                <LiveMatchTracker
+                    home={input.homeTeam}
+                    away={input.awayTeam}
+                    recordId={savedId}
+                    onSettled={(settled) => {
+                        console.log('Trận đấu đã tự động đối soát kết quả:', settled)
+                    }}
+                />
+            )}
 
             {/* Số liệu nền tảng: thật từ Google Search grounding (G4) hoặc dữ liệu mẫu */}
             <GlassCard>

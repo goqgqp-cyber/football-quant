@@ -31,7 +31,7 @@ streamApp.use('*', requireAuth)
 const oddsLineSchema = z
     .object({
         id: z.string().min(1).max(100),
-        kind: z.enum(['totals', 'ah']),
+        kind: z.enum(['totals', 'ah', 'corners']),
         side: z.enum(['over', 'under', 'home', 'away']),
         line: z.number(),
         odds: z.coerce.number().min(1.01).max(500),

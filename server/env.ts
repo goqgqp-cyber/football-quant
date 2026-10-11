@@ -116,6 +116,11 @@ export const env = {
     /** Chống brute-force: số lần sai tối đa trước khi khóa tài khoản. */
     maxLoginFails: int('MAX_LOGIN_FAILS', 5),
     loginLockSec: int('LOGIN_LOCK_SEC', 15 * 60),
+
+    /** SportAPI (RapidAPI) theo dõi live score & auto-settle */
+    sportApiBaseUrl: optional('SPORTAPI_BASE_URL', 'https://sportapi7.p.rapidapi.com/api/v1'),
+    sportApiHost: optional('SPORTAPI_HOST', 'sportapi7.p.rapidapi.com'),
+    sportApiKey: optional('SPORTAPI_KEY', '2d1fc18ae1msh5e85b0a87523e04p1ffed5jsnd7b67c197803'),
 } as const
 
 export const isProd = env.nodeEnv === 'production'
