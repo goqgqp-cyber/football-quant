@@ -529,7 +529,7 @@ export const api = {
             body: payload,
         }),
 
-    /** Lấy dữ liệu trận đấu thời gian thực từ SofaScore API */
+    /** Lấy dữ liệu trận đấu thời gian thực từ API-Football */
     getLiveMatch: (home: string, away: string, eventId?: number) => {
         const params = new URLSearchParams()
         if (home) params.set('home', home)
@@ -538,46 +538,52 @@ export const api = {
         return apiFetch<LiveMatchData>(`/live/match?${params.toString()}`)
     },
 
-    /** Tự động tìm kiếm match ID trên SofaScore */
-    sofascoreSearch: (homeTeam: string, awayTeam: string) => {
-        const q = `${homeTeam} ${awayTeam}`.trim()
-        return apiFetch<{ eventId?: number; event?: Record<string, unknown>; error?: string }>(
-            `/sofascore/search?q=${encodeURIComponent(q)}&home=${encodeURIComponent(homeTeam)}&away=${encodeURIComponent(awayTeam)}`,
+    /** Tự động tìm kiếm fixture ID trên API-Football */
+    footballSearch: (homeTeam: string, awayTeam: string) => {
+        const q = `${homeTeam} vs ${awayTeam}`.trim()
+        return apiFetch<{
+            found?: boolean
+            eventId?: number
+            fixtureId?: number
+            homeTeam?: string
+            awayTeam?: string
+            league?: string
+            kickoff?: string
+            error?: string
+        }>(
+            `/football/search?q=${encodeURIComponent(q)}&home=${encodeURIComponent(homeTeam)}&away=${encodeURIComponent(awayTeam)}`,
         )
     },
 
-    /** Lấy lịch sử đối đầu (H2H) thực tế từ SofaScore */
-    sofascoreH2H: (eventId: number | string) =>
-        apiFetch<{ text?: string; events?: Array<Record<string, unknown>>; error?: string }>(
-            `/sofascore/h2h?eventId=${eventId}`,
+    /** Lấy lịch sử đối đầu (H2H) từ API-Football */
+    footballH2H: (fixtureId: number | string) =>
+        apiFetch<{
+            h2hText?: string
+            events?: Array<Record<string, unknown>>
+            n?: number
+            avgGoals?: number
+            bttsRate?: number
+            error?: string
+        }>(`/football/h2h?fixtureId=${fixtureId}`),
+
+    /** Lấy thống kê chi tiết trận đấu từ API-Football */
+    footballStats: (fixtureId: number | string) =>
+        apiFetch<{ fixtureId: number; statistics?: Record<string, unknown>; error?: string }>(
+            `/football/fixtures/${fixtureId}/statistics`,
         ),
 
-    /** Lấy thống kê và sự cố trực tiếp từ SofaScore */
-    sofascoreStats: (eventId: number | string) =>
-        apiFetch<{
-            statistics?: Array<Record<string, unknown>>
-            incidents?: Array<Record<string, unknown>>
-            stats?: Record<string, unknown>
-            error?: string
-        }>(`/sofascore/stats?eventId=${eventId}`),
+    /** Lấy diễn biến các sự kiện trận đấu (incidents) từ API-Football */
+    footballEvents: (fixtureId: number | string) =>
+        apiFetch<{ fixtureId: number; events?: Array<Record<string, unknown>> }>(
+            `/football/fixtures/${fixtureId}/events`,
+        ),
 
-    /** Lấy thống kê chi tiết trận đấu từ SofaScore proxy */
-    getSofaStatistics: (eventId: number | string) =>
-        apiFetch<unknown>(`/sofascore/event/${eventId}/statistics`),
-
-    /** Lấy diễn biến các sự kiện trận đấu (incidents) từ SofaScore proxy */
-    getSofaIncidents: (eventId: number | string) =>
-        apiFetch<{ incidents?: Array<Record<string, unknown>> }>(`/sofascore/event/${eventId}/incidents`),
-
-    /** Lấy thông tin trận đấu từ SofaScore proxy */
-    getSofaEvent: (eventId: number | string) =>
-        apiFetch<{ event?: Record<string, unknown> }>(`/sofascore/event/${eventId}`),
-
-    /** Lấy toàn bộ trạng thái trực tiếp trận đấu (tỉ số, phút, statistics, incidents) từ SofaScore proxy */
-    getSofaEventLive: (eventId: number | string) =>
+    /** Lấy toàn bộ trạng thái snapshot trực tiếp trận đấu (tỉ số, phút, statistics, incidents) từ API-Football */
+    footballFixtureLive: (fixtureId: number | string) =>
         apiFetch<{
             found: boolean
             eventId: number
+            fixtureId: number
             homeTeam?: string
             awayTeam?: string
             league?: string
@@ -598,7 +604,7 @@ export const api = {
             incidents?: Array<Record<string, unknown>>
             isFinished: boolean
             lastUpdated: number
-        }>(`/sofascore/event/${eventId}/live`),
+        }>(`/football/fixtures/${fixtureId}/live`),
 
     /** Tự động đối soát kết quả trận đấu khi kết thúc (FT) và lưu vào Redis settled_matches */
     autoSettle: (payload: {

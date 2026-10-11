@@ -108,7 +108,7 @@ export async function listSettledMatches(limit = 100): Promise<SettledMatchRecor
 }
 
 /**
- * Đối soát kết quả trận đấu (thủ công hoặc tự động qua SofaScore API):
+ * Đối soát kết quả trận đấu (thủ công hoặc tự động qua API-Football):
  * - Lưu kết quả thực tế vào HistoryRecord.
  * - Chấm điểm các kèo (Châu Á, Tài xỉu, Phạt góc).
  * - Lưu bản ghi đối soát vĩnh viễn vào Upstash Redis `settled_matches`.

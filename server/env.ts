@@ -101,6 +101,15 @@ export const env = {
         'qwen/qwen3.8-max:free',
     ),
 
+    /**
+     * API-Football (v3.football.api-sports.io)
+     * Header: x-apisports-key
+     */
+    apiFootballKey: firstOf(
+        ['API_FOOTBALL_KEY', 'API_SPORTS_KEY'],
+        '32ef4117471d08b60402e551a089faff',
+    ),
+
     storeOriginalImages: bool('STORE_ORIGINAL_IMAGES', false),
 
     /** Origin frontend duoc phep goi API (dung cho CORS). */

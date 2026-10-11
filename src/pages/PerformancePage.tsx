@@ -212,7 +212,7 @@ export function PerformancePage() {
                             Các trận đã đối soát (Redis: settled_matches)
                         </p>
                         <p className="text-xs text-neutral-400">
-                            Lưu vĩnh viễn kết quả tỷ số, phạt góc và chấm điểm tự động từ SofaScore.
+                            Lưu vĩnh viễn kết quả tỷ số, phạt góc và chấm điểm tự động từ API-Football.
                         </p>
                     </div>
                     <span className="rounded-full bg-white/5 border border-white/10 px-2.5 py-0.5 text-xs text-neutral-300">

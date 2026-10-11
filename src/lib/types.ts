@@ -140,10 +140,11 @@ export interface SettledPick {
     profit: number
 }
 
-/** Dữ liệu trận đấu thời gian thực từ SofaScore API. */
+/** Dữ liệu trận đấu thời gian thực từ API-Football (v3.football.api-sports.io). */
 export interface LiveMatchData {
     found: boolean
     eventId?: number
+    fixtureId?: number
     homeTeam?: string
     awayTeam?: string
     league?: string

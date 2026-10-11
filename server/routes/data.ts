@@ -17,7 +17,7 @@ import type { Explanation, MatchData, OddsLine } from '../../src/lib/types.js'
 
 import { env } from '../env.js'
 import { generateExplanation, sanitizeCleanText } from '../services/xkiro.js'
-import { getMatchLiveStatus } from '../services/sofascore.js'
+import { getMatchLiveStatus } from '../services/apiFootball.js'
 
 export const dataApp = new Hono<{ Variables: Vars }>()
 
@@ -138,7 +138,7 @@ dataApp.post('/analyze', async (c) => {
 
     if (!input.matchData) {
         return c.json(
-            { error: 'missing_data', message: 'Chưa có dữ liệu trận đấu. Hãy tải ảnh bảng cược hoặc nhập SofaScore Event ID để bắt đầu phân tích.' },
+            { error: 'missing_data', message: 'Chưa có dữ liệu trận đấu. Hãy tải ảnh bảng cược để bắt đầu phân tích.' },
             400,
         )
     }
@@ -184,7 +184,7 @@ dataApp.post('/analyze', async (c) => {
     return c.json({ result, recordId: record.id, explanation })
 })
 
-/** GET /api/live/match — lấy chỉ số thời gian thực từ SofaScore API */
+/** GET /api/live/match — lấy chỉ số thời gian thực từ API-Football */
 dataApp.get('/live/match', async (c) => {
     const home = (c.req.query('home') || '').trim()
     const away = (c.req.query('away') || '').trim()

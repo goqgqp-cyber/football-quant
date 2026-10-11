@@ -179,7 +179,7 @@ function HistoryRow({
     const [busy, setBusy] = useState(false)
     const [err, setErr] = useState<string | null>(null)
 
-    // Trạng thái live từ SofaScore
+    // Trạng thái live từ API-Football
     const [liveData, setLiveData] = useState<LiveMatchData | null>(null)
     const [checkingLive, setCheckingLive] = useState(false)
     const [autoSettledNotice, setAutoSettledNotice] = useState<string | null>(null)
@@ -192,7 +192,7 @@ function HistoryRow({
             const live = await api.getLiveMatch(item.meta.home, item.meta.away)
             if (live.found) {
                 setLiveData(live)
-                // Nếu trận đã kết thúc (isFinished), tự động đối soát với SofaScore API
+                // Nếu trận đã kết thúc (isFinished), tự động đối soát với API-Football
                 if (live.isFinished) {
                     try {
                         const res = await api.autoSettle({

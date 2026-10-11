@@ -65,8 +65,8 @@ export const keys = {
     /** Danh sách toàn cục các trận đã tự động đối soát (settled_matches list). */
     settledMatches: () => 'settled_matches',
     userSettledMatches: (userId: string) => `u:${userId}:settled_matches`,
-    /** Cache phản hồi từ SofaScore API (TTL = 15s). */
-    sofascoreCache: (path: string) => `sofascore:cache:${path.replace(/^\/+/, '')}`,
+    /** Cache phản hồi từ API-Football (v3.football.api-sports.io). */
+    footballCache: (path: string) => `football:cache:${path.replace(/^\/+/, '')}`,
 } as const
 
 /** Đảm bảo kết nối Redis hoạt động (dùng ở health check). */

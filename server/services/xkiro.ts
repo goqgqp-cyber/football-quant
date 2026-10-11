@@ -20,7 +20,7 @@ import type {
     TeamStats,
 } from '../../src/lib/types.js'
 import { buildFacts, factLabels, substituteFacts, verifyNumbers } from '../../src/lib/explain.js'
-import { findSofaEvent, getEventH2H } from './sofascore.js'
+import { findFixture, getFixtureH2H } from './apiFootball.js'
 
 
 export const XKIRO_BASE_URL = (env.xkiroBaseUrl || 'https://api.xkiro.com/v1').replace(/\/+$/, '')
@@ -669,18 +669,20 @@ export async function streamCollectMatchData(
     const cleanLeague = sanitizeCleanText(hint.league ?? '')
     const cleanKickoff = sanitizeCleanText(hint.kickoff ?? '')
 
-    // Tự động tìm kiếm SofaScore H2H nếu có eventId hoặc tìm theo tên 2 đội
+    // Tự động tìm kiếm API-Football H2H nếu có eventId hoặc tìm theo tên 2 đội
     let h2hText = ''
-    let sofaEventId = hint.eventId
+    let fixtureId = hint.eventId ?? undefined
     try {
-        if (!sofaEventId) {
-            const sofaEv = await findSofaEvent(cleanHome, cleanAway)
-            if (sofaEv?.id) sofaEventId = sofaEv.id
-        }
-        if (sofaEventId) {
-            const h2hRes = await getEventH2H(sofaEventId)
-            if (h2hRes?.h2hText) {
-                h2hText = h2hRes.h2hText
+        const fixtureItem = await findFixture(cleanHome, cleanAway, fixtureId)
+        if (fixtureItem) {
+            fixtureId = fixtureItem.fixture.id
+            const homeId = fixtureItem.teams?.home?.id
+            const awayId = fixtureItem.teams?.away?.id
+            if (homeId && awayId) {
+                const h2hRes = await getFixtureH2H(homeId, awayId)
+                if (h2hRes?.h2hText) {
+                    h2hText = h2hRes.h2hText
+                }
             }
         }
     } catch {
@@ -698,7 +700,7 @@ export async function streamCollectMatchData(
                   '',
                   h2hText,
                   '',
-                  'QUY TẮC BẮT BUỘC VỀ ĐỐI ĐẦU: Sử dụng CHÍNH XÁC số liệu từ THỰC TẾ LỊCH SỬ ĐỐI ĐẦU (H2H SofaScore) ở trên để điền trường "h2h": { "n", "avg_goals", "btts_rate" }. TUYỆT ĐỐI CẤM bịa đặt hoặc đoán mò lịch sử đối đầu từ trí nhớ!',
+                  'QUY TẮC BẮT BUỘC VỀ ĐỐI ĐẦU: Sử dụng CHÍNH XÁC số liệu từ THỰC TẾ LỊCH SỬ ĐỐI ĐẦU (H2H API-Football) ở trên để điền trường "h2h": { "n", "avg_goals", "btts_rate" }. TUYỆT ĐỐI CẤM bịa đặt hoặc đoán mò lịch sử đối đầu từ trí nhớ!',
               ].join('\n')
             : '',
         '',
@@ -734,10 +736,10 @@ export async function streamCollectMatchData(
         },
     ]
 
-    if (sofaEventId) {
+    if (fixtureId) {
         sources.push({
-            url: `https://www.sofascore.com/event/${sofaEventId}`,
-            title: `SofaScore Real H2H & Live Match Data (#${sofaEventId})`,
+            url: `https://v3.football.api-sports.io/fixtures?id=${fixtureId}`,
+            title: `API-Football Real H2H & Live Match Data (#${fixtureId})`,
             fetched_at: new Date().toISOString(),
         })
     }
