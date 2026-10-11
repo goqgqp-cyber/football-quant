@@ -124,6 +124,10 @@ export interface Pick {
 export interface AnalysisResult {
     lambdaHome: number
     lambdaAway: number
+    lambdaModel?: { home: number; away: number }
+    lambdaMarket?: { home: number; away: number }
+    weightModel?: number
+    blendReason?: string
     matrix: number[][]
     topScorelines: { score: string; p: number }[]
     picks: Pick[]

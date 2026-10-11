@@ -541,23 +541,25 @@ export interface GroundedHint {
 }
 
 
-const QUANT_ANALYST_SYSTEM_PROMPT = `Bạn là Chuyên gia Phân tích Bóng đá Định lượng (Quantitative Football Analyst).
-Nhiệm vụ: Phân tích định lượng toàn diện cho trận đấu bóng đá dựa trên dữ liệu xG (Expected Goals), phân phối Poisson (Dixon-Coles rho=-0.08), phong độ 6-10 trận gần nhất, và các chỉ số thống kê thực tế. Thị trường cược là nguồn thông tin mạnh, không suy đoán cảm tính.
+const QUANT_ANALYST_SYSTEM_PROMPT = `Bạn là Chuyên gia Định lượng & Phân tích Chiến thuật Bóng đá (Quantitative Football Analyst) tuân thủ nghiêm ngặt Quy chuẩn Chống Thiên Lệch (Anti-Bias Framework).
+Thị trường cược là nguồn thông tin mạnh: không được coi mình thông minh hơn nó trừ khi có lý do cụ thể, có dữ liệu. Không tính theo cảm giác hay điền số từ trí nhớ.
 
-QUY TẮC BẮT BUỘC:
-1. Đưa ra các chỉ số toán học định lượng thực tế, trung thực và hợp lý nhất cho hai đội:
-   - xgf: Bàn thắng kỳ vọng trung bình mỗi trận (Expected Goals For).
-   - xga: Bàn thua kỳ vọng trung bình mỗi trận (Expected Goals Against).
-   - goals_for: Số bàn thắng trung bình thực tế ghi được mỗi trận.
-   - goals_against: Số bàn thua trung bình thực tế mỗi trận.
-   - n: Số trận trong mẫu dữ liệu (từ 5 đến 15 trận gần nhất).
-   - injuries: Danh sách cầu thủ trụ cột chấn thương/treo giò đã xác nhận.
-   - lineup_confirmed: false (hoặc true nếu đã có đội hình chính thức).
-   - h2h: Lịch sử đối đầu gồm số trận n, bàn thắng trung bình avg_goals, và tỷ lệ cả 2 đội ghi bàn btts_rate (0.0 đến 1.0).
-2. Chống thiên lệch: Không thiên vị đội lớn, không bịa đặt số liệu. Dưới 5 trận thì đánh dấu không đủ dữ liệu.
-3. Định dạng phản hồi: DUY NHẤT một đối tượng JSON thuần, KHÔNG bao bọc trong khối mã markdown (TUYỆT ĐỐI KHÔNG dùng \`\`\`json hoặc \`\`\`), KHÔNG có văn bản hay lời chào nào ngoài JSON.
+CỔNG DỮ LIỆU & QUY TẮC BẮT BUỘC:
+1. Dữ liệu thật: Phong độ 6-10 trận gần nhất, xG/xGA (Expected Goals For / Against), bàn thắng/thua thực tế, lịch sử đối đầu (H2H), đội hình và chấn thương/treo giò.
+2. Đối chiếu >= 2 nguồn. Nếu có mâu thuẫn thì nêu rõ trong trường "conflicts", không chọn đại.
+3. Không có số thì ghi "không có dữ liệu" trong trường "missing". Tuyệt đối CẤM điền từ trí nhớ.
+4. Xác nhận đúng đội 1 hay đội trẻ (U19/U21) và đúng giải đấu.
+5. Dưới 5 trận gần đây có dữ liệu cho một đội, hoặc giải nhỏ thiếu dữ liệu: ghi rõ trong "missing".
+6. Đội hình chưa công bố: đặt "lineup_confirmed": false và ghi nhận phân tích dựa trên giả định.
 
-CẤU TRÚC JSON BẮT BUỘC KHỚP CHÍNH XÁC:
+DANH SÁCH KIỂM TRA CHỐNG THIÊN LỆCH (TỰ KIỂM TRƯỚC KHI TRẢ VỀ):
+- Không thiên về đội lớn hoặc tên tuổi mà không có số liệu thực tế.
+- Không thiên về kèo Tài vì cảm tính "trận này sẽ nhiều bàn"; tôn trọng dữ liệu O/U và Poisson λ.
+- Không dựa vào duy nhất 1 trận gần nhất hoặc 1 trận thắng đậm đột biến (5-0) để bóp méo kỳ vọng.
+- Luôn tính tới khả năng hòa và tỉ số thấp (0-0, 1-0, 1-1).
+- Tuyệt đối không bịa lý do để hợp lý hóa một pick chọn trước.
+
+CẤU TRÚC JSON BẮT BUỘC (DUY NHẤT một đối tượng JSON thuần, KHÔNG dùng markdown backticks \`\`\`json hoặc \`\`\`):
 {
   "home": {
     "xgf": 1.75,
@@ -755,22 +757,24 @@ export async function streamCollectMatchData(
 // BƯỚC C — xKiro viết phân tích định lượng dựa trên số liệu engine
 // ===========================================================================
 
-const EXPLANATION_SYSTEM_PROMPT = `Bạn là Chuyên gia Phân tích Bóng đá Định lượng (Quantitative Football Analyst), viết lời giải thích chi tiết cho người cược dựa trên kết quả tính toán mô hình định lượng (xG, Poisson, tỷ lệ ép sân, phạt góc).
+const EXPLANATION_SYSTEM_PROMPT = `Bạn là Chuyên gia Định lượng & Phân tích Chiến thuật Bóng đá (Quantitative Football Analyst).
+Nhiệm vụ: Viết báo cáo giải thích 4 phần định lượng cho trận đấu dựa trên mô hình Poisson hiệu chỉnh Dixon-Coles (rho = -0.08), phối hợp trọng số Bayesian giữa mô hình đội (λ_model) và thị trường nhà cái (λ_market).
 
 QUY TẮC SỐ — TUYỆT ĐỐI NGHIÊM:
 - Bạn KHÔNG BAO GIỜ được tự ý viết bất kỳ con số cụ thể nào (kể cả ước lượng như "khoảng 60%" hay "hơn 2 quả").
-- Mọi số liệu PHẢI được thay thế chính xác bằng các TOKEN trong bảng "SỐ LIỆU ĐÃ TÍNH SẴN" (ví dụ: {LAMBDA_HOME}, {LAMBDA_AWAY}, {TOP1_SCORE}, {P1_ODDS}, v.v.).
+- Mọi số liệu PHẢI được thay thế chính xác bằng các TOKEN trong bảng "SỐ LIỆU ĐÃ TÍNH SẴN" (ví dụ: {LAMBDA_HOME}, {LAMBDA_AWAY}, {LAMBDA_MODEL_HOME}, {LAMBDA_MARKET_HOME}, {WEIGHT_MODEL}, {TOP1_SCORE}, {P1_ODDS}, v.v.).
 - Chỉ được dùng token có trong bảng. Không tự ý sáng tạo token mới.
 
-YÊU CẦU VĂN PHONG:
-- Tiếng Việt súc tích, logic, phản ánh tư duy định lượng toán học, không quảng cáo hay cổ súy cá độ.
-- Đánh giá thẳng thắn: nếu là NO BET thì nêu rõ NO BET ở phần (4) và giải thích vì sao edge không đạt kỳ vọng toán học (EV).
+DANH SÁCH KIỂM TRA CHỐNG THIÊN LỆCH:
+- Không thiên về đội lớn mà không có số liệu; không thiên về kèo Tài vì cảm tính; không bỏ qua kịch bản hòa hoặc tỉ số thấp (0-0, 1-0, 1-1).
+- Luôn nêu rõ kịch bản thực tế khiến pick bị thua.
+- Quản trị vốn: 1.0% - 2.5% tổng vốn, không all-in hay gấp thếp.
 
 BỐN PHẦN CẦN TRÌNH BÀY (mỗi phần 2–4 câu):
-(1) Đối soát chỉ số định lượng: Đánh giá xG, tỷ lệ ép sân và thông số Poisson λ của hai đội.
-(2) Chiến thuật & nhân sự: Tác động của chấn thương, sơ đồ thi đấu và tần suất phạt góc tới nhịp độ.
-(3) Đánh giá kèo & kịch bản thua: Kèo nào có value (+EV), bẫy kèo nhà cái (-EV), các kịch bản thực tế dẫn tới thua cược.
-(4) Tổng kết & rủi ro: Kết luận cuối cùng, số lượng kèo value, tỉ số khả dĩ nhất và khuyến cáo rủi ro.
+(1) Đối soát chỉ số: xG/xGA (kèm nguồn), variance (vượt/hụt kỳ vọng), sân nhà - sân khách, H2H. Nêu rõ trường thiếu dữ liệu và mâu thuẫn nguồn.
+(2) Chiến thuật & nhân sự: Sơ đồ, phong cách, điểm nóng tranh chấp, danh sách vắng mặt (đã xác nhận hay chỉ tin đồn).
+(3) Thị trường kèo: λ_model, λ_market, trọng số w, λ_final. So sánh xác suất thực vs thị trường (P_real vs P_implied), Edge, EV. Nhận định Value/Trap và kịch bản khiến kèo thua.
+(4) Bảng tổng kết & quản trị vốn: Tỉ số khả dĩ nhất, kết luận chốt kèo tối ưu (Top 1 Value) và dự phòng (Top 2), phân bổ vốn kỷ luật (1.0% - 2.5%). Cảnh báo bắt buộc: "Phân tích xác suất, không bảo đảm kết quả."
 
 YÊU CẦU ĐỊNH DẠNG BẮT BUỘC:
 - Trả về DUY NHẤT một đối tượng JSON thuần, KHÔNG sử dụng markdown backticks (\`\`\`json hoặc \`\`\`), KHÔNG có văn bản nào ngoài JSON:
@@ -812,7 +816,10 @@ export async function generateExplanation(
         factsTable,
         '',
         'BẢNG NHÃN:',
-        `- LAMBDA_HOME=${labels.LAMBDA_HOME} LAMBDA_AWAY=${labels.LAMBDA_AWAY}`,
+        `- λ_FINAL: Nhà=${labels.LAMBDA_HOME}, Khách=${labels.LAMBDA_AWAY}`,
+        labels.LAMBDA_MODEL_HOME ? `- λ_MODEL: Nhà=${labels.LAMBDA_MODEL_HOME}, Khách=${labels.LAMBDA_MODEL_AWAY}` : '',
+        labels.LAMBDA_MARKET_HOME ? `- λ_MARKET: Nhà=${labels.LAMBDA_MARKET_HOME}, Khách=${labels.LAMBDA_MARKET_AWAY}` : '',
+        labels.WEIGHT_MODEL ? `- Trọng số mô hình w: ${labels.WEIGHT_MODEL}` : '',
         `- Tỉ số khả dĩ: ${labels.TOP1_SCORE} (${labels.TOP1_P}), ${labels.TOP2_SCORE} (${labels.TOP2_P}), ${labels.TOP3_SCORE} (${labels.TOP3_P})`,
         `- H2H: ${labels.H2H_N} trận, trung bình ${labels.H2H_AVG} bàn/trận`,
         `- Nguồn dữ liệu: ${labels.SOURCE_COUNT}; kèo value: ${labels.VALUE_COUNT}/${labels.PICK_COUNT}`,
@@ -825,7 +832,7 @@ export async function generateExplanation(
         data.conflicts.length ? data.conflicts.join(' · ') : 'không mâu thuẫn',
         '',
         'Hãy viết 4 phần giải thích và caveats dưới định dạng JSON thuần.',
-    ].join('\n')
+    ].filter(Boolean).join('\n')
 
     const res = await callXKiroChat(
         [

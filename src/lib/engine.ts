@@ -7,7 +7,16 @@ import type {
     Triple,
 } from './types'
 import { clamp } from './math'
-import { estimateLambdas, scoreMatrix, inPlayScoreMatrix, topScorelines, DEFAULT_LG_HOME, DEFAULT_LG_AWAY } from './poisson'
+import {
+    estimateLambdas,
+    impliedLambdas,
+    blendLambdas,
+    scoreMatrix,
+    inPlayScoreMatrix,
+    topScorelines,
+    DEFAULT_LG_HOME,
+    DEFAULT_LG_AWAY,
+} from './poisson'
 import { tripleFor } from './markets'
 
 export interface InPlayOptions {
@@ -93,13 +102,19 @@ export function stakePct(
 
 /** Tìm odds đối diện cùng mốc để loại vig. */
 function findOpposite(oddsLines: OddsLine[], line: OddsLine): number | null {
-    const same = oddsLines.filter((o) => o.kind === line.kind && Math.abs(o.line - line.line) < 1e-9)
-    let opp: OddsLine | undefined
     if (line.kind === 'totals') {
-        opp = same.find((o) => o.side === (line.side === 'over' ? 'under' : 'over'))
-    } else {
-        opp = same.find((o) => o.side === (line.side === 'home' ? 'away' : 'home'))
+        const opp = oddsLines.find(
+            (o) => o.kind === 'totals' && Math.abs(o.line - line.line) < 1e-6 && o.side !== line.side,
+        )
+        return opp ? opp.odds : null
     }
+
+    const opp = oddsLines.find(
+        (o) =>
+            o.kind === 'ah' &&
+            (Math.abs(o.line - line.line) < 1e-6 || Math.abs(o.line + line.line) < 1e-6) &&
+            o.side !== line.side,
+    )
     return opp ? opp.odds : null
 }
 
@@ -114,27 +129,46 @@ export function analyzeMatch(
     lgAway = DEFAULT_LG_AWAY,
     inPlay?: InPlayOptions,
 ): AnalysisResult {
-    const { lambdaHome: baseLambdaHome, lambdaAway: baseLambdaAway } = estimateLambdas(data, lgHome, lgAway)
+    // Bước 1: λ theo dữ liệu đội
+    const { lambdaHome: modelLambdaHome, lambdaAway: modelLambdaAway } = estimateLambdas(data, lgHome, lgAway)
+    const lambdaModel = { home: modelLambdaHome, away: modelLambdaAway }
 
-    let lambdaHome = baseLambdaHome
-    let lambdaAway = baseLambdaAway
+    // Bước 2: λ ngầm định từ thị trường (loại vig)
+    const marketResult = impliedLambdas(oddsLines, lgHome, lgAway)
+    const hasMarketOdds = marketResult.hasMarketOu || marketResult.hasMarketAh
+    const lambdaMarket = hasMarketOdds
+        ? { home: marketResult.lambdaHome, away: marketResult.lambdaAway }
+        : null
+
+    // Bước 3: Trộn mô hình và thị trường (w theo chất lượng dữ liệu)
+    const sourceCount = data.sources.length
+    const n = Math.min(data.home.n, data.away.n)
+    const lineupConfirmed = data.home.lineup_confirmed === true && data.away.lineup_confirmed === true
+    const blended = blendLambdas(
+        lambdaModel,
+        lambdaMarket,
+        { n, sourceCount, lineupConfirmed },
+        hasMarketOdds,
+    )
+
+    let lambdaHome = blended.lambdaHome
+    let lambdaAway = blended.lambdaAway
     let matrix: number[][]
 
     // In-play time decay logic:
     if (inPlay?.isLive && inPlay.currentMinute != null && inPlay.currentMinute > 0) {
         const curScore = inPlay.currentScore ?? { home: 0, away: 0 }
-        const decayed = inPlayScoreMatrix(baseLambdaHome, baseLambdaAway, inPlay.currentMinute, curScore)
+        const decayed = inPlayScoreMatrix(blended.lambdaHome, blended.lambdaAway, inPlay.currentMinute, curScore)
         matrix = decayed.matrix
         lambdaHome = decayed.lambdaRemHome
         lambdaAway = decayed.lambdaRemAway
     } else {
-        matrix = scoreMatrix(baseLambdaHome, baseLambdaAway)
+        // Bước 4: Ma trận Dixon-Coles rho=-0.08 từ lambda_final
+        matrix = scoreMatrix(blended.lambdaHome, blended.lambdaAway)
     }
 
     // Gán odds đối diện để loại vig
     const picks: Pick[] = []
-    const sourceCount = data.sources.length
-    const n = Math.min(data.home.n, data.away.n)
 
     for (const line of oddsLines) {
         const opposite = findOpposite(oddsLines, line)
@@ -149,6 +183,8 @@ export function analyzeMatch(
         if (edge < MIN_EDGE) flags.push('edge_below_min')
         if (ev <= 0) flags.push('ev_non_positive')
         if (marketDelta > MAX_MARKET_DELTA) flags.push('model_disagreement')
+        if (edge > 0.15) flags.push('suspicious_edge')
+        if (blended.w === 0.15) flags.push('low_data')
 
         const confidence = confidenceScore(n, sourceCount, marketDelta)
         if (edge < 0 && line.odds >= 2.0) flags.push('trap_high_odds_negative_edge')
@@ -159,13 +195,13 @@ export function analyzeMatch(
             edge >= MIN_EDGE &&
             ev > 0 &&
             marketDelta <= MAX_MARKET_DELTA &&
-            confidence !== 'low'
+            confidence !== 'low' &&
+            !flags.includes('suspicious_edge')
         ) {
             status = 'value'
         } else if (flags.includes('trap_high_odds_negative_edge')) {
             status = 'trap'
         }
-
 
         const stake = stakePct(triple, line.odds, confidence)
         const compositeScore = Number(((ev * 0.6) + (edge * 0.4)).toFixed(4))
@@ -195,26 +231,50 @@ export function analyzeMatch(
     // 1. Sắp xếp toàn bộ kèo theo Composite Score: (EV * 0.6) + (Edge * 0.4) giảm dần
     picks.sort((a, b) => (b.compositeScore ?? 0) - (a.compositeScore ?? 0))
 
-    // 2. BẮT BUỘC ĐƯA RA KÈO TỐI ƯU (ELIMINATE NO BET):
-    // Luôn chọn Top 1 Value và Top 2 Dự phòng bất kể ngưỡng Edge bảo thủ có bị cản bởi biên nhà cái
+    // 2. BẮT BUỘC ĐƯA RA KÈO TỐI ƯU (ELIMINATE NO BET) VỚI CÁC RÀO CẢN CHỐNG THIÊN LỆCH:
     if (picks.length > 0) {
-        // Top 1: Kèo tối ưu nhất
-        const p1 = picks[0]
+        // Tìm pick tốt nhất không bị cờ suspicious_edge hoặc trap làm Top 1
+        let p1Idx = picks.findIndex((p) => !p.flags.includes('suspicious_edge') && p.status !== 'trap')
+        if (p1Idx === -1) p1Idx = 0
+
+        const p1 = picks[p1Idx]
         p1.rankLabel = '[KÈO TỐI ƯU NHẤT - TOP 1 VALUE]'
         if (p1.status !== 'trap') {
             p1.status = 'value'
         }
-        // Đề xuất vốn Kelly từ 2% đến 5%
-        p1.stakePct = p1.stakePct > 0 ? Math.min(0.05, Math.max(0.02, p1.stakePct)) : 0.03
+        // Đề xuất vốn Kelly từ 2% đến 5% (nếu tin cậy thấp hoặc suspicious_edge thì hạ còn 1.5%)
+        if (p1.flags.includes('suspicious_edge') || p1.confidence === 'low') {
+            p1.stakePct = 0.015
+        } else {
+            p1.stakePct = p1.stakePct > 0 ? Math.min(0.05, Math.max(0.02, p1.stakePct)) : 0.03
+        }
 
         // Top 2: Kèo dự phòng (nếu có từ 2 kèo trở lên)
-        if (picks.length > 1) {
-            const p2 = picks[1]
+        const remainingPicks = picks.filter((_, idx) => idx !== p1Idx)
+        if (remainingPicks.length > 0) {
+            const p2 = remainingPicks[0]
             p2.rankLabel = '[KÈO DỰ PHÒNG - TOP 2]'
             if (p2.status !== 'trap') {
                 p2.status = 'value'
             }
             p2.stakePct = p2.stakePct > 0 ? Math.min(0.04, Math.max(0.02, p2.stakePct)) : 0.02
+
+            // Bước 7: Kèo tương quan (Correlated Picks Rule):
+            // Nếu 2 pick chung kịch bản (ví dụ đội cửa trên thắng + Tài), coi như một vị thế, tổng vốn <= 2.5%
+            const isCorrelated =
+                (p1.side === 'home' && p2.side === 'over') ||
+                (p1.side === 'over' && p2.side === 'home') ||
+                (p1.side === 'away' && p2.side === 'under') ||
+                (p1.side === 'under' && p2.side === 'away') ||
+                p1.side === p2.side
+
+            if (isCorrelated) {
+                if (p1.stakePct + p2.stakePct > 0.025) {
+                    p1.stakePct = Math.min(p1.stakePct, 0.015)
+                    p2.stakePct = Math.min(p2.stakePct, 0.010)
+                    p2.flags.push('correlated_scenario_capped_2.5%')
+                }
+            }
         }
     }
 
@@ -226,6 +286,10 @@ export function analyzeMatch(
     return {
         lambdaHome,
         lambdaAway,
+        lambdaModel,
+        lambdaMarket: lambdaMarket ?? undefined,
+        weightModel: blended.w,
+        blendReason: blended.reason,
         matrix,
         topScorelines: topScorelines(matrix, 5),
         picks,

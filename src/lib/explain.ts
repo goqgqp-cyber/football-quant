@@ -54,6 +54,8 @@ export function buildFacts(data: MatchData, result: AnalysisResult): Fact[] {
     const labels: Record<string, string> = {
         LAMBDA_HOME: add(result.lambdaHome, 2),
         LAMBDA_AWAY: add(result.lambdaAway, 2),
+        LAMBDA_FINAL_HOME: add(result.lambdaHome, 2),
+        LAMBDA_FINAL_AWAY: add(result.lambdaAway, 2),
         HOME_XGF: add(data.home.xgf ?? 0, 2),
         HOME_XGA: add(data.home.xga ?? 0, 2),
         AWAY_XGF: add(data.away.xgf ?? 0, 2),
@@ -67,6 +69,18 @@ export function buildFacts(data: MatchData, result: AnalysisResult): Fact[] {
         SOURCE_COUNT: add(data.sources.length, 0),
         VALUE_COUNT: add(result.picks.filter((p) => p.status === 'value').length, 0),
         PICK_COUNT: add(result.picks.length, 0),
+    }
+
+    if (result.lambdaModel) {
+        labels['LAMBDA_MODEL_HOME'] = add(result.lambdaModel.home, 2)
+        labels['LAMBDA_MODEL_AWAY'] = add(result.lambdaModel.away, 2)
+    }
+    if (result.lambdaMarket) {
+        labels['LAMBDA_MARKET_HOME'] = add(result.lambdaMarket.home, 2)
+        labels['LAMBDA_MARKET_AWAY'] = add(result.lambdaMarket.away, 2)
+    }
+    if (result.weightModel !== undefined) {
+        labels['WEIGHT_MODEL'] = add(result.weightModel * 100, 0, '%')
     }
 
     // Top 3 tỉ số khả dĩ. Số bàn trong tỉ số (vd "5-1") cũng phải được coi là hợp lệ.

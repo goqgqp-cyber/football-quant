@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { scoreMatrix, estimateLambdas } from '@/lib/poisson'
+import { scoreMatrix, estimateLambdas, impliedLambdas, blendLambdas } from '@/lib/poisson'
 import { tripleFor } from '@/lib/markets'
-import { evAndEdge } from '@/lib/engine'
+import { evAndEdge, analyzeMatch } from '@/lib/engine'
 import { settlePick } from '@/lib/settle'
-import type { MatchData, ActualResult, Pick } from '@/lib/types'
+import type { MatchData, ActualResult, Pick, OddsLine } from '@/lib/types'
 
 function diagMatchData(): MatchData {
     return {
@@ -152,5 +152,61 @@ describe('formatPickTitle (Formula check: Tên đội thật + mốc, không ch�
 
         const pUnder = { kind: 'totals', side: 'under', line: 2.75 }
         expect(formatPickTitle(pUnder, 'Hull City', 'Everton')).toBe('Xỉu 2.75')
+    })
+})
+
+describe('anti-bias market anchoring & blending engine', () => {
+    it('impliedLambdas solves lambdaTotal from Over/Under and lambdas from AH', () => {
+        const odds: OddsLine[] = [
+            { id: '1', kind: 'totals', side: 'over', line: 2.5, odds: 1.95 },
+            { id: '2', kind: 'totals', side: 'under', line: 2.5, odds: 1.95 },
+            { id: '3', kind: 'ah', side: 'home', line: -0.5, odds: 1.90 },
+            { id: '4', kind: 'ah', side: 'away', line: 0.5, odds: 1.90 },
+        ]
+
+        const res = impliedLambdas(odds)
+        expect(res.hasMarketOu).toBe(true)
+        expect(res.hasMarketAh).toBe(true)
+        expect(res.lambdaTotal).toBeGreaterThan(2.0)
+        expect(res.lambdaTotal).toBeLessThan(3.5)
+        expect(res.lambdaHome).toBeGreaterThan(res.lambdaAway) // home chấp -0.5 ăn 1.90 => lambdaHome > lambdaAway
+    })
+
+    it('blendLambdas assigns correct w weights based on quality gates', () => {
+        const model = { home: 1.8, away: 1.0 }
+        const market = { home: 1.4, away: 1.2 }
+
+        // Đầy đủ 3 điều kiện (n >= 8, sourceCount >= 2, lineupConfirmed): w = 0.50
+        const b1 = blendLambdas(model, market, { n: 10, sourceCount: 2, lineupConfirmed: true })
+        expect(b1.w).toBe(0.50)
+        expect(b1.lambdaHome).toBeCloseTo(0.5 * 1.8 + 0.5 * 1.4, 2)
+
+        // Thiếu 1 điều kiện (lineup chưa xác nhận): w = 0.30
+        const b2 = blendLambdas(model, market, { n: 10, sourceCount: 2, lineupConfirmed: false })
+        expect(b2.w).toBe(0.30)
+        expect(b2.lambdaHome).toBeCloseTo(0.3 * 1.8 + 0.7 * 1.4, 2)
+
+        // Thiếu 2 điều kiện (n < 8, 1 nguồn): w = 0.15
+        const b3 = blendLambdas(model, market, { n: 4, sourceCount: 1, lineupConfirmed: false })
+        expect(b3.w).toBe(0.15)
+        expect(b3.lambdaHome).toBeCloseTo(0.15 * 1.8 + 0.85 * 1.4, 2)
+
+        // Không có market odds 2 đầu: w = 1.0
+        const b4 = blendLambdas(model, null, { n: 10, sourceCount: 2, lineupConfirmed: true }, false)
+        expect(b4.w).toBe(1.0)
+        expect(b4.lambdaHome).toBe(1.8)
+    })
+
+    it('caps correlated picks scenario at maximum 2.5% total stake', () => {
+        const data = diagMatchData()
+        const correlatedOdds: OddsLine[] = [
+            { id: '1', kind: 'ah', side: 'home', line: -0.5, odds: 2.0 },
+            { id: '2', kind: 'totals', side: 'over', line: 2.5, odds: 2.0 },
+        ]
+
+        const res = analyzeMatch(data, correlatedOdds)
+        expect(res.picks.length).toBe(2)
+        const totalStake = res.picks[0].stakePct + res.picks[1].stakePct
+        expect(totalStake).toBeLessThanOrEqual(0.025 + 1e-6)
     })
 })

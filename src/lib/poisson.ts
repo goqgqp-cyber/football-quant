@@ -1,5 +1,6 @@
-import type { MatchData } from './types'
+import type { MatchData, OddsLine } from './types'
 import { poissonPmf, shrink, normalize } from './math'
+import { totalsTriple, ahTriple } from './markets'
 
 /** Tham số mặc định của giải (chỉnh được theo giải). */
 export const DEFAULT_LG_HOME = 1.45
@@ -163,4 +164,237 @@ export function inPlayScoreMatrix(
     }
 
     return { matrix: out, lambdaRemHome, lambdaRemAway, decayFactor }
+}
+
+export interface DataQuality {
+    n: number
+    sourceCount: number
+    lineupConfirmed?: boolean
+}
+
+export interface MarketOddsInput {
+    ouLine?: number
+    ouOverOdds?: number
+    ouUnderOdds?: number
+    ahLine?: number
+    ahHomeOdds?: number
+    ahAwayOdds?: number
+}
+
+export interface ImpliedLambdasResult {
+    lambdaHome: number
+    lambdaAway: number
+    lambdaTotal: number
+    hasMarketOu: boolean
+    hasMarketAh: boolean
+}
+
+/**
+ * Trích xuất cặp kèo 2 đầu (Over/Under và Home/Away) đại diện từ danh sách OddsLine.
+ */
+export function extractMarketPairs(oddsLines: OddsLine[]): MarketOddsInput {
+    const input: MarketOddsInput = {}
+
+    // Tìm cặp Totals 2 đầu (ưu tiên mốc gần 2.5 nhất)
+    const totalsOver = oddsLines.filter((o) => o.kind === 'totals' && o.side === 'over')
+    for (const over of totalsOver) {
+        const under = oddsLines.find(
+            (o) => o.kind === 'totals' && o.side === 'under' && Math.abs(o.line - over.line) < 1e-6,
+        )
+        if (under) {
+            if (input.ouLine === undefined || Math.abs(over.line - 2.5) < Math.abs(input.ouLine - 2.5)) {
+                input.ouLine = over.line
+                input.ouOverOdds = over.odds
+                input.ouUnderOdds = under.odds
+            }
+        }
+    }
+
+    // Tìm cặp Asian Handicap 2 đầu (ưu tiên mốc gần 0 nhất)
+    const ahHome = oddsLines.filter((o) => o.kind === 'ah' && o.side === 'home')
+    for (const home of ahHome) {
+        const away = oddsLines.find(
+            (o) =>
+                o.kind === 'ah' &&
+                o.side === 'away' &&
+                (Math.abs(o.line - home.line) < 1e-6 || Math.abs(o.line + home.line) < 1e-6),
+        )
+        if (away) {
+            if (input.ahLine === undefined || Math.abs(home.line) < Math.abs(input.ahLine)) {
+                input.ahLine = home.line
+                input.ahHomeOdds = home.odds
+                input.ahAwayOdds = away.odds
+            }
+        }
+    }
+
+    return input
+}
+
+/**
+ * Bước 2: λ ngầm định từ thị trường (Market Implied Lambdas).
+ * - Loại vig từng cặp odds.
+ * - Giải ra lambdaTotal từ kèo Over/Under qua tìm kiếm nhị phân (bisection).
+ * - Giải ra (lambdaHome, lambdaAway) từ kèo Asian Handicap cố định lambdaTotal.
+ */
+export function impliedLambdas(
+    input: MarketOddsInput | OddsLine[],
+    lgHome = DEFAULT_LG_HOME,
+    lgAway = DEFAULT_LG_AWAY,
+): ImpliedLambdasResult {
+    const pairs: MarketOddsInput = Array.isArray(input) ? extractMarketPairs(input) : input
+
+    let lambdaTotal = lgHome + lgAway
+    let hasMarketOu = false
+
+    // 1. Giải lambdaTotal từ Over/Under nếu có cặp odds 2 đầu
+    if (
+        pairs.ouLine !== undefined &&
+        pairs.ouOverOdds !== undefined &&
+        pairs.ouUnderOdds !== undefined &&
+        pairs.ouOverOdds > 1 &&
+        pairs.ouUnderOdds > 1
+    ) {
+        const pOverRaw = 1 / pairs.ouOverOdds
+        const pUnderRaw = 1 / pairs.ouUnderOdds
+        const sum = pOverRaw + pUnderRaw
+        if (sum > 0) {
+            const targetPOver = Math.min(0.98, Math.max(0.02, pOverRaw / sum))
+            let low = 0.2
+            let high = 8.0
+            for (let i = 0; i < 25; i++) {
+                const mid = (low + high) / 2
+                const m = scoreMatrix(mid / 2, mid / 2)
+                const trip = totalsTriple(m, pairs.ouLine, 'over')
+                const dec = trip.win + trip.lose
+                const p = dec > 0 ? trip.win / dec : 0.5
+                if (p < targetPOver) {
+                    low = mid
+                } else {
+                    high = mid
+                }
+            }
+            lambdaTotal = Number(((low + high) / 2).toFixed(4))
+            hasMarketOu = true
+        }
+    }
+
+    let lambdaHome = lgHome
+    let lambdaAway = lgAway
+    let hasMarketAh = false
+
+    // 2. Giải (lambdaHome, lambdaAway) từ Asian Handicap nếu có cặp odds 2 đầu
+    if (
+        pairs.ahLine !== undefined &&
+        pairs.ahHomeOdds !== undefined &&
+        pairs.ahAwayOdds !== undefined &&
+        pairs.ahHomeOdds > 1 &&
+        pairs.ahAwayOdds > 1
+    ) {
+        const pHomeRaw = 1 / pairs.ahHomeOdds
+        const pAwayRaw = 1 / pairs.ahAwayOdds
+        const sum = pHomeRaw + pAwayRaw
+        if (sum > 0) {
+            const targetPHome = Math.min(0.98, Math.max(0.02, pHomeRaw / sum))
+            let low = 0.02 * lambdaTotal
+            let high = 0.98 * lambdaTotal
+            for (let i = 0; i < 25; i++) {
+                const mid = (low + high) / 2
+                const candH = mid
+                const candA = Math.max(0.01, lambdaTotal - mid)
+                const m = scoreMatrix(candH, candA)
+                const trip = ahTriple(m, pairs.ahLine, 'home')
+                const dec = trip.win + trip.lose
+                const p = dec > 0 ? trip.win / dec : 0.5
+                if (p < targetPHome) {
+                    low = mid
+                } else {
+                    high = mid
+                }
+            }
+            lambdaHome = Number(((low + high) / 2).toFixed(4))
+            lambdaAway = Number(Math.max(0.05, lambdaTotal - lambdaHome).toFixed(4))
+            hasMarketAh = true
+        }
+    }
+
+    // Nếu chỉ có OU mà không có AH, chia theo tỷ lệ trung bình giải
+    if (hasMarketOu && !hasMarketAh) {
+        const lgRatio = lgHome / (lgHome + lgAway)
+        lambdaHome = Number((lambdaTotal * lgRatio).toFixed(4))
+        lambdaAway = Number(Math.max(0.05, lambdaTotal - lambdaHome).toFixed(4))
+    }
+
+    return {
+        lambdaHome,
+        lambdaAway,
+        lambdaTotal,
+        hasMarketOu,
+        hasMarketAh,
+    }
+}
+
+/**
+ * Bước 3: Trộn mô hình và thị trường (Bayesian / Evidence Weighted Blend).
+ * λ_final = w × λ_model + (1 − w) × λ_market
+ * - w = 0.50 nếu: >= 8 trận, xG từ >= 2 nguồn, đội hình đã xác nhận.
+ * - w = 0.30 nếu thiếu 1 điều kiện.
+ * - w = 0.15 nếu thiếu từ 2 điều kiện trở lên.
+ */
+export function blendLambdas(
+    lambdaModel: { home: number; away: number },
+    lambdaMarket: { home: number; away: number } | null,
+    quality: DataQuality,
+    hasMarketOdds = true,
+): {
+    lambdaHome: number
+    lambdaAway: number
+    w: number
+    reason: string
+} {
+    if (
+        !hasMarketOdds ||
+        !lambdaMarket ||
+        !Number.isFinite(lambdaMarket.home) ||
+        !Number.isFinite(lambdaMarket.away)
+    ) {
+        return {
+            lambdaHome: lambdaModel.home,
+            lambdaAway: lambdaModel.away,
+            w: 1.0,
+            reason: 'Thị trường thiếu odds 2 đầu để giải λ_market; dùng 100% λ_model.',
+        }
+    }
+
+    const c1 = quality.n >= 8
+    const c2 = quality.sourceCount >= 2
+    const c3 = quality.lineupConfirmed === true
+
+    let conditionsMet = 0
+    if (c1) conditionsMet++
+    if (c2) conditionsMet++
+    if (c3) conditionsMet++
+
+    let w = 0.15
+    let reason = ''
+    if (conditionsMet === 3) {
+        w = 0.5
+        reason = 'Đầy đủ 3 điều kiện (>= 8 trận, >= 2 nguồn, đội hình xác nhận): w = 0.50 cân bằng mô hình & thị trường.'
+    } else if (conditionsMet === 2) {
+        w = 0.3
+        reason = 'Thiếu 1 điều kiện dữ liệu: w = 0.30 nghiêng về thị trường (70%).'
+    } else {
+        w = 0.15
+        reason = 'Thiếu từ 2 điều kiện dữ liệu trở lên: w = 0.15 ưu tiên mạnh thị trường (85%).'
+    }
+
+    const lambdaHome = Number((w * lambdaModel.home + (1 - w) * lambdaMarket.home).toFixed(4))
+    const lambdaAway = Number((w * lambdaModel.away + (1 - w) * lambdaMarket.away).toFixed(4))
+
+    return {
+        lambdaHome,
+        lambdaAway,
+        w,
+        reason,
+    }
 }
