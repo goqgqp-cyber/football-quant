@@ -1,62 +1,45 @@
-import { useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { GlassCard } from '../components/ui/GlassCard'
 import { AnimatedNumber } from '../components/ui/AnimatedNumber'
-import { CALIBRATION_MIN_PICKS, brierScore, buildCalibration, binLabel } from '../lib/settle'
-import type { Pick } from '../lib/types'
+import { Button } from '../components/ui/Button'
+import { CALIBRATION_MIN_PICKS, brierScore, binLabel } from '../lib/settle'
+import { ApiError, api, type StatsResponse } from '../lib/api'
 
 /**
- * Trang Hiệu suất (G1: dữ liệu mô phỏng).
- * G2 sẽ đọc `u:{userId}:calibration:bins` + result từ Upstash.
+ * Trang Hiệu suất — đọc dữ liệu đã đối soát từ backend (`GET /api/stats`).
+ * Không bịa dữ liệu: chưa có pick nào → hiển thị "chưa đủ dữ liệu".
  */
 export function PerformancePage() {
-    // Mô phỏng các pick đã đối soát
-    const settled = useMemo(() => {
-        const rows: { pick: Pick; outcome: 'win' | 'lose' | 'push' | 'win_half' | 'lose_half' }[] = []
-        const probs = [0.52, 0.54, 0.56, 0.58, 0.6, 0.62, 0.66, 0.7]
-        let i = 0
-        for (const p of probs) {
-            for (let k = 0; k < 8; k++) {
-                const win = Math.random() < p
-                rows.push({
-                    pick: {
-                        oddsLineId: `m${i++}`,
-                        kind: 'totals',
-                        side: 'over',
-                        line: 2.5,
-                        odds: 1.9,
-                        pWin: p,
-                        pPush: 0,
-                        pLose: 1 - p,
-                        pImplied: 1 / 1.9,
-                        pImpliedNoVig: null,
-                        edge: 0.05,
-                        ev: 0.05,
-                        confidence: 'medium',
-                        stakePct: 0.015,
-                        status: 'value',
-                        flags: [],
-                        marketDelta: 0.02,
-                    },
-                    outcome: win ? 'win' : 'lose',
-                })
-            }
+    const [stats, setStats] = useState<StatsResponse | null>(null)
+    const [loading, setLoading] = useState(true)
+    const [error, setError] = useState<string | null>(null)
+
+    const load = useCallback(async () => {
+        setLoading(true)
+        setError(null)
+        try {
+            setStats(await api.stats())
+        } catch (e) {
+            setError(e instanceof ApiError ? e.message : 'Không tải được số liệu hiệu suất.')
+        } finally {
+            setLoading(false)
         }
-        return rows
     }, [])
 
+    useEffect(() => {
+        void load()
+    }, [load])
+
+    const settled = stats?.settled ?? []
     const nPicks = settled.length
     const wins = settled.filter((s) => s.outcome === 'win').length
     const winRate = nPicks ? wins / nPicks : 0
 
-    const profit = settled.reduce((sum, s) => {
-        if (s.outcome === 'win') return sum + (s.pick.odds - 1) * s.pick.stakePct
-        if (s.outcome === 'lose') return sum - s.pick.stakePct
-        return sum
-    }, 0)
-    const stakedTotal = settled.reduce((sum, s) => sum + s.pick.stakePct, 0)
+    const profit = stats?.profit ?? 0
+    const stakedTotal = settled.reduce((sum, s) => sum + (s.pick.stakePct || 0), 0)
     const roi = stakedTotal ? profit / stakedTotal : 0
 
-    const bins = useMemo(() => buildCalibration(settled), [settled])
+    const bins = useMemo(() => stats?.calibration ?? [], [stats])
     const brier = useMemo(
         () => brierScore(settled.map((s) => ({ p: s.pick.pWin, win: s.outcome === 'win' }))),
         [settled],
@@ -66,6 +49,18 @@ export function PerformancePage() {
 
     return (
         <div className="flex flex-col gap-5">
+            <div className="flex justify-end">
+                <Button variant="ghost" onClick={() => void load()} disabled={loading}>
+                    {loading ? 'Đang tải…' : 'Tải lại'}
+                </Button>
+            </div>
+
+            {error && (
+                <GlassCard>
+                    <p className="text-sm text-danger-400">{error}</p>
+                </GlassCard>
+            )}
+
             <div className="grid gap-3 sm:grid-cols-3">
                 <Stat label="ROI cộng dồn" value={roi * 100} digits={2} suffix="%" tone={roi >= 0 ? 'value' : 'danger'} />
                 <Stat label="Tỉ lệ thắng thực tế" value={winRate * 100} digits={1} suffix="%" tone="default" />
@@ -77,7 +72,11 @@ export function PerformancePage() {
                     Đường cong calibration (dự đoán vs thực tế)
                 </p>
                 <p className="mt-1 text-xs text-ink-500">
-                    Tổng pick đã đối soát: <span className="font-display text-ink-300">{nPicks}</span>
+                    Tổng pick đã đối soát: <span className="font-display text-ink-300">{nPicks}</span> · Lợi nhuận:{' '}
+                    <span className={`font-display ${profit >= 0 ? 'text-value-400' : 'text-danger-400'}`}>
+                        {profit >= 0 ? '+' : ''}
+                        {profit.toFixed(3)} đv
+                    </span>
                 </p>
 
                 {!enough ? (

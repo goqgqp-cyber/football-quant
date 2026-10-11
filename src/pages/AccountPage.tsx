@@ -1,16 +1,25 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { GlassCard } from '../components/ui/GlassCard'
 import { Button } from '../components/ui/Button'
 import { Field, TextInput } from '../components/ui/Field'
 import { useSettings } from '../hooks/useSettings'
+import { useAuth } from '../hooks/useAuth'
+import { ApiError, api } from '../lib/api'
 
 /**
- * Trang Tài khoản (G1): tổng vốn + tham số theo giải + xuất JSON/CSV.
- * G2 thêm phần "Phiên đăng nhập" (danh sách thiết bị, đăng xuất từng thiết bị).
+ * Trang Tài khoản: tổng vốn (đồng bộ server) + tham số theo giải (cục bộ)
+ * + phiên đăng nhập + xuất JSON/CSV.
  */
 export function AccountPage() {
     const { settings, update } = useSettings()
-    const [bankroll, setBankroll] = useState(String(settings.bankroll))
+    const { user, setBankroll, logout } = useAuth()
+    const [bankroll, setBankrollLocal] = useState(String(user?.bankroll ?? settings.bankroll))
+    const [saving, setSaving] = useState(false)
+    const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null)
+
+    useEffect(() => {
+        if (user) setBankrollLocal(String(user.bankroll))
+    }, [user])
 
     const exportJson = () => {
         const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' })
@@ -36,34 +45,60 @@ export function AccountPage() {
         URL.revokeObjectURL(url)
     }
 
+    const saveBankroll = async () => {
+        setSaving(true)
+        setMsg(null)
+        try {
+            await setBankroll(Number(bankroll) || 0)
+            setMsg({ ok: true, text: 'Đã lưu tổng vốn.' })
+        } catch (e) {
+            setMsg({ ok: false, text: e instanceof ApiError ? e.message : 'Không lưu được tổng vốn.' })
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    const logoutAll = async () => {
+        setMsg(null)
+        try {
+            await api.logoutAll()
+            await logout()
+        } catch (e) {
+            setMsg({ ok: false, text: e instanceof ApiError ? e.message : 'Không đăng xuất được.' })
+        }
+    }
+
     return (
         <div className="flex flex-col gap-5">
             <GlassCard>
                 <p className="font-display text-sm font-bold text-ink-100">Tổng vốn</p>
+                <p className="mt-1 text-xs text-ink-500">
+                    Lưu trên server theo tài khoản — dùng để quy đổi stake % ra số tiền ở các trang khác.
+                </p>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <Field label="Tổng vốn (đơn vị tiền)">
                         <TextInput
                             type="number"
                             inputMode="numeric"
                             value={bankroll}
-                            onChange={(e) => setBankroll(e.target.value)}
+                            onChange={(e) => setBankrollLocal(e.target.value)}
                         />
                     </Field>
                     <div className="flex items-end">
-                        <Button
-                            onClick={() => update({ bankroll: Number(bankroll) || 0 })}
-                            className="w-full sm:w-auto"
-                        >
-                            Lưu
+                        <Button onClick={() => void saveBankroll()} disabled={saving} className="w-full sm:w-auto">
+                            {saving ? 'Đang lưu…' : 'Lưu'}
                         </Button>
                     </div>
                 </div>
+                {msg && (
+                    <p className={`mt-2 text-xs ${msg.ok ? 'text-value-400' : 'text-danger-400'}`}>{msg.text}</p>
+                )}
             </GlassCard>
 
             <GlassCard>
                 <p className="font-display text-sm font-bold text-ink-100">Tham số theo giải</p>
                 <p className="mt-1 text-xs text-ink-500">
-                    lg_home / lg_away dùng để ước lượng λ. Mặc định 1.45 / 1.15.
+                    lg_home / lg_away dùng để ước lượng λ. Mặc định 1.45 / 1.15. Lưu cục bộ trên thiết bị.
                 </p>
                 <div className="mt-3 overflow-x-auto rounded-xl border border-white/10">
                     <table className="min-w-full text-sm">
@@ -120,11 +155,26 @@ export function AccountPage() {
             <GlassCard>
                 <p className="font-display text-sm font-bold text-ink-100">Phiên đăng nhập</p>
                 <p className="mt-1 text-xs text-ink-500">
-                    G2 sẽ hiển thị danh sách thiết bị (lưu trong Redis: session:&#123;userId&#125;:&#123;sessionId&#125;) và cho
-                    đăng xuất từng thiết bị hoặc tất cả. Token nằm trong cookie HttpOnly — không lưu localStorage.
+                    Token nằm trong cookie HttpOnly — không lưu localStorage. Nhấn "Đăng xuất tất cả" sẽ thu hồi mọi
+                    thiết bị (kể cả phiên hiện tại).
                 </p>
-                <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-ink-500">
-                    Chưa có phiên nào (G1 chưa bật backend).
+                <div className="mt-3 rounded-xl border border-white/10 bg-white/5 px-3 py-3 text-sm text-ink-300">
+                    <p>
+                        <span className="text-ink-500">Email:</span> {user?.email ?? '—'}
+                    </p>
+                    <p className="mt-1">
+                        <span className="text-ink-500">Vai trò:</span> {user?.role ?? '—'} ·{' '}
+                        <span className="text-ink-500">Tạo lúc:</span>{' '}
+                        {user ? new Date(user.createdAt).toLocaleString('vi-VN') : '—'}
+                    </p>
+                </div>
+                <div className="mt-3 flex flex-wrap gap-2">
+                    <Button variant="ghost" onClick={() => void logout()}>
+                        Đăng xuất thiết bị này
+                    </Button>
+                    <Button variant="ghost" onClick={() => void logoutAll()}>
+                        Đăng xuất tất cả thiết bị
+                    </Button>
                 </div>
             </GlassCard>
 

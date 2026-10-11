@@ -6,10 +6,10 @@ import { Field, TextInput } from '../components/ui/Field'
 import { PickCard } from '../components/PickCard'
 import { ProgressSteps, type Step } from '../components/ui/ProgressSteps'
 import { Skeleton } from '../components/ui/RefractionFilter'
-import { analyzeMatch } from '../lib/engine'
+import { ApiError, api } from '../lib/api'
 import { MOCK_MATCH_DATA, MOCK_MATCH_INPUT, MOCK_ODDS } from '../lib/mock'
 import { useSettings } from '../hooks/useSettings'
-import type { MatchData, MatchInput, OddsLine } from '../lib/types'
+import type { AnalysisResult, MatchData, MatchInput, OddsLine } from '../lib/types'
 
 type AnalysisStepId = 'collect' | 'extract' | 'compute' | 'explain'
 
@@ -19,8 +19,9 @@ interface ConfirmRow {
 }
 
 /**
- * Trang Phân tích (G1): form nhập + ô upload ảnh (placeholder cho G3)
- * + bảng xác nhận số liệu giả + stream tiến trình giả + kết quả kèo.
+ * Trang Phân tích (G2): form nhập + upload ảnh (placeholder G3) + bảng xác nhận số liệu.
+ * Phần tính toán chạy trên server (`POST /api/analyze`) — engine thuần TS, KHÔNG dùng LLM.
+ * SSE tiến trình thật sẽ có ở G4; G2 mô phỏng tiến trình rồi chờ kết quả server.
  */
 export function AnalyzePage() {
     const { settings } = useSettings()
@@ -44,7 +45,9 @@ export function AnalyzePage() {
         { id: 'explain', label: 'Viết phân tích', status: 'pending' },
     ])
     const [running, setRunning] = useState(false)
-    const [result, setResult] = useState<ReturnType<typeof analyzeMatch> | null>(null)
+    const [result, setResult] = useState<AnalysisResult | null>(null)
+    const [error, setError] = useState<string | null>(null)
+    const [savedId, setSavedId] = useState<string | null>(null)
 
     const setStepStatus = (id: string, status: Step['status']) => {
         setSteps((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)))
@@ -56,21 +59,37 @@ export function AnalyzePage() {
 
     const runAnalysis = async () => {
         setRunning(true)
+        setError(null)
         resetSteps()
         setResult(null)
+        setSavedId(null)
 
         const ids: AnalysisStepId[] = ['collect', 'extract', 'compute', 'explain']
         for (let i = 0; i < ids.length; i++) {
             const id = ids[i]
             setStepStatus(id, 'active')
-            // Giả lập streaming: mỗi bước 550ms (G4 sẽ thay bằng SSE thật)
-            await new Promise<void>((r) => window.setTimeout(r, 550))
+            // Mô phỏng tiến trình; G4 sẽ thay bằng SSE thật từ Gemini.
+            await new Promise<void>((r) => window.setTimeout(r, 350))
             setStepStatus(id, 'done')
         }
 
-        const r = analyzeMatch(data, oddsLines, input.lg_home, input.lg_away)
-        setResult(r)
-        setRunning(false)
+        try {
+            const { result: r, recordId } = await api.analyze({
+                home: input.homeTeam,
+                away: input.awayTeam,
+                league: input.league,
+                kickoff: input.kickoff || null,
+                lg_home: input.lg_home,
+                lg_away: input.lg_away,
+                oddsLines,
+            })
+            setResult(r)
+            setSavedId(recordId)
+        } catch (e) {
+            setError(e instanceof ApiError ? e.message : 'Phân tích thất bại. Kiểm tra backend đã chạy chưa.')
+        } finally {
+            setRunning(false)
+        }
     }
 
     const handleFiles = (files: FileList | File[] | null) => {
@@ -89,8 +108,7 @@ export function AnalyzePage() {
             urls.push(URL.createObjectURL(f))
         }
         setImagePreviews(urls)
-        // Giả lập số liệu trích từ ảnh (G3: Gemini đọc ảnh trả JSON + confidence)
-        // Cho G1, ta hiển thị odds hiện tại như "đọc được", người dùng sửa rồi xác nhận.
+        // G3: Gemini đọc ảnh trả JSON + confidence. G2 hiển thị odds hiện tại để làm quen luồng sửa → xác nhận.
         setConfirmRows(
             oddsLines.map((l) => ({
                 line: { ...l },
@@ -183,7 +201,7 @@ export function AnalyzePage() {
                             className="!bg-white/5"
                         />
                     </Field>
-                    <Field label="λ (sẽ tính sau khi chạy)">
+                    <Field label="λ (sau khi chạy)">
                         <TextInput
                             value={result ? `λH=${result.lambdaHome.toFixed(2)} · λA=${result.lambdaAway.toFixed(2)}` : '—'}
                             readOnly
@@ -205,7 +223,8 @@ export function AnalyzePage() {
                     </button>
                 </div>
                 <p className="mt-1 text-xs text-ink-500">
-                    G4 sẽ thay bằng Gemini + Google Search grounding, kèm nguồn và thời điểm.
+                    G4 sẽ thay bằng Gemini + Google Search grounding, kèm nguồn và thời điểm. G2 dùng dữ liệu mẫu này
+                    để tính (có nhãn rõ, không giả là dữ liệu thật).
                 </p>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <TeamBox label={`Chủ nhà: ${input.homeTeam}`} team={data.home} />
@@ -222,7 +241,7 @@ export function AnalyzePage() {
             {/* Upload ảnh (G3 placeholder) */}
             <GlassCard>
                 <div className="flex items-center justify-between gap-2">
-                    <p className="font-display text-sm font-bold text-ink-100">Upload ảnhodds</p>
+                    <p className="font-display text-sm font-bold text-ink-100">Upload ảnh odds</p>
                     <span className="text-xs text-ink-500">Tối đa 4 ảnh · JPEG/PNG/WebP · 8 MB/ảnh</span>
                 </div>
                 <div
@@ -267,14 +286,14 @@ export function AnalyzePage() {
                 <GlassCard>
                     <div className="flex items-center justify-between gap-2">
                         <p className="font-display text-sm font-bold text-ink-100">
-                            Xác nhận số liệu Gemini đọc được (G1: giả lập)
+                            Xác nhận số liệu Gemini đọc được (G2: giả lập)
                         </p>
                         <span className="rounded-full bg-warn-500/15 px-2 py-1 text-[11px] font-semibold text-warn-400">
                             Xác nhận trước khi tính — bắt buộc
                         </span>
                     </div>
                     <p className="mt-1 text-xs text-ink-500">
-                        G3 sẽ trích odds/xG/đội hình từ ảnh. G1 hiển thị odds hiện tại để bạn làm quen luồng sửa → xác nhận.
+                        G3 sẽ trích odds/xG/đội hình từ ảnh. G2 hiển thị odds hiện tại để bạn làm quen luồng sửa → xác nhận.
                     </p>
                     <div className="mt-3 overflow-x-auto rounded-xl border border-white/10">
                         <table className="min-w-full text-sm">
@@ -399,13 +418,19 @@ export function AnalyzePage() {
                     </div>
                 )}
                 <div className="mt-4">
-                    <Button onClick={runAnalysis} disabled={running || oddsLines.length === 0}>
+                    <Button onClick={() => void runAnalysis()} disabled={running || oddsLines.length === 0}>
                         {running ? 'Đang phân tích…' : 'Phân tích ngay'}
                     </Button>
                 </div>
+                {error && <p className="mt-2 text-xs text-danger-400">{error}</p>}
+                {savedId && !error && (
+                    <p className="mt-2 text-xs text-ink-500">
+                        Đã lưu vào Lịch sử (mã <span className="font-display text-ink-300">{savedId}</span>).
+                    </p>
+                )}
             </GlassCard>
 
-            {/* Stream tiến trình (mỗi lần chạy phân tích đều hiển thị, không màn hình trống) */}
+            {/* Stream tiến trình */}
             {(running || result) && (
                 <GlassCard>
                     <p className="font-display text-sm font-bold text-ink-100">Tiến trình phân tích</p>
@@ -474,7 +499,7 @@ export function AnalyzePage() {
                         </p>
                     </GlassCard>
 
-                    {/* 4 phần giải thích — placeholder cho Bước C (Gemini sẽ viết) */}
+                    {/* 4 phần giải thích — placeholder cho Bước C (Gemini sẽ viết ở G5) */}
                     <GlassCard>
                         <p className="font-display text-sm font-bold text-ink-100">Giải thích (G5: Gemini — hiện tại là mẫu cục bộ)</p>
                         <AnimatePresence>
@@ -489,7 +514,7 @@ export function AnalyzePage() {
                                 </p>
                                 <p>
                                     <span className="font-semibold text-ink-100">(2) Chiến thuật &amp; nhân sự:</span> G4/G5 sẽ trích đội hình
-                                    dự kiến và chấn thương từ web/ảnh; G1 để trống.
+                                    dự kiến và chấn thương từ web/ảnh; G2 để trống.
                                 </p>
                                 <p>
                                     <span className="font-semibold text-ink-100">(3) Đánh giá từng kèo &amp; kịch bản thua:</span> xem bảng
@@ -499,7 +524,7 @@ export function AnalyzePage() {
                                     <span className="font-semibold text-ink-100">(4) Tổng kết:</span>{' '}
                                     {valuePicks.length === 0
                                         ? 'NO BET — không kèo nào đủ Edge/EV và lệch mô hình chấp nhận được.'
-                                        : `${valuePicks.length} kèo VALUE đạt chuẩn; top tỉ số ${result.topScorelines[0].score}.`}
+                                        : `${valuePicks.length} kèo VALUE đạt chuẩn; top tỉ số ${result.topScorelines[0]?.score ?? '—'}.`}
                                 </p>
                             </motion.div>
                         </AnimatePresence>

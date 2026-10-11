@@ -1,24 +1,12 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { GlassCard } from '../components/ui/GlassCard'
 import { Button } from '../components/ui/Button'
 import { TextInput } from '../components/ui/Field'
 import { settlePick } from '../lib/settle'
-import { MOCK_MATCH_DATA, MOCK_MATCH_INPUT, MOCK_ODDS } from '../lib/mock'
-import { analyzeMatch } from '../lib/engine'
-import type { ActualResult, SettledPick } from '../lib/types'
+import { ApiError, api, type HistoryItem } from '../lib/api'
+import type { SettledPick } from '../lib/types'
 
-type Filter = 'all' | 'pending' | 'settled' | 'value'
-
-/** Bản ghi lịch sử (G1: dựng từ dữ liệu giả). G2 sẽ đọc từ Upstash. */
-interface HistoryItem {
-    id: string
-    home: string
-    away: string
-    league: string
-    kickoff: string
-    status: 'pending' | 'settled'
-    result?: ActualResult
-}
+type Filter = 'all' | 'pending' | 'settled'
 
 const OUTCOME_LABEL: Record<SettledPick['outcome'], string> = {
     win: 'Thắng',
@@ -37,32 +25,45 @@ const OUTCOME_CLASS: Record<SettledPick['outcome'], string> = {
 }
 
 export function HistoryPage() {
-    const [items, setItems] = useState<HistoryItem[]>([
-        {
-            id: 'demo-1',
-            home: MOCK_MATCH_INPUT.homeTeam,
-            away: MOCK_MATCH_INPUT.awayTeam,
-            league: MOCK_MATCH_INPUT.league,
-            kickoff: MOCK_MATCH_INPUT.kickoff,
-            status: 'pending',
-        },
-    ])
+    const [items, setItems] = useState<HistoryItem[]>([])
+    const [loading, setLoading] = useState(true)
+    const [error, setError] = useState<string | null>(null)
     const [filter, setFilter] = useState<Filter>('all')
 
-    const analysis = useMemo(
-        () => analyzeMatch(MOCK_MATCH_DATA, MOCK_ODDS, MOCK_MATCH_INPUT.lg_home, MOCK_MATCH_INPUT.lg_away),
-        [],
-    )
+    const load = useCallback(async () => {
+        setLoading(true)
+        setError(null)
+        try {
+            const { items: rows } = await api.history(200)
+            setItems(rows)
+        } catch (e) {
+            setError(e instanceof ApiError ? e.message : 'Không tải được lịch sử.')
+        } finally {
+            setLoading(false)
+        }
+    }, [])
+
+    useEffect(() => {
+        void load()
+    }, [load])
 
     const filtered = items.filter((it) => {
         if (filter === 'all') return true
-        if (filter === 'pending') return it.status === 'pending'
-        if (filter === 'settled') return it.status === 'settled'
-        return true
+        if (filter === 'pending') return it.result == null
+        return it.result != null
     })
 
-    const enterResult = (id: string, r: ActualResult) => {
-        setItems((prev) => prev.map((it) => (it.id === id ? { ...it, status: 'settled', result: r } : it)))
+    const applySettled = (updated: HistoryItem) => {
+        setItems((prev) => prev.map((it) => (it.id === updated.id ? updated : it)))
+    }
+
+    const remove = async (id: string) => {
+        try {
+            await api.deleteHistory(id)
+            setItems((prev) => prev.filter((it) => it.id !== id))
+        } catch (e) {
+            setError(e instanceof ApiError ? e.message : 'Không xóa được bản ghi.')
+        }
     }
 
     return (
@@ -80,23 +81,31 @@ export function HistoryPage() {
                                 {f === 'all' ? 'Tất cả' : f === 'pending' ? 'Chưa có kết quả' : 'Đã đối soát'}
                             </Button>
                         ))}
+                        <Button variant="ghost" onClick={() => void load()} disabled={loading}>
+                            {loading ? 'Đang tải…' : 'Tải lại'}
+                        </Button>
                     </div>
                 </div>
             </GlassCard>
 
-            {filtered.length === 0 && (
+            {error && (
                 <GlassCard>
-                    <p className="text-sm text-ink-500">Không có bản ghi nào khớp bộ lọc.</p>
+                    <p className="text-sm text-danger-400">{error}</p>
+                </GlassCard>
+            )}
+
+            {!loading && filtered.length === 0 && (
+                <GlassCard>
+                    <p className="text-sm text-ink-500">
+                        {items.length === 0
+                            ? 'Chưa có lượt phân tích nào. Hãy chạy phân tích ở trang Phân tích.'
+                            : 'Không có bản ghi nào khớp bộ lọc.'}
+                    </p>
                 </GlassCard>
             )}
 
             {filtered.map((it) => (
-                <HistoryRow
-                    key={it.id}
-                    item={it}
-                    picks={analysis.picks}
-                    onSettle={(r) => enterResult(it.id, r)}
-                />
+                <HistoryRow key={it.id} item={it} onSettled={applySettled} onDelete={remove} />
             ))}
         </div>
     )
@@ -104,47 +113,77 @@ export function HistoryPage() {
 
 function HistoryRow({
     item,
-    picks,
-    onSettle,
+    onSettled,
+    onDelete,
 }: {
     item: HistoryItem
-    picks: ReturnType<typeof analyzeMatch>['picks']
-    onSettle: (r: ActualResult) => void
+    onSettled: (updated: HistoryItem) => void
+    onDelete: (id: string) => void
 }) {
     const [htHome, setHtHome] = useState('0')
     const [htAway, setHtAway] = useState('0')
     const [ftHome, setFtHome] = useState('')
     const [ftAway, setFtAway] = useState('')
+    const [busy, setBusy] = useState(false)
+    const [err, setErr] = useState<string | null>(null)
 
     const settled: SettledPick[] | null = useMemo(() => {
-        if (item.status !== 'settled' || !item.result) return null
-        return picks.map((p) => settlePick(p, item.result as ActualResult, 'ft'))
-    }, [item, picks])
+        if (!item.result) return null
+        return item.picks.map((p) => settlePick(p, item.result as NonNullable<typeof item.result>, 'ft'))
+    }, [item])
 
     const totalProfit = settled ? settled.reduce((s, x) => s + x.profit, 0) : 0
+    const kickoffLabel = item.meta.kickoff ? new Date(item.meta.kickoff).toLocaleString('vi-VN') : '—'
+
+    const submit = async () => {
+        setBusy(true)
+        setErr(null)
+        try {
+            const { item: updated } = await api.settle({
+                id: item.id,
+                htHome: Number(htHome) || 0,
+                htAway: Number(htAway) || 0,
+                ftHome: Number(ftHome) || 0,
+                ftAway: Number(ftAway) || 0,
+            })
+            onSettled(updated)
+        } catch (e) {
+            setErr(e instanceof ApiError ? e.message : 'Không lưu được kết quả.')
+        } finally {
+            setBusy(false)
+        }
+    }
 
     return (
         <GlassCard>
             <div className="flex flex-wrap items-start justify-between gap-2">
                 <div>
                     <p className="font-display text-base font-bold text-ink-100">
-                        {item.home} <span className="text-ink-500">vs</span> {item.away}
+                        {item.meta.home} <span className="text-ink-500">vs</span> {item.meta.away}
                     </p>
                     <p className="text-xs text-ink-500">
-                        {item.league} · {new Date(item.kickoff).toLocaleString('vi-VN')}
+                        {item.meta.league || 'Không rõ giải'} · {kickoffLabel}
                     </p>
                 </div>
-                <span
-                    className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${item.status === 'settled'
+                <div className="flex items-center gap-2">
+                    <span
+                        className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${item.result
                             ? 'border-value-400/40 bg-value-500/15 text-value-400'
                             : 'border-warn-400/40 bg-warn-500/15 text-warn-400'
-                        }`}
-                >
-                    {item.status === 'settled' ? 'Đã đối soát' : 'Chưa có kết quả'}
-                </span>
+                            }`}
+                    >
+                        {item.result ? 'Đã đối soát' : 'Chưa có kết quả'}
+                    </span>
+                    <button
+                        className="text-xs text-danger-400 hover:text-danger-300"
+                        onClick={() => onDelete(item.id)}
+                    >
+                        Xóa
+                    </button>
+                </div>
             </div>
 
-            {item.status === 'pending' ? (
+            {!item.result ? (
                 <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
                     <div>
                         <p className="mb-1 text-xs text-ink-500">Hiệp 1 — nhà</p>
@@ -163,26 +202,17 @@ function HistoryRow({
                         <TextInput value={ftAway} onChange={(e) => setFtAway(e.target.value)} inputMode="numeric" />
                     </div>
                     <div className="col-span-2 sm:col-span-4">
-                        <Button
-                            onClick={() =>
-                                onSettle({
-                                    htHome: Number(htHome) || 0,
-                                    htAway: Number(htAway) || 0,
-                                    ftHome: Number(ftHome) || 0,
-                                    ftAway: Number(ftAway) || 0,
-                                })
-                            }
-                            disabled={ftHome === '' || ftAway === ''}
-                        >
-                            Lưu kết quả & đối soát
+                        <Button onClick={() => void submit()} disabled={ftHome === '' || ftAway === '' || busy}>
+                            {busy ? 'Đang lưu…' : 'Lưu kết quả & đối soát'}
                         </Button>
+                        {err && <p className="mt-2 text-xs text-danger-400">{err}</p>}
                     </div>
                 </div>
             ) : (
                 <>
                     <p className="mt-2 text-sm text-ink-300">
-                        Kết quả: H1 {item.result?.htHome}-{item.result?.htAway} · FT {item.result?.ftHome}-
-                        {item.result?.ftAway}
+                        Kết quả: H1 {item.result.htHome}-{item.result.htAway} · FT {item.result.ftHome}-
+                        {item.result.ftAway}
                     </p>
                     <div className="mt-3 overflow-x-auto rounded-xl border border-white/10">
                         <table className="min-w-full text-sm">
