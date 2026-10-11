@@ -48,7 +48,7 @@ export function AnalyzePage() {
     const [input, setInput] = useState<MatchInput>(MOCK_MATCH_INPUT)
     const [data, setData] = useState<MatchData>(MOCK_MATCH_DATA)
     const [oddsLines, setOddsLines] = useState<OddsLine[]>(MOCK_ODDS)
-    const [bankroll, setBankroll] = useState(settings.bankroll)
+    const [bankroll] = useState(settings.bankroll)
 
     // ---- Ảnh → Gemini đọc kèo (G3) ----
     const [imagePreviews, setImagePreviews] = useState<string[]>([])
@@ -333,30 +333,7 @@ export function AnalyzePage() {
                         </Field>
                     </div>
                 </details>
-                <div className="mt-3 grid gap-3 sm:grid-cols-3">
-                    <Field label="Tổng vốn (để quy ra số tiền)" hint="Dùng cho hiển thị, không gửi server">
-                        <TextInput
-                            type="number"
-                            inputMode="numeric"
-                            value={String(bankroll)}
-                            onChange={(e) => setBankroll(Number(e.target.value) || 0)}
-                        />
-                    </Field>
-                    <Field label="Nguồn dữ liệu" hint={grounded ? 'Từ Google Search' : 'Chưa thu thập'}>
-                        <TextInput
-                            value={grounded ? `${data.sources.length} nguồn thật` : '— (dữ liệu mẫu)'}
-                            readOnly
-                            className="!bg-white/5"
-                        />
-                    </Field>
-                    <Field label="λ (sau khi chạy)">
-                        <TextInput
-                            value={result ? `λH=${result.lambdaHome.toFixed(2)} · λA=${result.lambdaAway.toFixed(2)}` : '—'}
-                            readOnly
-                            className="!bg-white/5"
-                        />
-                    </Field>
-                </div>
+                
             </GlassCard>
 
             {/* Theo dõi trận đấu Live & Tự động đối soát (SportAPI RapidAPI 20s Polling) */}

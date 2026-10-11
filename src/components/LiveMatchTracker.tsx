@@ -356,28 +356,36 @@ export function LiveMatchTracker({ home, away, eventId, recordId, onSettled }: L
                                 rel="noopener noreferrer"
                                 className="text-[11px] text-indigo-300 hover:text-indigo-200 underline transition"
                             >
-                                Mở trên SofaScore ↗
+                                Xem trực tiếp trên SofaScore (Tab mới) ↗
                             </a>
                         </div>
                     </div>
                     {showEmbed && (
-                        <div className="relative w-full bg-black" style={{ height: '480px' }}>
+                        <div className="relative w-full bg-black overflow-hidden" style={{ minHeight: '320px' }}>
                             <iframe
                                 id={`sofascore-embed-${activeEventId}`}
-                                src={`https://www.sofascore.com/event/${activeEventId}/attack-momentum/embed`}
+                                src={`https://widgets.sofascore.com/embed/attack-momentum?id=${activeEventId}&widgetTitle=Attack%20Momentum&v=2`}
                                 width="100%"
-                                height="480px"
-                                style={{
-                                    border: 'none',
-                                    width: '100%',
-                                    height: '480px',
-                                    display: 'block',
-                                    borderRadius: '0 0 12px 12px',
-                                }}
+                                height="320px"
+                                frameBorder="0"
+                                scrolling="no"
+                                style={{ border: "none", overflow: "hidden" }}
                                 title={`SofaScore Live Attack Momentum - ${home} vs ${away}`}
                                 loading="lazy"
-                                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                             />
+                            <div className="flex items-center justify-between border-t border-white/10 bg-neutral-900/80 px-3.5 py-2 text-xs">
+                                <span className="text-[11px] text-slate-400">
+                                    Nếu biểu đồ không tải hoặc bị chặn kết nối:
+                                </span>
+                                <a
+                                    href={`https://www.sofascore.com/event/${activeEventId}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 font-semibold text-indigo-300 hover:text-indigo-100 hover:underline transition"
+                                >
+                                    Xem trực tiếp trên SofaScore (Tab mới) ↗
+                                </a>
+                            </div>
                         </div>
                     )}
                 </div>
