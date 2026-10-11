@@ -86,6 +86,8 @@ export function useLiveMatchSync({
                             possession: mStats?.possession ?? { home: 50, away: 50 },
                             fouls: mStats?.fouls ?? { home: 0, away: 0 },
                             accuratePasses: mStats?.accuratePasses ?? { home: 0, away: 0 },
+                            detailedStats: fullLive.detailedStats,
+                            rawStatistics: fullLive.rawStatistics,
                             isFinished: fullLive.isFinished,
                             lastUpdated: fullLive.lastUpdated || Date.now(),
                         }

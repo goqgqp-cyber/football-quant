@@ -8,7 +8,7 @@ import { ProgressSteps, type Step } from '../components/ui/ProgressSteps'
 import { Skeleton } from '../components/ui/RefractionFilter'
 import { api, collectStream, type ExtractedRow } from '../lib/api'
 import { useSettings } from '../hooks/useSettings'
-import { LiveMatchTracker } from '../components/LiveMatchTracker'
+import { MatchLiveStatsHub } from '../components/MatchLiveStatsHub'
 import { analyzeMatch, filterRecommendedPicks } from '../lib/engine'
 import { prependLocalHistoryItem } from '../lib/historyStorage'
 import { useLiveMatchSync } from '../hooks/useLiveMatchSync'
@@ -701,16 +701,13 @@ export function AnalyzePage() {
                 
             </GlassCard>
 
-            {/* Theo dõi trận đấu Live & Tự động đối soát (Live Match Tracker) */}
-            <LiveMatchTracker
+            {/* Số liệu thống kê trận đấu chuyên sâu (Match Stats Hub) */}
+            <MatchLiveStatsHub
                 key={`${input.homeTeam}-${input.awayTeam}-${fixtureId}`}
                 home={input.homeTeam}
                 away={input.awayTeam}
-                eventId={fixtureId ? Number(fixtureId) : undefined}
-                recordId={savedId}
-                onSettled={(settled) => {
-                    console.log('Trận đấu đã tự động đối soát kết quả:', settled)
-                }}
+                fixtureId={fixtureId ? Number(fixtureId) : undefined}
+                initialLiveData={currentLiveData ?? undefined}
             />
 
             {/* Số liệu nền tảng: thật từ Qwen AI Engine & API-Football (Bước A) */}

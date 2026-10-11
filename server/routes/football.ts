@@ -9,6 +9,7 @@
 
 import { Hono } from 'hono'
 import {
+    extractDetailedFixtureStatistics,
     extractFixtureEvents,
     extractFixtureStatistics,
     fetchApiFootball,
@@ -87,8 +88,11 @@ footballApp.get('/fixtures/:id/statistics', async (c) => {
     if (!id || isNaN(id)) {
         return c.json({ error: 'invalid_id', message: 'ID trận đấu không hợp lệ.' }, 400)
     }
-    const stats = await extractFixtureStatistics(id)
-    return c.json({ fixtureId: id, statistics: stats })
+    const [stats, { detailed, raw }] = await Promise.all([
+        extractFixtureStatistics(id),
+        extractDetailedFixtureStatistics(id),
+    ])
+    return c.json({ fixtureId: id, statistics: stats, detailedStats: detailed, rawStatistics: raw })
 })
 
 // GET /api/football/fixtures/:id/events
@@ -108,9 +112,11 @@ footballApp.get('/fixtures/:id/live', async (c) => {
         return c.json({ error: 'invalid_id', message: 'ID trận đấu không hợp lệ.' }, 400)
     }
 
-    const [statusData, eventsData] = await Promise.all([
+    const isFinishedHint = false // không biết trước, để cache ngắn
+    const [statusData, eventsData, detailedResult] = await Promise.all([
         getMatchLiveStatus('', '', id),
         extractFixtureEvents(id),
+        extractDetailedFixtureStatistics(id, isFinishedHint),
     ])
 
     if (!statusData.found) {
@@ -139,6 +145,8 @@ footballApp.get('/fixtures/:id/live', async (c) => {
             fouls: statusData.fouls,
             accuratePasses: statusData.accuratePasses,
         },
+        detailedStats: detailedResult.detailed,
+        rawStatistics: detailedResult.raw,
         incidents: eventsData,
         isFinished: statusData.isFinished,
         lastUpdated: statusData.lastUpdated,

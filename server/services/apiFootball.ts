@@ -9,7 +9,7 @@
 
 import { env } from '../env.js'
 import { keys, redis } from '../redis.js'
-import type { LiveMatchData } from '../../src/lib/types.js'
+import type { LiveMatchData, DetailedMatchStatistics } from '../../src/lib/types.js'
 
 export const API_FOOTBALL_BASE_URL = 'https://v3.football.api-sports.io'
 
@@ -327,6 +327,108 @@ export async function extractFixtureStatistics(
         fouls: { home: foulsHome, away: foulsAway },
         accuratePasses: { home: passAccHome, away: passAccAway },
     }
+}
+
+/**
+ * Trích xuất thống kê chi tiết đầy đủ 4 nhóm (A–D) từ API-Football.
+ * Tái sử dụng cùng endpoint /fixtures/statistics nhưng parse sâu hơn,
+ * trả về DetailedMatchStatistics + mảng raw để frontend Hub dùng trực tiếp.
+ */
+export async function extractDetailedFixtureStatistics(
+    fixtureId: number,
+    isFinished = false,
+): Promise<{ detailed: DetailedMatchStatistics; raw: ApiFootballTeamStats[] }> {
+    const ttl = isFinished ? 86400 : 30
+    const list = await fetchApiFootball<ApiFootballTeamStats[]>('fixtures/statistics', { fixture: fixtureId }, ttl)
+
+    const z = () => ({ homeCount: 0, homePct: 0, awayCount: 0, awayPct: 0 })
+    const emptyDetailed: DetailedMatchStatistics = {
+        possession: { home: 50, away: 50 },
+        totalPasses: { home: 0, away: 0 },
+        accuratePasses: z(),
+        accurateCrosses: z(),
+        accurateLongBalls: z(),
+        shotsTotal: { home: 0, away: 0 },
+        shotsOnGoal: { home: 0, away: 0 },
+        shotsOffGoal: { home: 0, away: 0 },
+        shotsBlocked: { home: 0, away: 0 },
+        goalkeeperSaves: { home: 0, away: 0 },
+        corners: { home: 0, away: 0 },
+        fouls: { home: 0, away: 0 },
+        yellowCards: { home: 0, away: 0 },
+        redCards: { home: 0, away: 0 },
+        offsides: { home: 0, away: 0 },
+        tackles: { home: 0, away: 0 },
+        interceptions: { home: 0, away: 0 },
+        clearances: { home: 0, away: 0 },
+    }
+    if (!list || list.length < 2) return { detailed: emptyDetailed, raw: [] }
+
+    const ht = list[0]
+    const at = list[1]
+
+    const n = (team: ApiFootballTeamStats, t: string): number => {
+        const it = team.statistics.find((s) => s.type.toLowerCase() === t.toLowerCase())
+        if (!it || it.value === null || it.value === undefined) return 0
+        if (typeof it.value === 'number') return it.value
+        const p = parseInt(String(it.value).replace('%', '').trim(), 10)
+        return isNaN(p) ? 0 : p
+    }
+    const pct = (team: ApiFootballTeamStats, t: string): number => {
+        const it = team.statistics.find((s) => s.type.toLowerCase() === t.toLowerCase())
+        if (!it || it.value === null || it.value === undefined) return 0
+        const p = parseFloat(String(it.value).replace('%', '').trim())
+        return isNaN(p) ? 0 : p
+    }
+
+    let possH = n(ht, 'Ball Possession'), possA = n(at, 'Ball Possession')
+    if (possH === 0 && possA === 0) { possH = 50; possA = 50 }
+
+    const passH = n(ht, 'Passes accurate'), passA = n(at, 'Passes accurate')
+    const passPctH = pct(ht, 'Passes %'), passPctA = pct(at, 'Passes %')
+
+    const crossH = n(ht, 'Accurate Crosses') || n(ht, 'Crosses')
+    const crossA = n(at, 'Accurate Crosses') || n(at, 'Crosses')
+    const crossTH = n(ht, 'Total Crosses') || crossH
+    const crossTA = n(at, 'Total Crosses') || crossA
+
+    const lbH = n(ht, 'Accurate Long Balls') || n(ht, 'Long Balls')
+    const lbA = n(at, 'Accurate Long Balls') || n(at, 'Long Balls')
+    const lbTH = n(ht, 'Total Long Balls') || lbH
+    const lbTA = n(at, 'Total Long Balls') || lbA
+
+    const xgH = n(ht, 'expected_goals') || n(ht, 'Expected Goals')
+    const xgA = n(at, 'expected_goals') || n(at, 'Expected Goals')
+
+    const detailed: DetailedMatchStatistics = {
+        possession: { home: possH, away: possA },
+        totalPasses: { home: n(ht, 'Total passes'), away: n(at, 'Total passes') },
+        accuratePasses: { homeCount: passH, homePct: passPctH, awayCount: passA, awayPct: passPctA },
+        accurateCrosses: {
+            homeCount: crossH, homePct: crossTH > 0 ? Math.round(crossH / crossTH * 100) : 0,
+            awayCount: crossA, awayPct: crossTA > 0 ? Math.round(crossA / crossTA * 100) : 0,
+        },
+        accurateLongBalls: {
+            homeCount: lbH, homePct: lbTH > 0 ? Math.round(lbH / lbTH * 100) : 0,
+            awayCount: lbA, awayPct: lbTA > 0 ? Math.round(lbA / lbTA * 100) : 0,
+        },
+        shotsTotal: { home: n(ht, 'Total Shots'), away: n(at, 'Total Shots') },
+        shotsOnGoal: { home: n(ht, 'Shots on Goal'), away: n(at, 'Shots on Goal') },
+        shotsOffGoal: { home: n(ht, 'Shots off Goal'), away: n(at, 'Shots off Goal') },
+        shotsBlocked: { home: n(ht, 'Blocked Shots'), away: n(at, 'Blocked Shots') },
+        goalkeeperSaves: { home: n(ht, 'Goalkeeper Saves') || n(ht, 'Saves'), away: n(at, 'Goalkeeper Saves') || n(at, 'Saves') },
+        ...(xgH > 0 || xgA > 0 ? { expectedGoals: { home: xgH, away: xgA } } : {}),
+        corners: { home: n(ht, 'Corner Kicks'), away: n(at, 'Corner Kicks') },
+        fouls: { home: n(ht, 'Fouls'), away: n(at, 'Fouls') },
+        yellowCards: { home: n(ht, 'Yellow Cards'), away: n(at, 'Yellow Cards') },
+        redCards: { home: n(ht, 'Red Cards'), away: n(at, 'Red Cards') },
+        offsides: { home: n(ht, 'Offsides'), away: n(at, 'Offsides') },
+        tackles: { home: n(ht, 'Tackles'), away: n(at, 'Tackles') },
+        interceptions: { home: n(ht, 'Interceptions') || n(ht, 'Interception'), away: n(at, 'Interceptions') || n(at, 'Interception') },
+        clearances: { home: n(ht, 'Clearances') || n(ht, 'Clearance'), away: n(at, 'Clearances') || n(at, 'Clearance') },
+    }
+
+    return { detailed, raw: list }
 }
 
 /**

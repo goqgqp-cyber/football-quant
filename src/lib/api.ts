@@ -8,6 +8,7 @@ import type {
     ActualResult,
     AnalysisResult,
     CalibrationBin,
+    DetailedMatchStatistics,
     Explanation,
     LiveMatchData,
     MatchData,
@@ -601,6 +602,11 @@ export const api = {
                 fouls?: { home: number; away: number }
                 accuratePasses?: { home: number; away: number }
             }
+            detailedStats?: DetailedMatchStatistics
+            rawStatistics?: Array<{
+                team: { id: number; name: string; logo?: string }
+                statistics: Array<{ type: string; value: number | string | null }>
+            }>
             incidents?: Array<Record<string, unknown>>
             isFinished: boolean
             lastUpdated: number

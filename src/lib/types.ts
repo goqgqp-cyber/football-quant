@@ -140,6 +140,43 @@ export interface SettledPick {
     profit: number
 }
 
+export interface AccurateWithPct {
+    homeCount: number
+    homePct: number
+    awayCount: number
+    awayPct: number
+}
+
+/** Thống kê chi tiết chuyên sâu chia 4 nhóm theo layout chuẩn API-Football */
+export interface DetailedMatchStatistics {
+    // Nhóm A: Kiểm soát bóng & Phân phối (Passing & Distribution)
+    possession: { home: number; away: number }
+    totalPasses: { home: number; away: number }
+    accuratePasses: AccurateWithPct
+    accurateCrosses: AccurateWithPct
+    accurateLongBalls: AccurateWithPct
+
+    // Nhóm B: Tấn công & Dứt điểm (Attacking & Threat)
+    shotsTotal: { home: number; away: number }
+    shotsOnGoal: { home: number; away: number }
+    shotsOffGoal: { home: number; away: number }
+    shotsBlocked: { home: number; away: number }
+    goalkeeperSaves: { home: number; away: number }
+    expectedGoals?: { home: number; away: number }
+
+    // Nhóm C: Tình huống cố định & Tranh chấp (Discipline & Set Pieces)
+    corners: { home: number; away: number }
+    fouls: { home: number; away: number }
+    yellowCards: { home: number; away: number }
+    redCards: { home: number; away: number }
+    offsides: { home: number; away: number }
+
+    // Nhóm D: Phòng ngự & Thu hồi bóng (Defensive Duels)
+    tackles: { home: number; away: number }
+    interceptions: { home: number; away: number }
+    clearances: { home: number; away: number }
+}
+
 /** Dữ liệu trận đấu thời gian thực từ API-Football (v3.football.api-sports.io). */
 export interface LiveMatchData {
     found: boolean
@@ -147,6 +184,8 @@ export interface LiveMatchData {
     fixtureId?: number
     homeTeam?: string
     awayTeam?: string
+    homeLogo?: string
+    awayLogo?: string
     league?: string
     status?: 'notstarted' | 'inprogress' | 'finished'
     statusDescription?: string
@@ -160,6 +199,11 @@ export interface LiveMatchData {
     possession: { home: number; away: number }
     fouls?: { home: number; away: number }
     accuratePasses?: { home: number; away: number }
+    detailedStats?: DetailedMatchStatistics
+    rawStatistics?: Array<{
+        team: { id: number; name: string; logo?: string }
+        statistics: Array<{ type: string; value: number | string | null }>
+    }>
     isFinished: boolean
     kickoff?: string
     lastUpdated: number
