@@ -3,7 +3,7 @@ import { cors } from 'hono/cors'
 import { env, missingRequired } from './env.js'
 import { csrfProtect } from './middleware.js'
 import { pingRedis, redisDiag } from './redis.js'
-import { authApp } from './routes/auth.js'
+import { authApp, handleSignup } from './routes/auth.js'
 import { dataApp } from './routes/data.js'
 import { extractApp } from './routes/extract.js'
 import { streamApp } from './routes/stream.js'
@@ -68,15 +68,19 @@ app.use('*', async (c, next) => {
     await next()
 })
 
-// CSRF cho mọi method ghi (trừ login/signup/refresh/logout — các route này tự xử lý)
-app.use('/api/*', async (c, next) => {
+// CSRF cho mọi method ghi (trừ login/signup/register/refresh/logout — các route này tự xử lý)
+app.use('*', async (c, next) => {
     const p = c.req.path
     if (
-        p.startsWith('/api/auth/login') ||
-        p.startsWith('/api/auth/signup') ||
-        p.startsWith('/api/auth/refresh') ||
-        p.startsWith('/api/auth/logout') ||
-        p.startsWith('/api/auth/csrf')
+        p.includes('/auth/login') ||
+        p.includes('/auth/signup') ||
+        p.includes('/auth/register') ||
+        p.includes('/auth/refresh') ||
+        p.includes('/auth/logout') ||
+        p.includes('/auth/csrf') ||
+        p === '/api/login' ||
+        p === '/api/signup' ||
+        p === '/api/register'
     ) {
         return next()
     }
@@ -105,7 +109,12 @@ app.get('/api/health', async (c) => {
 // (vercel.json rewrite `/api/(.*)` → `/api` nên request `/api` cũng phải có handler).
 app.all('/api', (c) => c.json({ ok: true, service: 'football-quant-api' }))
 
+// Auth routes: nhận cả /api/auth/* và /auth/* (nếu serverless tước tiền tố /api)
 app.route('/api/auth', authApp)
+app.route('/auth', authApp)
+app.post('/api/signup', handleSignup)
+app.post('/api/register', handleSignup)
+
 app.route('/api', dataApp)
 app.route('/api', extractApp)
 app.route('/api', streamApp)

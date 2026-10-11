@@ -1,7 +1,6 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { GlassCard } from '../components/ui/GlassCard'
-import { Button } from '../components/ui/Button'
 import { Field, TextInput } from '../components/ui/Field'
 import { useAuth } from '../hooks/useAuth'
 import { ApiError } from '../lib/api'
@@ -87,13 +86,17 @@ export function LoginPage() {
                             </div>
                         )}
 
-                        <Button refract type="submit" disabled={busy} className="mt-1 w-full">
+                        <button
+                            type="submit"
+                            disabled={busy}
+                            className="mt-2 flex h-11 w-full items-center justify-center rounded-lg bg-white px-4 text-sm font-semibold text-black shadow-sm transition hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50"
+                        >
                             {busy
                                 ? 'Đang xử lý…'
                                 : mode === 'login'
                                     ? 'Đăng nhập'
                                     : 'Đăng ký'}
-                        </Button>
+                        </button>
                     </form>
 
                     <button

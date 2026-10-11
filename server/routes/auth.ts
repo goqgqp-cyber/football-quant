@@ -79,8 +79,8 @@ async function issueSession(c: Context, user: AuthUser): Promise<string> {
     return csrf
 }
 
-/** POST /api/auth/signup */
-authApp.post('/signup', async (c) => {
+/** Xử lý tạo tài khoản cho cả /signup và /register */
+export async function handleSignup(c: Context) {
     const body = await c.req.json().catch(() => null)
     const parsed = signupSchema.safeParse(body)
     if (!parsed.success) {
@@ -110,7 +110,11 @@ authApp.post('/signup', async (c) => {
         },
         201,
     )
-})
+}
+
+/** POST /api/auth/signup & POST /api/auth/register */
+authApp.post('/signup', handleSignup)
+authApp.post('/register', handleSignup)
 
 /** POST /api/auth/login */
 authApp.post('/login', async (c) => {

@@ -47,10 +47,25 @@ async function main() {
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ email: 'nobody@example.com', password: 'sai-mat-khau' }),
         })
-        await call('signup (công khai tắt)', '/api/auth/signup', {
+        await call('signup (/api/auth/signup)', '/api/auth/signup', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ email: 'new@example.com', password: 'matkhau123' }),
+        })
+        await call('register (/api/auth/register)', '/api/auth/register', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: 'new2@example.com', password: 'matkhau123' }),
+        })
+        await call('signup đường dẫn tước /api (/auth/signup)', '/auth/signup', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: 'new3@example.com', password: 'matkhau123' }),
+        })
+        await call('register đường dẫn tước /api (/auth/register)', '/auth/register', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: 'new4@example.com', password: 'matkhau123' }),
         })
         await call('route không tồn tại', '/api/khong-ton-tai')
     } finally {

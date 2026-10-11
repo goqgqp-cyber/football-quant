@@ -29,7 +29,13 @@ async function readBody(req: IncomingMessage): Promise<Buffer | undefined> {
 function buildUrl(req: IncomingMessage): string {
     const host = (req.headers['x-forwarded-host'] as string) ?? req.headers.host ?? 'localhost'
     const proto = (req.headers['x-forwarded-proto'] as string) ?? 'https'
-    return `${proto}://${host}${req.url ?? '/'}`
+    let rawUrl = req.url ?? '/'
+    // Nếu runtime Serverless của Vercel tước bỏ tiền tố '/api' khi gọi function trong thư mục api/,
+    // tự động bù lại để Hono định tuyến chính xác các route /api/*.
+    if (!rawUrl.startsWith('/api/') && rawUrl !== '/api') {
+        rawUrl = '/api' + (rawUrl.startsWith('/') ? rawUrl : '/' + rawUrl)
+    }
+    return `${proto}://${host}${rawUrl}`
 }
 
 /** Chuyển header Node (có thể là mảng) sang Web Headers. */

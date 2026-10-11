@@ -380,6 +380,13 @@ export const api = {
             skipRefresh: true,
         }),
 
+    register: (email: string, password: string) =>
+        apiFetch<{ user: AuthUser; csrfToken: string }>('/auth/register', {
+            method: 'POST',
+            body: { email, password },
+            skipRefresh: true,
+        }),
+
     logout: () => apiFetch<{ ok: true }>('/auth/logout', { method: 'POST' }),
 
     logoutAll: () => apiFetch<{ ok: true }>('/auth/logout-all', { method: 'POST' }),

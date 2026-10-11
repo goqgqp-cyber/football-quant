@@ -11,6 +11,7 @@ interface AuthState {
     refreshMe: () => Promise<void>
     login: (email: string, password: string) => Promise<void>
     signup: (email: string, password: string) => Promise<void>
+    register: (email: string, password: string) => Promise<void>
     logout: () => Promise<void>
     setBankroll: (n: number) => Promise<void>
 }
@@ -75,9 +76,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(u)
     }, [])
 
+    const register = signup
+
     const value = useMemo<AuthState>(
-        () => ({ user, loading, refreshMe, login, signup, logout, setBankroll }),
-        [user, loading, refreshMe, login, signup, logout, setBankroll],
+        () => ({ user, loading, refreshMe, login, signup, register, logout, setBankroll }),
+        [user, loading, refreshMe, login, signup, register, logout, setBankroll],
     )
 
     return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
