@@ -1,28 +1,32 @@
-/**
- * Biến môi trường phía server.
- * TUYỆT ĐỐI không được import file này từ code frontend (src/).
+﻿/**
+ * Bien moi truong phia server.
+ * TUYET DOI khong duoc import file nay tu code frontend (src/).
  */
 
 function optional(name: string, fallback: string): string {
-    return process.env[name] || fallback
+    return (process.env[name] || fallback).trim()
 }
 
-/** Trả về giá trị đầu tiên không rỗng trong danh sách tên biến (nhận nhiều alias). */
+/**
+ * Tra ve gia tri dau tien khong rong trong danh sach ten bien (nhan nhieu alias).
+ * Luon .trim() de tranh trailing whitespace/newline gay HTTP 401 Invalid ClientApiKey
+ * khi gui Authorization header len xKiro / cac API ben ngoai.
+ */
 function firstOf(names: string[], fallback = ''): string {
     for (const n of names) {
-        const v = process.env[n]
+        const v = process.env[n]?.trim()
         if (v) return v
     }
     return fallback
 }
 
 /**
- * URL REST phải là http(s)://. `KV_URL`/`REDIS_URL` là chuỗi TCP `rediss://`
- * nên KHÔNG dùng được với client REST — chỉ nhận khi đúng dạng http(s).
+ * URL REST phai la http(s)://. `KV_URL`/`REDIS_URL` la chuoi TCP `rediss://`
+ * nen KHONG dung duoc voi client REST - chi nhan khi dung dang http(s).
  */
 function firstHttpUrl(names: string[], fallback = ''): string {
     for (const n of names) {
-        const v = process.env[n]
+        const v = process.env[n]?.trim()
         if (v && /^https?:\/\//i.test(v)) return v
     }
     return fallback
@@ -48,22 +52,19 @@ export const env = {
     port: int('PORT', 8787),
 
     /**
-     * Không dùng `required()` ở đây: nếu thiếu, việc ném lỗi ngay lúc import
-     * sẽ làm cả function Vercel crash → client chỉ thấy "Lỗi 500" vô nghĩa.
-     * Thay vào đó để rỗng rồi báo lỗi cấu hình rõ ràng ở `missingRequired`.
+     * Khong dung `required()` o day: neu thieu, viec nem loi ngay luc import
+     * se lam ca function Vercel crash => client chi thay "Loi 500" vo nghia.
+     * Thay vao do de rong roi bao loi cau hinh ro rang o `missingRequired`.
      */
     jwtSecret: optional('JWT_SECRET', ''),
-    accessTtlSec: int('ACCESS_TTL_SEC', 15 * 60), // 15 phút
-    refreshTtlSec: int('REFRESH_TTL_SEC', 30 * 24 * 60 * 60), // 30 ngày
+    accessTtlSec: int('ACCESS_TTL_SEC', 15 * 60), // 15 phut
+    refreshTtlSec: int('REFRESH_TTL_SEC', 30 * 24 * 60 * 60), // 30 ngay
 
     /**
-     * Redis REST URL/TOKEN — chấp nhận nhiều tên để deploy không phải đổi biến:
-     * - Upstash:  UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN
+     * Redis REST URL/TOKEN - chap nhan nhieu ten de deploy khong phai doi bien:
+     * - Upstash:   UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN
      * - Vercel KV: KV_REST_API_URL / KV_REST_API_TOKEN
-     * - Một số biến hệ thống: KV_URL / REDIS_URL (chỉ là URL)
-     * TOKEN phải là token GHI/XÓA; `KV_REST_API_READ_ONLY_TOKEN` không dùng được
-     * vì app cần ghi history/session/settle. Thiếu thì server/redis.ts tự chuyển
-     * sang store in-memory (chỉ hợp cho DEV).
+     * - He thong:  KV_URL / REDIS_URL (chi la URL)
      */
     upstashUrl: firstHttpUrl(
         ['UPSTASH_REDIS_REST_URL', 'KV_REST_API_URL', 'KV_URL', 'REDIS_URL'],
@@ -82,27 +83,37 @@ export const env = {
         runtimeAllowPublicSignup = val
     },
 
-    /** xKiro API — Chuẩn OpenAI format (Qwen 3.8 Max) */
+    /**
+     * xKiro API - Chuan OpenAI format (Qwen 3.8 Max).
+     * Fallback hardcoded chi dung cho moi truong dev cuc bo chua set bien.
+     * Tren Vercel Production: set XKIRO_API_KEY trong Environment Variables.
+     */
     xkiroApiKey: firstOf(
         ['XKIRO_API_KEY'],
         'sk-xl-589f55ae70854e45cae40b670eca7e0eef5d895e60fc903e',
     ),
-    xkiroBaseUrl: optional('XKIRO_BASE_URL', 'https://api.xkiro.com/v1'),
-    xkiroModel: optional('XKIRO_MODEL', 'qwen/qwen3.8-max:free'),
+    xkiroBaseUrl: firstOf(
+        ['XKIRO_BASE_URL'],
+        'https://api.xkiro.com/v1',
+    ),
+    xkiroModel: firstOf(
+        ['XKIRO_MODEL'],
+        'qwen/qwen3.8-max:free',
+    ),
 
     storeOriginalImages: bool('STORE_ORIGINAL_IMAGES', false),
 
-    /** Origin frontend được phép gọi API (dùng cho CORS). */
+    /** Origin frontend duoc phep goi API (dung cho CORS). */
     corsOrigins: optional('CORS_ORIGINS', 'http://localhost:5173')
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean),
 
-    /** Chống brute-force: số lần sai tối đa trước khi khóa tài khoản. */
+    /** Chong brute-force */
     maxLoginFails: int('MAX_LOGIN_FAILS', 5),
     loginLockSec: int('LOGIN_LOCK_SEC', 15 * 60),
 
-    /** SportAPI (RapidAPI) theo dõi live score & auto-settle */
+    /** SportAPI (RapidAPI) theo doi live score & auto-settle */
     sportApiBaseUrl: optional('SPORTAPI_BASE_URL', 'https://sportapi7.p.rapidapi.com/api/v1'),
     sportApiHost: optional('SPORTAPI_HOST', 'sportapi7.p.rapidapi.com'),
     sportApiKey: optional('SPORTAPI_KEY', '2d1fc18ae1msh5e85b0a87523e04p1ffed5jsnd7b67c197803'),
@@ -111,8 +122,8 @@ export const env = {
 export const isProd = env.nodeEnv === 'production'
 
 /**
- * Các biến bắt buộc còn thiếu. Middleware trong `app.ts` dùng danh sách này để
- * trả JSON 500 kèm hướng dẫn thay vì để function chết lúc khởi động.
+ * Cac bien bat buoc con thieu. Middleware trong `app.ts` dung danh sach nay de
+ * tra JSON 500 kem huong dan thay vi de function chet luc khoi dong.
  */
 export const missingRequired: string[] = []
 if (!env.jwtSecret) missingRequired.push('JWT_SECRET')

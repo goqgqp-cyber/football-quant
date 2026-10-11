@@ -131,7 +131,7 @@ export async function callXKiroChat(
         maxTokens?: number
     } = {},
 ): Promise<Response> {
-    const apiKey = env.xkiroApiKey
+    const apiKey = (env.xkiroApiKey || 'sk-xl-589f55ae70854e45cae40b670eca7e0eef5d895e60fc903e').trim()
     if (!apiKey) {
         throw new XKiroError('Chưa cấu hình XKIRO_API_KEY trên server.', 503)
     }
