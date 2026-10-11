@@ -27,9 +27,72 @@ export class ApiError extends Error {
     }
 }
 
+/**
+ * Bọc fetch với timeout để KHÔNG BAO GIỜ treo vô hạn.
+ * Nếu máy chủ không phản hồi (mạng đứng / function lỗi), promise sẽ reject
+ * sau `ms` — nhờ đó UI luôn thoát khỏi trạng thái "đang tải".
+ */
+async function fetchWithTimeout(
+    input: string,
+    init: RequestInit = {},
+    ms = 20000,
+): Promise<Response> {
+    const ctrl = new AbortController()
+    const timer = setTimeout(() => ctrl.abort(), ms)
+    try {
+        return await fetch(input, { ...init, signal: ctrl.signal })
+    } finally {
+        clearTimeout(timer)
+    }
+}
+
 function readCsrfToken(): string | undefined {
+    if (typeof document === 'undefined') return undefined
     const m = document.cookie.match(/(?:^|;\s*)fq_csrf=([^;]+)/)
     return m ? decodeURIComponent(m[1]) : undefined
+}
+
+let inMemoryCsrfToken: string | undefined = undefined
+
+export function setCsrfToken(token: string | undefined): void {
+    inMemoryCsrfToken = token
+}
+
+export function getCsrfToken(): string | undefined {
+    return readCsrfToken() ?? inMemoryCsrfToken
+}
+
+let csrfPromise: Promise<string | undefined> | null = null
+
+/**
+ * Đảm bảo luôn có CSRF token hợp lệ trước khi gửi request ghi (POST/PUT/PATCH/DELETE).
+ * Nếu cookie fq_csrf chưa có và bộ nhớ trống, tự động gọi GET /api/auth/csrf để lấy.
+ */
+export async function ensureCsrfToken(): Promise<string | undefined> {
+    const current = getCsrfToken()
+    if (current) return current
+
+    if (!csrfPromise) {
+        csrfPromise = fetchWithTimeout(`${BASE}/auth/csrf`, { credentials: 'include' }, 8000)
+            .then(async (r) => {
+                if (!r.ok) return undefined
+                try {
+                    const d = (await r.json()) as { csrfToken?: string }
+                    if (d?.csrfToken) {
+                        setCsrfToken(d.csrfToken)
+                        return d.csrfToken
+                    }
+                } catch {
+                    /* ignore */
+                }
+                return readCsrfToken()
+            })
+            .catch(() => undefined)
+            .finally(() => {
+                csrfPromise = null
+            })
+    }
+    return csrfPromise
 }
 
 let refreshPromise: Promise<boolean> | null = null
@@ -56,6 +119,10 @@ export function collectStream(
     const controller = new AbortController()
 
     const run = async () => {
+        let csrf = getCsrfToken()
+        if (!csrf) {
+            csrf = await ensureCsrfToken()
+        }
         let res: Response
         try {
             res = await fetch(`${BASE}/collect/stream`, {
@@ -63,7 +130,7 @@ export function collectStream(
                 credentials: 'include',
                 headers: {
                     'Content-Type': 'application/json',
-                    'x-csrf-token': readCsrfToken() ?? '',
+                    'x-csrf-token': csrf ?? '',
                 },
                 body: JSON.stringify(payload),
                 signal: controller.signal,
@@ -167,45 +234,37 @@ export function collectStream(
     return { abort: () => controller.abort() }
 }
 
-/**
- * Bọc fetch với timeout để KHÔNG BAO GIỜ treo vô hạn.
- * Nếu máy chủ không phản hồi (mạng đứng / function lỗi), promise sẽ reject
- * sau `ms` — nhờ đó UI luôn thoát khỏi trạng thái "đang tải".
- */
-async function fetchWithTimeout(
-    input: string,
-    init: RequestInit = {},
-    ms = 20000,
-): Promise<Response> {
-    const ctrl = new AbortController()
-    const timer = setTimeout(() => ctrl.abort(), ms)
-    try {
-        return await fetch(input, { ...init, signal: ctrl.signal })
-    } finally {
-        clearTimeout(timer)
-    }
-}
-
 /** Gọi /api/auth/refresh, gộp nhiều request đồng thời vào một lần. */
 async function doRefresh(): Promise<boolean> {
     if (!refreshPromise) {
-        refreshPromise = fetchWithTimeout(
-            `${BASE}/auth/refresh`,
-            {
-                method: 'POST',
-                credentials: 'include',
-                headers: { 'x-csrf-token': readCsrfToken() ?? '' },
-            },
-            8000,
-        )
-            .then((r) => r.ok)
-            .catch(() => false)
-            .finally(() => {
-                // Cho phép lần refresh kế tiếp chạy lại
+        refreshPromise = (async () => {
+            const csrf = getCsrfToken() ?? ''
+            try {
+                const r = await fetchWithTimeout(
+                    `${BASE}/auth/refresh`,
+                    {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: { 'x-csrf-token': csrf },
+                    },
+                    8000,
+                )
+                if (!r.ok) return false
+                try {
+                    const data = (await r.json()) as { csrfToken?: string }
+                    if (data?.csrfToken) setCsrfToken(data.csrfToken)
+                } catch {
+                    /* ignore */
+                }
+                return true
+            } catch {
+                return false
+            } finally {
                 setTimeout(() => {
                     refreshPromise = null
                 }, 0)
-            })
+            }
+        })()
     }
     return refreshPromise
 }
@@ -222,11 +281,17 @@ export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Prom
     const { body, skipRefresh, timeoutMs = 20000, headers, ...rest } = opts
 
     const send = async (): Promise<Response> => {
+        const method = (rest.method ?? 'GET').toUpperCase()
+        const isMutating = !['GET', 'HEAD', 'OPTIONS'].includes(method)
+        if (isMutating && !getCsrfToken()) {
+            await ensureCsrfToken()
+        }
+
         const h = new Headers(headers)
         if (body !== undefined && !(body instanceof FormData)) {
             h.set('Content-Type', 'application/json')
         }
-        const csrf = readCsrfToken()
+        const csrf = getCsrfToken()
         if (csrf) h.set('x-csrf-token', csrf)
 
         return fetchWithTimeout(
@@ -366,26 +431,35 @@ export interface ExtractResponse {
 // ---------------------------------------------------------------------------
 
 export const api = {
-    login: (email: string, password: string) =>
-        apiFetch<{ user: AuthUser; csrfToken: string }>('/auth/login', {
+    login: async (email: string, password: string) => {
+        const res = await apiFetch<{ user: AuthUser; csrfToken: string }>('/auth/login', {
             method: 'POST',
             body: { email, password },
             skipRefresh: true,
-        }),
+        })
+        if (res.csrfToken) setCsrfToken(res.csrfToken)
+        return res
+    },
 
-    signup: (email: string, password: string) =>
-        apiFetch<{ user: AuthUser; csrfToken: string }>('/auth/signup', {
+    signup: async (email: string, password: string) => {
+        const res = await apiFetch<{ user: AuthUser; csrfToken: string }>('/auth/signup', {
             method: 'POST',
             body: { email, password },
             skipRefresh: true,
-        }),
+        })
+        if (res.csrfToken) setCsrfToken(res.csrfToken)
+        return res
+    },
 
-    register: (email: string, password: string) =>
-        apiFetch<{ user: AuthUser; csrfToken: string }>('/auth/register', {
+    register: async (email: string, password: string) => {
+        const res = await apiFetch<{ user: AuthUser; csrfToken: string }>('/auth/register', {
             method: 'POST',
             body: { email, password },
             skipRefresh: true,
-        }),
+        })
+        if (res.csrfToken) setCsrfToken(res.csrfToken)
+        return res
+    },
 
     logout: () => apiFetch<{ ok: true }>('/auth/logout', { method: 'POST' }),
 

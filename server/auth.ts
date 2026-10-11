@@ -96,8 +96,8 @@ function baseCookie(name: string, value: string, o: CookieOpts): string {
         'Path=/',
         `Max-Age=${o.maxAge}`,
         'SameSite=Lax',
-        `HttpOnly=${o.httpOnly ? 'true' : 'false'}`,
     ]
+    if (o.httpOnly) parts.push('HttpOnly')
     // Secure chỉ bật ở production (HTTPS) — ở local http sẽ bị trình duyệt chặn cookie
     if (isProd) parts.push('Secure')
     return parts.join('; ')

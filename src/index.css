@@ -44,9 +44,9 @@
     --color-platinum-300: #d4d4d8;
     --color-platinum-500: #a1a1aa;
 
-    /* Font — biên tập, sạch, tracking rộng */
+    /* Font — biên tập, sạch, hỗ trợ đầy đủ tiếng Việt */
     --font-sans: 'Inter', 'Be Vietnam Pro', system-ui, -apple-system, 'Segoe UI', sans-serif;
-    --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+    --font-display: 'Inter', 'Be Vietnam Pro', system-ui, -apple-system, sans-serif;
 
     /* Chuyển động */
     --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);

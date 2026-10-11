@@ -100,21 +100,7 @@ export function LoginPage() {
                         </button>
                     </form>
 
-                    {mode === 'login' && (
-                        <div className="mt-3 flex justify-center">
-                            <button
-                                type="button"
-                                onClick={() => {
-                                    setEmail('admin@footballquant.local')
-                                    setPassword('vodanh.280987')
-                                    setError(null)
-                                }}
-                                className="text-xs text-ink-500 underline underline-offset-4 transition hover:text-ink-200"
-                            >
-                                Điền nhanh tài khoản Admin (vodanh.280987)
-                            </button>
-                        </div>
-                    )}
+
 
                     <button
                         type="button"

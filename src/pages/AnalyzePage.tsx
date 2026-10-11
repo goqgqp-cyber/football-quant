@@ -620,7 +620,6 @@ export function AnalyzePage() {
                     </div>
                     <div className="mt-3 flex gap-2">
                         <Button
-                            refract
                             onClick={() => {
                                 if (confirmRows) {
                                     setOddsLines(confirmRows.map((r) => r.line))
@@ -688,9 +687,14 @@ export function AnalyzePage() {
                     </div>
                 )}
                 <div className="mt-4">
-                    <Button refract onClick={() => void runAnalysis()} disabled={running || oddsLines.length === 0}>
+                    <button
+                        type="button"
+                        onClick={() => void runAnalysis()}
+                        disabled={running || oddsLines.length === 0}
+                        className="inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg bg-white text-black font-semibold hover:bg-neutral-100 transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
                         {running ? 'Đang phân tích…' : 'Phân tích ngay'}
-                    </Button>
+                    </button>
                 </div>
                 {error && <p className="mt-2 text-xs text-danger-400">{error}</p>}
                 {savedId && !error && (
