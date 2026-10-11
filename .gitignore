@@ -24,4 +24,4 @@ server/dist/
 .worktree/
 
 # Build output của function Vercel (tự sinh bởi `npm run build:api`)
-api/\[\[...route\]\].js
+api/\[...route\].js
