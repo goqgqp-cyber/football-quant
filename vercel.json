@@ -18,10 +18,10 @@
         },
         {
             "source": "/api",
-            "destination": "/api/index"
+            "destination": "/api/[...route]"
         },
         {
-            "source": "/((?!api).*)",
+            "source": "/(.*)",
             "destination": "/index.html"
         }
     ]

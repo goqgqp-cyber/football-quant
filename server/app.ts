@@ -121,8 +121,11 @@ app.post('/api/signup', handleSignup)
 app.post('/api/register', handleSignup)
 
 app.route('/api', dataApp)
+app.route('', dataApp)
 app.route('/api', extractApp)
+app.route('', extractApp)
 app.route('/api', streamApp)
+app.route('', streamApp)
 app.route('/api/admin', adminApp)
 app.route('/admin', adminApp)
 

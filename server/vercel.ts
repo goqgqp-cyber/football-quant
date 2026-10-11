@@ -29,7 +29,26 @@ async function readBody(req: IncomingMessage): Promise<Buffer | undefined> {
 function buildUrl(req: IncomingMessage): string {
     const host = (req.headers['x-forwarded-host'] as string) ?? req.headers.host ?? 'localhost'
     const proto = (req.headers['x-forwarded-proto'] as string) ?? 'https'
-    let rawUrl = req.url ?? '/'
+
+    // Ưu tiên x-matched-path hoặc x-invoke-path nếu có trên Vercel
+    const matchedPath = (req.headers['x-matched-path'] as string) || (req.headers['x-invoke-path'] as string)
+    let rawUrl = (matchedPath && !matchedPath.includes('[...route]')) ? matchedPath : (req.url ?? '/')
+
+    // Nếu Vercel rewrite biến rawUrl thành chứa [...route], khôi phục lại route gốc từ query param
+    if (rawUrl.includes('[...route]')) {
+        try {
+            const parsed = new URL(rawUrl, `${proto}://${host}`)
+            const routeParam = parsed.searchParams.get('route')
+            if (routeParam) {
+                parsed.searchParams.delete('route')
+                const search = parsed.searchParams.toString()
+                rawUrl = `/api/${routeParam}${search ? `?${search}` : ''}`
+            }
+        } catch {
+            // fallback
+        }
+    }
+
     // Nếu runtime Serverless của Vercel tước bỏ tiền tố '/api' khi gọi function trong thư mục api/,
     // tự động bù lại để Hono định tuyến chính xác các route /api/*.
     if (!rawUrl.startsWith('/api/') && rawUrl !== '/api') {
