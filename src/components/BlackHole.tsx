@@ -63,9 +63,9 @@ float noise2(vec2 p) {
 float fbm(vec2 p) {
     float s = 0.0;
     float a = 0.5;
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < 6; i++) {
         s += a * noise2(p);
-        p *= 2.03;
+        p = p * 2.03 + vec2(17.3, 9.1);
         a *= 0.5;
     }
     return s;
@@ -99,20 +99,24 @@ float diskDensity(float r, float th, float t) {
     if (r < DISK_IN || r > DISK_OUT) return 0.0;
     float rn = (r - DISK_IN) / (DISK_OUT - DISK_IN);
 
-    // Hồ sơ bán kính: dày trong, mỏng dần ra ngoài
-    float radial = pow(1.0 - rn, 1.7) * smoothstep(0.0, 0.14, rn);
-    radial *= smoothstep(1.0, 0.82, rn);          // cắt mềm rìa ngoài
+    // Hồ sơ bán kính: bờ trong sắc như dao (ISCO), mỏng dần ra ngoài
+    float radial = pow(1.0 - rn, 1.6) * smoothstep(0.0, 0.07, rn);
+    radial *= smoothstep(1.0, 0.86, rn);          // cắt mềm rìa ngoài
 
-    // Tốc độ quay Kepler: omega ~ r^-1.5
-    float omega = 1.05 / pow(r, 1.5);
-    float ang   = th - omega * t * 2.4;
+    // Vành sáng ISCO: mép trong rực nhất, đúng chất Gargantua
+    float rim = smoothstep(0.30, 0.02, rn) * (1.0 - smoothstep(0.0, 0.015, rn));
 
-    // Dải xoáy ốc + nhiễu turbulence (chuyển động liên tục, không seam)
-    float bands  = fbm(vec2(ang * 2.1 + rn * 7.0, rn * 3.2 - t * 0.12));
-    float spiral = 0.42 + 0.78 * bands;
-    float fine   = 0.80 + 0.36 * fbm(vec2(ang * 8.5, rn * 15.0 - t * 0.38));
+    // Quay Kepler: omega ~ r^-1.5 — đĩa xoay LIÊN TỤC quanh hố đen
+    float omega = 1.35 / pow(r, 1.5);
+    float ang   = th - omega * t * 3.0;
 
-    return radial * spiral * fine;
+    // Dải xoáy ốc lớn + chi tiết mịn + vân siêu mịn (độ nét 4K)
+    float bands  = fbm(vec2(ang * 2.6 + rn * 9.0, rn * 4.0 - t * 0.16));
+    float spiral = 0.36 + 0.92 * bands;
+    float fine   = 0.72 + 0.46 * fbm(vec2(ang * 11.0, rn * 21.0 - t * 0.55));
+    float micro  = 0.82 + 0.36 * fbm(vec2(ang * 23.0 + rn * 34.0, rn * 44.0 - t * 1.1));
+
+    return radial * spiral * fine * micro + rim * (0.55 + 0.45 * fine);
 }
 
 // ---------- Doppler beaming ----------
@@ -178,9 +182,9 @@ void main() {
         vec3 g = p / max(r, 1e-3);
         dir = normalize(dir - g * (BEND * dt / (r * r)));
 
-        // --- Quầng photon: hào quang sáng ngay ngoài chân trời ---
-        float ring = smoothstep(RS * 1.02, RS * 1.06, r) * smoothstep(RS * 2.10, RS * 1.30, r);
-        diskGlow += ring * dt * 2.2 * trans;
+        // --- Vòng photon: sợi sáng mảnh ôm sát chân trời sự kiện ---
+        float ring = smoothstep(RS * 1.004, RS * 1.018, r) * smoothstep(RS * 2.00, RS * 1.18, r);
+        diskGlow += ring * dt * 3.4 * trans;
 
         // --- Giao với mặt phẳng đĩa (y = 0) ---
         if (p.y * pPrev.y < 0.0) {
@@ -199,8 +203,8 @@ void main() {
 
                 // Màu đơn sắc, hơi lệch sang bạch kim lạnh
                 vec3 emitCol = vec3(1.0, 1.0, 1.0) * emis;
-                col += emitCol * trans * 0.135;
-                trans *= exp(-dens * 0.55);
+                col += emitCol * trans * 0.15;
+                trans *= exp(-dens * 0.50);
             }
         }
 
@@ -271,7 +275,7 @@ export function BlackHole() {
         let buf: WebGLBuffer | null = null
 
         const isSmall = window.matchMedia('(max-width: 768px)').matches
-        const steps = isSmall ? 90 : 150
+        const steps = isSmall ? 120 : 210
 
         try {
             const vs = compile(gl, gl.VERTEX_SHADER, VERT)
