@@ -156,6 +156,31 @@ export interface AnalyzePayload {
     oddsLines: OddsLine[]
 }
 
+/** Một dòng kèo Gemini đọc được từ ảnh, kèm mức tin cậy của model. */
+export interface ExtractedRow {
+    kind: 'totals' | 'ah'
+    side: 'over' | 'under' | 'home' | 'away'
+    line: number
+    odds: number
+    /** 0..1 — dưới 0.8 UI sẽ cảnh báo người dùng kiểm tra lại. */
+    confidence: number
+    note?: string
+}
+
+export interface ExtractResponse {
+    rows: ExtractedRow[]
+    meta: {
+        home?: string
+        away?: string
+        league?: string
+        kickoff?: string | null
+        confidence?: number
+    }
+    lowConfidence: boolean
+    note?: string
+    model: string
+}
+
 // ---------------------------------------------------------------------------
 // Endpoint helpers
 // ---------------------------------------------------------------------------
@@ -205,4 +230,14 @@ export const api = {
     stats: () => apiFetch<StatsResponse>('/stats'),
 
     suggestedLines: () => apiFetch<{ lines: OddsLine[] }>('/suggested-lines'),
+
+    /** Gửi ảnh bảng kèo lên server để Gemini đọc (G3). */
+    extract: (files: File[], hint: { home?: string; away?: string; league?: string }) => {
+        const fd = new FormData()
+        for (const f of files) fd.append('images', f)
+        if (hint.home) fd.append('home', hint.home)
+        if (hint.away) fd.append('away', hint.away)
+        if (hint.league) fd.append('league', hint.league)
+        return apiFetch<ExtractResponse>('/extract', { method: 'POST', body: fd })
+    },
 }

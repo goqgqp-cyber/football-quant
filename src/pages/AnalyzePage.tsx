@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import { GlassCard } from '../components/ui/GlassCard'
 import { Button } from '../components/ui/Button'
@@ -6,7 +6,7 @@ import { Field, TextInput } from '../components/ui/Field'
 import { PickCard } from '../components/PickCard'
 import { ProgressSteps, type Step } from '../components/ui/ProgressSteps'
 import { Skeleton } from '../components/ui/RefractionFilter'
-import { ApiError, api } from '../lib/api'
+import { ApiError, api, type ExtractedRow } from '../lib/api'
 import { MOCK_MATCH_DATA, MOCK_MATCH_INPUT, MOCK_ODDS } from '../lib/mock'
 import { useSettings } from '../hooks/useSettings'
 import type { AnalysisResult, MatchData, MatchInput, OddsLine } from '../lib/types'
@@ -15,7 +15,24 @@ type AnalysisStepId = 'collect' | 'extract' | 'compute' | 'explain'
 
 interface ConfirmRow {
     line: OddsLine
+    /** 0..1 — Gemini tự chấm. Dưới 0.8 sẽ hiện cảnh báo đỏ. */
+    confidence: number
     note: string
+}
+
+/** Sinh id ổn định cho dòng kèo đọc từ ảnh (OddsLine cần id duy nhất). */
+function newLineId(): string {
+    if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID()
+    return `x-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+/** Chuẩn hoá dòng Gemini đọc được thành OddsLine + confidence. */
+function toConfirmRow(r: ExtractedRow): ConfirmRow {
+    return {
+        line: { id: newLineId(), kind: r.kind, side: r.side, line: r.line, odds: r.odds },
+        confidence: r.confidence,
+        note: r.note ?? '',
+    }
 }
 
 /**
@@ -32,10 +49,12 @@ export function AnalyzePage() {
     const [oddsLines, setOddsLines] = useState<OddsLine[]>(MOCK_ODDS)
     const [bankroll, setBankroll] = useState(settings.bankroll)
 
-    // ---- Ảnh (G3 placeholder) ----
+    // ---- Ảnh → Gemini đọc kèo (G3) ----
     const [imagePreviews, setImagePreviews] = useState<string[]>([])
     const [confirmRows, setConfirmRows] = useState<ConfirmRow[] | null>(null)
     const [parseHint, setParseHint] = useState<string | null>(null)
+    const [extracting, setExtracting] = useState(false)
+    const [extractNote, setExtractNote] = useState<string | null>(null)
 
     // ---- Stream + kết quả ----
     const [steps, setSteps] = useState<Step[]>([
@@ -92,31 +111,100 @@ export function AnalyzePage() {
         }
     }
 
+    const runExtract = useCallback(
+        async (files: File[]) => {
+            setExtracting(true)
+            setParseHint(null)
+            setExtractNote(null)
+            setConfirmRows(null)
+            try {
+                const res = await api.extract(files, {
+                    home: input.homeTeam,
+                    away: input.awayTeam,
+                    league: input.league,
+                })
+                const rows = res.rows.map(toConfirmRow)
+                setConfirmRows(rows)
+                setExtractNote(res.note ?? null)
+
+                if (rows.length === 0) {
+                    setParseHint(
+                        res.note
+                            ? `Không đọc được kèo nào từ ảnh. ${res.note}`
+                            : 'Không đọc được kèo nào từ ảnh. Hãy chụp rõ bảng odds hoặc nhập tay.',
+                    )
+                    return
+                }
+
+                // Điền tên đội/giải nếu model đọc được và người dùng chưa nhập
+                if (!input.homeTeam && res.meta.home) {
+                    setInput((p) => ({ ...p, homeTeam: res.meta.home as string }))
+                }
+                if (!input.awayTeam && res.meta.away) {
+                    setInput((p) => ({ ...p, awayTeam: res.meta.away as string }))
+                }
+                if (!input.league && res.meta.league) {
+                    setInput((p) => ({ ...p, league: res.meta.league as string }))
+                }
+
+                setParseHint(
+                    res.lowConfidence
+                        ? `Có ${rows.filter((r) => r.confidence < 0.8).length} dòng độ tin cậy thấp (ảnh có thể mờ). Bắt buộc kiểm tra lại trước khi tính.`
+                        : null,
+                )
+            } catch (e) {
+                setParseHint(
+                    e instanceof ApiError
+                        ? e.message
+                        : 'Trích xuất ảnh thất bại. Kiểm tra backend đã chạy và GEMINI_API_KEY đã đặt chưa.',
+                )
+            } finally {
+                setExtracting(false)
+            }
+        },
+        [input.homeTeam, input.awayTeam, input.league],
+    )
+
     const handleFiles = (files: FileList | File[] | null) => {
         if (!files || files.length === 0) return
         const chosen = Array.from(files).slice(0, 4)
+        const valid: File[] = []
         const urls: string[] = []
+        const rejected: string[] = []
         for (const f of chosen) {
             if (!['image/jpeg', 'image/png', 'image/webp'].includes(f.type)) {
-                setParseHint('Chỉ nhận JPEG/PNG/WebP.')
+                rejected.push(`${f.name}: sai định dạng`)
                 continue
             }
             if (f.size > 8 * 1024 * 1024) {
-                setParseHint('Mỗi ảnh tối đa 8 MB.')
+                rejected.push(`${f.name}: vượt 8 MB`)
                 continue
             }
+            valid.push(f)
             urls.push(URL.createObjectURL(f))
         }
         setImagePreviews(urls)
-        // G3: Gemini đọc ảnh trả JSON + confidence. G2 hiển thị odds hiện tại để làm quen luồng sửa → xác nhận.
-        setConfirmRows(
-            oddsLines.map((l) => ({
-                line: { ...l },
-                note: 'Giả lập (G3 thay bằng Gemini đọc ảnh)',
-            })),
-        )
-        setParseHint(null)
+        if (rejected.length > 0) setParseHint(`Bỏ qua — ${rejected.join('; ')}`)
+        if (valid.length > 0) void runExtract(valid)
     }
+
+    /** Dán ảnh từ clipboard. */
+    useEffect(() => {
+        const onPaste = (e: ClipboardEvent) => {
+            const items = e.clipboardData?.items
+            if (!items) return
+            const imgs: File[] = []
+            for (const it of Array.from(items)) {
+                if (it.type.startsWith('image/')) {
+                    const f = it.getAsFile()
+                    if (f) imgs.push(f)
+                }
+            }
+            if (imgs.length > 0) handleFiles(imgs)
+        }
+        window.addEventListener('paste', onPaste)
+        return () => window.removeEventListener('paste', onPaste)
+    })
 
     const valuePicks = useMemo(
         () => (result ? result.picks.filter((p) => p.status === 'value') : []),
@@ -238,10 +326,10 @@ export function AnalyzePage() {
                 )}
             </GlassCard>
 
-            {/* Upload ảnh (G3 placeholder) */}
+            {/* Upload ảnh → Gemini đọc kèo (G3) */}
             <GlassCard>
                 <div className="flex items-center justify-between gap-2">
-                    <p className="font-display text-sm font-bold text-ink-100">Upload ảnh odds</p>
+                    <p className="font-display text-sm font-bold text-ink-100">Upload ảnh odds (Gemini đọc)</p>
                     <span className="text-xs text-ink-500">Tối đa 4 ảnh · JPEG/PNG/WebP · 8 MB/ảnh</span>
                 </div>
                 <div
@@ -252,17 +340,28 @@ export function AnalyzePage() {
                         handleFiles(e.dataTransfer.files)
                     }}
                 >
-                    <p className="text-sm text-ink-300">
-                        Kéo-thả ảnh vào đây, hoặc dán ảnh từ clipboard (Ctrl+V), hoặc chọn file.
-                    </p>
-                    <label className="mt-3 inline-flex cursor-pointer rounded-xl bg-violet-500 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-600">
-                        Chọn ảnh
+                    {extracting ? (
+                        <p className="text-sm text-violet-300">Đang đọc ảnh bằng Gemini…</p>
+                    ) : (
+                        <p className="text-sm text-ink-300">
+                            Kéo-thả ảnh vào đây, hoặc dán ảnh từ clipboard (Ctrl+V), hoặc chọn file.
+                        </p>
+                    )}
+                    <label
+                        className={`mt-3 inline-flex cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${extracting ? 'cursor-not-allowed bg-violet-500/40' : 'bg-violet-500 hover:bg-violet-600'
+                            }`}
+                    >
+                        {extracting ? 'Đang xử lý…' : 'Chọn ảnh'}
                         <input
                             type="file"
                             multiple
                             accept="image/jpeg,image/png,image/webp"
                             className="hidden"
-                            onChange={(e) => handleFiles(e.target.files)}
+                            disabled={extracting}
+                            onChange={(e) => {
+                                handleFiles(e.target.files)
+                                e.target.value = ''
+                            }}
                         />
                     </label>
                     {parseHint && <p className="mt-2 text-xs text-danger-400">{parseHint}</p>}
@@ -281,20 +380,22 @@ export function AnalyzePage() {
                 )}
             </GlassCard>
 
-            {/* Bảng xác nhận số liệu từ ảnh */}
+            {/* Bảng xác nhận số liệu Gemini đọc từ ảnh */}
             {confirmRows && (
                 <GlassCard>
                     <div className="flex items-center justify-between gap-2">
                         <p className="font-display text-sm font-bold text-ink-100">
-                            Xác nhận số liệu Gemini đọc được (G2: giả lập)
+                            Xác nhận số liệu Gemini đọc được
                         </p>
                         <span className="rounded-full bg-warn-500/15 px-2 py-1 text-[11px] font-semibold text-warn-400">
-                            Xác nhận trước khi tính — bắt buộc
+                            Sửa nếu sai rồi mới xác nhận
                         </span>
                     </div>
                     <p className="mt-1 text-xs text-ink-500">
-                        G3 sẽ trích odds/xG/đội hình từ ảnh. G2 hiển thị odds hiện tại để bạn làm quen luồng sửa → xác nhận.
+                        Đây là gợi ý do Gemini đọc từ ảnh, KHÔNG tự động tin. Cột “Tin cậy” là mức tự chấm của model —
+                        dòng dưới 80% nên kiểm tra kỹ.
                     </p>
+                    {extractNote && <p className="mt-1 text-xs text-ink-500">Ghi chú Gemini: {extractNote}</p>}
                     <div className="mt-3 overflow-x-auto rounded-xl border border-white/10">
                         <table className="min-w-full text-sm">
                             <thead className="bg-white/5 text-xs text-ink-500">
@@ -303,23 +404,75 @@ export function AnalyzePage() {
                                     <th className="px-3 py-2 text-left">Bên</th>
                                     <th className="px-3 py-2 text-left">Mốc</th>
                                     <th className="px-3 py-2 text-left">Odds</th>
+                                    <th className="px-3 py-2 text-left">Tin cậy</th>
                                     <th className="px-3 py-2 text-left">Ghi chú</th>
+                                    <th className="px-3 py-2" />
                                 </tr>
                             </thead>
                             <tbody>
                                 {confirmRows.map((r, idx) => (
                                     <tr key={r.line.id} className="border-t border-white/8">
-                                        <td className="px-3 py-1.5">{r.line.kind === 'totals' ? 'Tài/Xỉu' : 'Chấp'}</td>
                                         <td className="px-3 py-1.5">
-                                            <TextInput
+                                            <select
+                                                value={r.line.kind}
+                                                onChange={(e) =>
+                                                    setConfirmRows((prev) =>
+                                                        prev
+                                                            ? prev.map((x, j) =>
+                                                                j === idx
+                                                                    ? {
+                                                                        ...x,
+                                                                        line: {
+                                                                            ...x.line,
+                                                                            kind: e.target.value as OddsLine['kind'],
+                                                                            side:
+                                                                                e.target.value === 'totals'
+                                                                                    ? 'over'
+                                                                                    : 'home',
+                                                                        },
+                                                                    }
+                                                                    : x,
+                                                            )
+                                                            : prev,
+                                                    )
+                                                }
+                                                className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-ink-100"
+                                            >
+                                                <option value="totals">Tài/Xỉu</option>
+                                                <option value="ah">Chấp</option>
+                                            </select>
+                                        </td>
+                                        <td className="px-3 py-1.5">
+                                            <select
                                                 value={r.line.side}
                                                 onChange={(e) =>
                                                     setConfirmRows((prev) =>
-                                                        prev ? prev.map((x, j) => (j === idx ? { ...x, line: { ...x.line, side: e.target.value as never } } : x)) : prev,
+                                                        prev
+                                                            ? prev.map((x, j) =>
+                                                                j === idx
+                                                                    ? {
+                                                                        ...x,
+                                                                        line: {
+                                                                            ...x.line,
+                                                                            side: e.target.value as OddsLine['side'],
+                                                                        },
+                                                                    }
+                                                                    : x,
+                                                            )
+                                                            : prev,
                                                     )
                                                 }
-                                                className="!py-1.5"
-                                            />
+                                                className="rounded-lg border border-white/10 bg-white/5 px-2 py-1 text-xs text-ink-100"
+                                            >
+                                                {(r.line.kind === 'totals'
+                                                    ? ['over', 'under']
+                                                    : ['home', 'away']
+                                                ).map((s) => (
+                                                    <option key={s} value={s}>
+                                                        {s}
+                                                    </option>
+                                                ))}
+                                            </select>
                                         </td>
                                         <td className="px-3 py-1.5">
                                             <TextInput
@@ -347,7 +500,31 @@ export function AnalyzePage() {
                                                 className="!py-1.5"
                                             />
                                         </td>
-                                        <td className="px-3 py-1.5 text-xs text-ink-500">{r.note}</td>
+                                        <td className="px-3 py-1.5">
+                                            <span
+                                                className={`rounded-full px-2 py-1 text-[11px] font-semibold ${r.confidence >= 0.8
+                                                        ? 'bg-value-500/15 text-value-400'
+                                                        : r.confidence >= 0.6
+                                                            ? 'bg-warn-500/15 text-warn-400'
+                                                            : 'bg-danger-500/15 text-danger-400'
+                                                    }`}
+                                            >
+                                                {Math.round(r.confidence * 100)}%
+                                            </span>
+                                        </td>
+                                        <td className="px-3 py-1.5 text-xs text-ink-500">{r.note || '—'}</td>
+                                        <td className="px-3 py-1.5 text-center">
+                                            <button
+                                                className="text-danger-400 hover:text-danger-300"
+                                                onClick={() =>
+                                                    setConfirmRows((prev) =>
+                                                        prev ? prev.filter((_, j) => j !== idx) : prev,
+                                                    )
+                                                }
+                                            >
+                                                ×
+                                            </button>
+                                        </td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -356,10 +533,14 @@ export function AnalyzePage() {
                     <div className="mt-3 flex gap-2">
                         <Button
                             onClick={() => {
-                                if (confirmRows) setOddsLines(confirmRows.map((r) => r.line))
+                                if (confirmRows) {
+                                    setOddsLines(confirmRows.map((r) => r.line))
+                                    setConfirmRows(null)
+                                }
                             }}
+                            disabled={confirmRows.length === 0}
                         >
-                            Xác nhận và đưa vào tính
+                            Xác nhận và đưa vào tính ({confirmRows.length})
                         </Button>
                         <Button variant="ghost" onClick={() => setConfirmRows(null)}>
                             Hủy
