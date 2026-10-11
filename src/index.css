@@ -1,0 +1,274 @@
+@import 'tailwindcss';
+
+/* ==========================================================================
+   FOOTBALL QUANT — Design tokens
+   Tông tối huyền ảo, chủ đạo TÍM. Kiểm tra tương phản WCAG AA cho chữ/nền.
+   ========================================================================== */
+@theme {
+    /* Nền sâu */
+    --color-void-900: #07040f;
+    --color-void-800: #0c0818;
+    --color-void-700: #120a24;
+    --color-void-600: #1a1033;
+
+    /* Tím chính */
+    --color-violet-400: #a78bfa;
+    --color-violet-500: #7c3aed;
+    --color-violet-600: #6d28d9;
+
+    /* Điểm nhấn */
+    --color-magenta-500: #d946ef;
+    --color-indigo-500: #6366f1;
+
+    /* Chữ */
+    --color-ink-100: #f5f3ff;
+    /* chữ chính gần trắng */
+    --color-ink-300: #cbc2e6;
+    /* chữ phụ tím nhạt */
+    --color-ink-500: #9a8fc0;
+
+    /* Ngữ nghĩa */
+    --color-value-400: #2dd4bf;
+    /* Value = xanh ngọc */
+    --color-value-500: #14b8a6;
+    --color-warn-400: #fbbf24;
+    /* TRAP / cảnh báo = hổ phách */
+    --color-warn-500: #f59e0b;
+    --color-danger-400: #fb7185;
+    /* lỗi = đỏ hồng */
+    --color-danger-500: #f43f5e;
+
+    /* Font */
+    --font-sans: 'Inter', 'Be Vietnam Pro', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
+
+    /* Chuyển động */
+    --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+    --dur-fast: 150ms;
+    --dur-base: 250ms;
+    --dur-slow: 400ms;
+}
+
+/* ==========================================================================
+   Base
+   ========================================================================== */
+:root {
+    color-scheme: dark;
+    --glass-blur: 24px;
+    --glass-saturate: 170%;
+    --glass-bg: 0.08;
+    --glass-border: 0.18;
+}
+
+@media (max-width: 640px) {
+    :root {
+        /* Mobile: giảm blur để đỡ tốn GPU */
+        --glass-blur: 16px;
+        --glass-saturate: 150%;
+    }
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+    min-height: 100%;
+}
+
+html {
+    -webkit-text-size-adjust: 100%;
+}
+
+body {
+    margin: 0;
+    font-family: var(--font-sans);
+    color: var(--color-ink-100);
+    background:
+        radial-gradient(1200px 800px at 15% -10%, rgba(124, 58, 237, 0.22), transparent 60%),
+        radial-gradient(1000px 700px at 100% 0%, rgba(217, 70, 239, 0.14), transparent 55%),
+        linear-gradient(160deg, var(--color-void-900) 0%, var(--color-void-700) 55%, #150b2b 100%);
+    background-attachment: fixed;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow-x: hidden;
+}
+
+/* Scrollbar tối */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.03);
+}
+
+::-webkit-scrollbar-thumb {
+    background: linear-gradient(180deg, var(--color-violet-500), var(--color-magenta-500));
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+}
+
+/* Focus ring rõ ràng (a11y) */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--color-violet-400);
+    outline-offset: 2px;
+    border-radius: 8px;
+}
+
+/* ==========================================================================
+   Liquid glass
+   ========================================================================== */
+.glass {
+    position: relative;
+    background: linear-gradient(135deg,
+            rgba(255, 255, 255, calc(var(--glass-bg) + 0.03)),
+            rgba(124, 58, 237, calc(var(--glass-bg) * 0.7)));
+    backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
+    border: 1px solid rgba(255, 255, 255, var(--glass-border));
+    border-radius: 18px;
+    box-shadow:
+        0 10px 30px -12px rgba(0, 0, 0, 0.6),
+        inset 0 1px 0 rgba(255, 255, 255, 0.12);
+}
+
+/* Fallback khi trình duyệt không hỗ trợ backdrop-filter */
+@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
+    .glass {
+        background: linear-gradient(135deg, rgba(26, 16, 51, 0.92), rgba(18, 10, 36, 0.92));
+    }
+}
+
+/* Specular highlight chạy ở góc trên, phản ứng theo con trỏ (CSS var do JS đặt) */
+.glass--specular::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background: radial-gradient(240px 120px at var(--mx, 20%) var(--my, 0%),
+            rgba(255, 255, 255, 0.18),
+            transparent 60%);
+    opacity: 0;
+    transition: opacity var(--dur-base) var(--ease-out-quint);
+}
+
+.glass--specular:hover::before,
+.glass--specular:focus-within::before {
+    opacity: 1;
+}
+
+/* Viền sáng gradient mảnh */
+.glass--edge {
+    background-clip: padding-box;
+}
+
+.glass--edge::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    padding: 1px;
+    pointer-events: none;
+    background: linear-gradient(135deg, rgba(167, 139, 250, 0.7), rgba(217, 70, 239, 0.25), transparent 70%);
+    -webkit-mask:
+        linear-gradient(#000 0 0) content-box,
+        linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor;
+    mask-composite: exclude;
+}
+
+/* ==========================================================================
+   Text helpers
+   ========================================================================== */
+.font-display {
+    font-family: var(--font-display);
+}
+
+.text-gradient {
+    background: linear-gradient(100deg, var(--color-violet-400), var(--color-magenta-500) 60%, var(--color-indigo-500));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+}
+
+/* ==========================================================================
+   Motion primitives
+   ========================================================================== */
+.will-animate {
+    will-change: transform, opacity;
+}
+
+@keyframes shimmer {
+    0% {
+        background-position: -200% 0;
+    }
+
+    100% {
+        background-position: 200% 0;
+    }
+}
+
+.skeleton {
+    background: linear-gradient(100deg,
+            rgba(255, 255, 255, 0.04) 30%,
+            rgba(167, 139, 250, 0.14) 50%,
+            rgba(255, 255, 255, 0.04) 70%);
+    background-size: 200% 100%;
+    animation: shimmer 1.6s infinite linear;
+    border-radius: 12px;
+}
+
+/* Thanh tiến trình có ánh sáng chạy */
+@keyframes sweep {
+    0% {
+        transform: translateX(-100%);
+    }
+
+    100% {
+        transform: translateX(320%);
+    }
+}
+
+.progress-sweep::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    width: 30%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+    animation: sweep 1.4s infinite var(--ease-out-quint);
+}
+
+/* ==========================================================================
+   Reduced motion
+   ========================================================================== */
+@media (prefers-reduced-motion: reduce) {
+
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+        scroll-behavior: auto !important;
+    }
+
+    .skeleton,
+    .progress-sweep::after {
+        animation: none;
+    }
+}
+
+/* Safe area cho thanh nav dưới trên mobile */
+.pb-safe {
+    padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem);
+}
+
+.pt-safe {
+    padding-top: env(safe-area-inset-top, 0px);
+}
