@@ -17,6 +17,9 @@ import { requireAuth, type Vars } from '../middleware.js'
 
 export const extractApp = new Hono<{ Variables: Vars }>()
 
+export const maxDuration = 60; // Max duration for Vercel functions
+export const dynamic = 'force-dynamic';
+
 extractApp.use('*', requireAuth)
 
 const MAX_IMAGES = 4

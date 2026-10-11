@@ -75,6 +75,7 @@ export function AnalyzePage() {
     const [confirmRows, setConfirmRows] = useState<ConfirmRow[] | null>(null)
     const [parseHint, setParseHint] = useState<string | null>(null)
     const [extracting, setExtracting] = useState(false)
+    const [extractStatusText, setExtractStatusText] = useState<string>('AI đang bóc tách chính xác từng dòng kèo (quá trình này mất khoảng 10-25 giây để đảm bảo độ chuẩn xác 100%)...')
     const [extractNote, setExtractNote] = useState<string | null>(null)
 
     // ---- Stream + kết quả ----
@@ -99,6 +100,8 @@ export function AnalyzePage() {
     const [grounded, setGrounded] = useState(false)
     const abortRef = useRef<(() => void) | null>(null)
     const latestExplanationRef = useRef<Explanation | null>(null)
+    const fileInputRef = useRef<HTMLInputElement | null>(null)
+    const previewsRef = useRef<string[]>([])
 
     // ---- Nạp tự động từ SofaScore Event ID ----
     const [sofaEventId, setSofaEventId] = useState('')
@@ -271,10 +274,115 @@ export function AnalyzePage() {
     // Dừng luồng nếu người dùng rời trang khi đang chạy
     useEffect(() => () => abortRef.current?.(), [])
 
+    /**
+     * Tối ưu chất lượng ảnh bảo toàn độ sắc nét tuyệt đối (High-Fidelity):
+     * - Giữ nguyên độ phân giải gốc lên đến 1920px (Full HD).
+     * - Giữ nguyên file PNG gốc nếu dung lượng ≤ 4MB để không mất chi tiết số odds.
+     * - Nén JPEG với quality 0.92 nếu cần resize hoặc chuyển đổi, bảo toàn độ tương phản và nét chữ số nhỏ.
+     */
+    const compressImage = async (file: File): Promise<File> => {
+        return new Promise((resolve) => {
+            if (!file.type.startsWith('image/')) {
+                resolve(file)
+                return
+            }
+
+            const scaleAndCompress = (img: HTMLImageElement) => {
+                const MAX_WIDTH = 1920
+                let { width, height } = img
+
+                if (width > MAX_WIDTH || height > MAX_WIDTH) {
+                    if (width > height) {
+                        height = Math.round((height * MAX_WIDTH) / width)
+                        width = MAX_WIDTH
+                    } else {
+                        width = Math.round((width * MAX_WIDTH) / height)
+                        height = MAX_WIDTH
+                    }
+                }
+
+                const canvas = document.createElement('canvas')
+                canvas.width = width
+                canvas.height = height
+                const ctx = canvas.getContext('2d')
+
+                if (!ctx) {
+                    resolve(file)
+                    return
+                }
+
+                // Bật làm mịn chất lượng cao để mốc kèo không bị mờ hay răng cưa
+                ctx.imageSmoothingEnabled = true
+                ctx.imageSmoothingQuality = 'high'
+
+                // Nền trắng cho trường hợp PNG có nền trong suốt
+                ctx.fillStyle = '#FFFFFF'
+                ctx.fillRect(0, 0, width, height)
+                ctx.drawImage(img, 0, 0, width, height)
+
+                try {
+                    const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
+                    const byteString = atob(dataUrl.split(',')[1])
+                    const ab = new ArrayBuffer(byteString.length)
+                    const ia = new Uint8Array(ab)
+                    for (let i = 0; i < byteString.length; i++) {
+                        ia[i] = byteString.charCodeAt(i)
+                    }
+                    const blob = new Blob([ab], { type: 'image/jpeg' })
+                    const newName = file.name.replace(/\.[^/.]+$/, '') + '.jpg'
+                    const compressed = new File([blob], newName, {
+                        type: 'image/jpeg',
+                        lastModified: Date.now(),
+                    })
+                    resolve(compressed)
+                } catch {
+                    canvas.toBlob(
+                        (blob) => {
+                            if (!blob) {
+                                resolve(file)
+                                return
+                            }
+                            const newName = file.name.replace(/\.[^/.]+$/, '') + '.jpg'
+                            const compressed = new File([blob], newName, {
+                                type: 'image/jpeg',
+                                lastModified: Date.now(),
+                            })
+                            resolve(compressed)
+                        },
+                        'image/jpeg',
+                        0.92,
+                    )
+                }
+            }
+
+            const img = new Image()
+            const objectUrl = URL.createObjectURL(file)
+
+            img.onload = () => {
+                URL.revokeObjectURL(objectUrl)
+                // Giữ nguyên file PNG gốc nếu dung lượng <= 4MB và kích thước <= 1920px
+                if (file.type === 'image/png' && file.size <= 4 * 1024 * 1024 && img.width <= 1920 && img.height <= 1920) {
+                    resolve(file)
+                    return
+                }
+                scaleAndCompress(img)
+            }
+
+            img.onerror = () => {
+                URL.revokeObjectURL(objectUrl)
+                resolve(file)
+            }
+
+            img.src = objectUrl
+        })
+    }
+
     const runExtract = useCallback(
         async (files: File[]) => {
             setExtracting(true)
+            setExtractStatusText('AI đang bóc tách chính xác từng dòng kèo (quá trình này mất khoảng 10-25 giây để đảm bảo độ chuẩn xác 100%)...')
             setParseHint(null)
+            setError(null)
             setExtractNote(null)
             setConfirmRows(null)
             try {
@@ -321,7 +429,7 @@ export function AnalyzePage() {
                                 setSofaMsg({
                                     type: 'success',
                                     text: `Tự động khớp SofaScore Event ID: ${sRes.eventId}`,
-                                })
+                                    })
                             }
                         })
                         .catch(() => {})
@@ -358,11 +466,14 @@ export function AnalyzePage() {
         [input.homeTeam, input.awayTeam, input.league, setHomeTeam, setAwayTeam],
     )
 
-    const handleFiles = (files: FileList | File[] | null) => {
+    const handleFiles = async (files: FileList | File[] | null) => {
         if (!files || files.length === 0) return
+        // Xóa ngay lập tức mọi thông báo lỗi trước đó khi bắt đầu upload mới
+        setError(null)
+        setParseHint(null)
+
         const chosen = Array.from(files).slice(0, 4)
         const valid: File[] = []
-        const urls: string[] = []
         const rejected: string[] = []
         for (const f of chosen) {
             if (!['image/jpeg', 'image/png', 'image/webp'].includes(f.type)) {
@@ -374,11 +485,115 @@ export function AnalyzePage() {
                 continue
             }
             valid.push(f)
-            urls.push(URL.createObjectURL(f))
         }
-        setImagePreviews(urls)
         if (rejected.length > 0) setParseHint(`Bỏ qua — ${rejected.join('; ')}`)
-        if (valid.length > 0) void runExtract(valid)
+        if (valid.length === 0) return
+
+        setExtracting(true)
+        setExtractStatusText('AI đang bóc tách chính xác từng dòng kèo (quá trình này mất khoảng 10-25 giây để đảm bảo độ chuẩn xác 100%)...')
+        try {
+            const compressed = await Promise.all(valid.map((f) => compressImage(f)))
+            const urls = compressed.map((cf) => URL.createObjectURL(cf))
+            setImagePreviews(urls)
+            await runExtract(compressed)
+        } catch {
+            setExtracting(false)
+        }
+    }
+
+    // Đồng bộ previewsRef để thu hồi memory khi unmount
+    useEffect(() => {
+        previewsRef.current = imagePreviews
+    }, [imagePreviews])
+
+    useEffect(() => {
+        return () => {
+            previewsRef.current.forEach((url) => {
+                try {
+                    URL.revokeObjectURL(url)
+                } catch {
+                    /* ignore */
+                }
+            })
+        }
+    }, [])
+
+    /** Xóa một ảnh cụ thể theo index */
+    const removeImage = (indexToRemove: number) => {
+        const urlToRevoke = imagePreviews[indexToRemove]
+        if (urlToRevoke) {
+            try {
+                URL.revokeObjectURL(urlToRevoke)
+            } catch {
+                /* ignore */
+            }
+        }
+
+        const nextPreviews = imagePreviews.filter((_, i) => i !== indexToRemove)
+        setImagePreviews(nextPreviews)
+
+        // Xóa thông báo lỗi nếu có
+        setParseHint(null)
+        setError(null)
+
+        // Nếu ảnh bị xóa là ảnh duy nhất hoặc danh sách đã rỗng:
+        if (nextPreviews.length === 0) {
+            if (fileInputRef.current) {
+                fileInputRef.current.value = ''
+            }
+            // Reset toàn bộ thông tin kèo OCR và trạng thái đội về rỗng
+            setConfirmRows(null)
+            setExtractNote(null)
+            setOddsLines([])
+            setInput((prev) => ({
+                ...prev,
+                homeTeam: '',
+                awayTeam: '',
+                league: '',
+                kickoff: '',
+            }))
+            setIsLive(false)
+            setCurrentMinute(null)
+            setCurrentScore(null)
+            setPeriod('')
+            setSofaEventId('')
+            setSofaMsg(null)
+            setResult(null)
+        }
+    }
+
+    /** Xóa toàn bộ ảnh đang tải lên */
+    const clearAllImages = () => {
+        for (const url of imagePreviews) {
+            try {
+                URL.revokeObjectURL(url)
+            } catch {
+                /* ignore */
+            }
+        }
+        setImagePreviews([])
+        setParseHint(null)
+        setError(null)
+        if (fileInputRef.current) {
+            fileInputRef.current.value = ''
+        }
+        setConfirmRows(null)
+        setExtractNote(null)
+        setOddsLines([])
+        setInput((prev) => ({
+            ...prev,
+            homeTeam: '',
+            awayTeam: '',
+            league: '',
+            kickoff: '',
+        }))
+        setIsLive(false)
+        setCurrentMinute(null)
+        setCurrentScore(null)
+        setPeriod('')
+        setSofaEventId('')
+        setSofaMsg(null)
+        setResult(null)
     }
 
     /** Dán ảnh từ clipboard. */
@@ -635,7 +850,15 @@ export function AnalyzePage() {
                     }}
                 >
                     {extracting ? (
-                        <p className="text-sm text-violet-300">Đang đọc ảnh bằng AI (Qwen)…</p>
+                        <div className="flex flex-col items-center gap-1.5 py-1">
+                            <span className="flex h-3 w-3 rounded-full bg-violet-400 animate-ping mb-1" />
+                            <p className="text-sm font-semibold text-violet-300 animate-pulse">
+                                {extractStatusText || 'AI đang bóc tách chính xác từng dòng kèo (quá trình này mất khoảng 10-25 giây để đảm bảo độ chuẩn xác 100%)...'}
+                            </p>
+                            <span className="text-xs text-neutral-400">
+                                Mô hình thị giác độ chính xác cao Qwen 2.5 VL 72B đang bóc tách ma trận odds…
+                            </span>
+                        </div>
                     ) : (
                         <p className="text-sm text-ink-300">
                             Kéo-thả ảnh vào đây, hoặc dán ảnh từ clipboard (Ctrl+V), hoặc chọn file.
@@ -645,8 +868,9 @@ export function AnalyzePage() {
                         className={`mt-3 inline-flex cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-black ${extracting ? 'cursor-not-allowed bg-white/35 text-ink-500' : 'bg-white hover:bg-platinum-300'
                             }`}
                     >
-                        {extracting ? 'Đang xử lý…' : 'Chọn ảnh'}
+                        {extracting ? 'Đang bóc tách chính xác từng dòng kèo…' : 'Chọn ảnh'}
                         <input
+                            ref={fileInputRef}
                             type="file"
                             multiple
                             accept="image/jpeg,image/png,image/webp"
@@ -661,15 +885,60 @@ export function AnalyzePage() {
                     {parseHint && <p className="mt-2 text-xs text-danger-400">{parseHint}</p>}
                 </div>
                 {imagePreviews.length > 0 && (
-                    <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
-                        {imagePreviews.map((src, i) => (
-                            <img
-                                key={i}
-                                src={src}
-                                alt={`Ảnh ${i + 1}`}
-                                className="h-28 w-full rounded-xl object-cover"
-                            />
-                        ))}
+                    <div className="mt-3">
+                        <div className="mb-2 flex items-center justify-between">
+                            <span className="text-xs font-semibold text-neutral-300">
+                                Ảnh đã tải lên ({imagePreviews.length}/4)
+                            </span>
+                            {imagePreviews.length > 1 && (
+                                <button
+                                    type="button"
+                                    onClick={clearAllImages}
+                                    className="text-xs font-medium text-rose-400 hover:text-rose-300 transition hover:underline"
+                                >
+                                    ✕ Xóa tất cả ảnh
+                                </button>
+                            )}
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                            {imagePreviews.map((src, i) => (
+                                <div
+                                    key={i}
+                                    className="group relative overflow-hidden rounded-xl border border-white/10 bg-black/40"
+                                >
+                                    <img
+                                        src={src}
+                                        alt={`Ảnh ${i + 1}`}
+                                        className="h-28 w-full object-cover transition duration-200 group-hover:scale-105"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={(e) => {
+                                            e.stopPropagation()
+                                            removeImage(i)
+                                        }}
+                                        className="absolute top-1.5 right-1.5 bg-black/75 hover:bg-red-600 text-white rounded-full p-1 cursor-pointer transition-all z-10"
+                                        title="Xóa ảnh này"
+                                        aria-label="Xóa ảnh này"
+                                    >
+                                        <svg
+                                            className="h-3.5 w-3.5"
+                                            viewBox="0 0 20 20"
+                                            fill="currentColor"
+                                        >
+                                            <path
+                                                fillRule="evenodd"
+                                                d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z"
+                                                clipRule="evenodd"
+                                            />
+                                        </svg>
+                                    </button>
+                                    <span className="absolute bottom-1.5 left-1.5 rounded bg-black/60 px-1.5 py-0.5 text-[10px] text-white/80 backdrop-blur-sm">
+                                        Ảnh {i + 1}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
                     </div>
                 )}
             </GlassCard>

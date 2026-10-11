@@ -48,5 +48,14 @@ console.log(`[build-api] wrote ${outfile}`)
 
 // api/index.js cho route gốc /api và /api/ trên Vercel
 const indexFile = 'api/index.js'
-await writeFile(indexFile, "export { default } from './[...route].js'\n", 'utf8')
+await writeFile(indexFile, "export const maxDuration = 60;\nexport const dynamic = 'force-dynamic';\nexport { default } from './[...route].js'\n", 'utf8')
 console.log(`[build-api] wrote ${indexFile}`)
+
+// api/ocr-odds.js & api/extract.js cho Vercel route segment config trực tiếp
+const ocrFile = 'api/ocr-odds.js'
+await writeFile(ocrFile, "export const maxDuration = 60;\nexport const dynamic = 'force-dynamic';\nexport { default } from './[...route].js'\n", 'utf8')
+console.log(`[build-api] wrote ${ocrFile}`)
+
+const extractFile = 'api/extract.js'
+await writeFile(extractFile, "export const maxDuration = 60;\nexport const dynamic = 'force-dynamic';\nexport { default } from './[...route].js'\n", 'utf8')
+console.log(`[build-api] wrote ${extractFile}`)

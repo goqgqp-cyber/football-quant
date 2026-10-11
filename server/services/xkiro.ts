@@ -101,7 +101,7 @@ function num(v: unknown): number | null {
 export function stripJsonFence(text: string): string {
     let t = text.trim()
     if (t.startsWith('```')) {
-        t = t.replace(/^```[a-zA-Z]*\n?/, '').replace(/```$/, '').trim()
+        t = t.replace(/^```[a-zA-Z]*\r?\n?/, '').replace(/\r?\n?```\s*$/, '').trim()
     }
     const jsonMatch = t.match(/\{[\s\S]*\}|\[[\s\S]*\]/)
     if (jsonMatch) {
@@ -142,6 +142,7 @@ export function getModelCandidates(): string[] {
 export async function callXKiroChat(
     messages: Array<{ role: 'system' | 'user' | 'assistant'; content: unknown }>,
     options: {
+        model?: string
         stream?: boolean
         temperature?: number
         maxTokens?: number
@@ -153,7 +154,7 @@ export async function callXKiroChat(
     }
 
     const payload = {
-        model: XKIRO_MODEL,
+        model: options.model ?? XKIRO_MODEL,
         messages,
         temperature: options.temperature ?? 0.2,
         stream: options.stream ?? false,
@@ -330,10 +331,42 @@ export async function extractOddsFromImages(
         })
     }
 
-    const res = await callXKiroChat(
-        [{ role: 'user', content: contentParts }],
-        { temperature: 0 },
-    )
+    // Mô hình thị giác độ chính xác cao (High-Precision Vision Models):
+    // Sử dụng 'qwen/qwen-2.5-vl-72b-instruct' (fallback 'qwen/qwen3.8-max', 'qwen/qwen3.8-omni-flash', XKIRO_MODEL)
+    // max_tokens: 2048, temperature: 0.0 (trích xuất OCR thuần túy sự thật, không suy đoán)
+    const candidateVisionModels = [
+        'qwen/qwen-2.5-vl-72b-instruct',
+        'qwen/qwen3.8-max',
+        'qwen/qwen3.8-omni-flash',
+        XKIRO_MODEL,
+    ]
+
+    let res: Response | null = null
+    let lastError: Error | null = null
+    let usedVisionModel = candidateVisionModels[0]
+
+    for (const model of candidateVisionModels) {
+        try {
+            usedVisionModel = model
+            res = await callXKiroChat(
+                [{ role: 'user', content: contentParts }],
+                {
+                    model,
+                    temperature: 0.0,
+                    maxTokens: 2048,
+                },
+            )
+            if (res && res.ok) break
+        } catch (err) {
+            lastError = err instanceof Error ? err : new Error(String(err))
+            console.warn(`[ocr-vision] Model ${model} thất bại (${lastError.message}), thử model tiếp theo…`)
+            res = null
+        }
+    }
+
+    if (!res || !res.ok) {
+        throw lastError || new XKiroError('xKiro Vision API không phản hồi.', 502)
+    }
 
     const json = (await res.json()) as {
         choices?: Array<{ message?: { content?: string } }>
@@ -487,7 +520,7 @@ export async function extractOddsFromImages(
         odds: oddsList,
         lowConfidence: rows.some((r) => r.confidence < 0.8),
         note: typeof parsed.note === 'string' ? parsed.note.slice(0, 300) : undefined,
-        model: XKIRO_MODEL,
+        model: usedVisionModel,
     }
 }
 

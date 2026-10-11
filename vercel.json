@@ -9,6 +9,12 @@
         },
         "api/index.js": {
             "maxDuration": 60
+        },
+        "api/ocr-odds.js": {
+            "maxDuration": 60
+        },
+        "api/extract.js": {
+            "maxDuration": 60
         }
     },
     "rewrites": [

@@ -37,7 +37,7 @@ export class ApiError extends Error {
 async function fetchWithTimeout(
     input: string,
     init: RequestInit = {},
-    ms = 20000,
+    ms = 90000,
 ): Promise<Response> {
     const ctrl = new AbortController()
     const timer = setTimeout(() => ctrl.abort(), ms)
@@ -275,12 +275,12 @@ interface RequestOptions extends Omit<RequestInit, 'body'> {
     body?: unknown
     /** Bỏ qua bước tự refresh khi gặp 401 (dùng cho chính endpoint refresh). */
     skipRefresh?: boolean
-    /** Thời gian chờ tối đa (ms) trước khi huỷ request. Mặc định 20s. */
+    /** Thời gian chờ tối đa (ms) trước khi huỷ request. Mặc định 90s. */
     timeoutMs?: number
 }
 
 export async function apiFetch<T>(path: string, opts: RequestOptions = {}): Promise<T> {
-    const { body, skipRefresh, timeoutMs = 20000, headers, ...rest } = opts
+    const { body, skipRefresh, timeoutMs = 90000, headers, ...rest } = opts
 
     const send = async (): Promise<Response> => {
         const method = (rest.method ?? 'GET').toUpperCase()
@@ -604,7 +604,17 @@ export const api = {
         if (hint.home) fd.append('home', hint.home)
         if (hint.away) fd.append('away', hint.away)
         if (hint.league) fd.append('league', hint.league)
-        return apiFetch<ExtractResponse>('/extract', { method: 'POST', body: fd })
+        return apiFetch<ExtractResponse>('/extract', { method: 'POST', body: fd, timeoutMs: 90000 })
+    },
+
+    /** Alias gọi route OCR Odds chuyên dụng */
+    ocrOdds: (files: File[], hint: { home?: string; away?: string; league?: string }) => {
+        const fd = new FormData()
+        for (const f of files) fd.append('images', f)
+        if (hint.home) fd.append('home', hint.home)
+        if (hint.away) fd.append('away', hint.away)
+        if (hint.league) fd.append('league', hint.league)
+        return apiFetch<ExtractResponse>('/ocr-odds', { method: 'POST', body: fd, timeoutMs: 90000 })
     },
 
     // --- Quản trị viên (Admin) ---

@@ -16,6 +16,9 @@ import './dotenv.js'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { app } from './app.js'
 
+export const maxDuration = 60; // Extend Vercel serverless timeout to 60s
+export const dynamic = 'force-dynamic';
+
 /** Đọc toàn bộ body của request Node thành Buffer (rỗng với GET/HEAD). */
 async function readBody(req: IncomingMessage): Promise<Buffer | undefined> {
     const method = (req.method ?? 'GET').toUpperCase()
