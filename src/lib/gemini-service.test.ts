@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
     sanitizeCleanText,
+    stripJsonFence,
+    XKIRO_MODEL,
+    XKIRO_ENDPOINT,
     GEMINI_MODEL,
     GEMINI_ENDPOINT,
     GEMINI_STREAM_ENDPOINT,
@@ -36,35 +39,43 @@ describe('sanitizeCleanText (Payload Hygiene)', () => {
     })
 })
 
-describe('Gemini Model & Endpoint Standards', () => {
-    it('sử dụng model chuẩn gemini-3.8-flash (hoặc các model chính thức)', () => {
-        expect(['gemini-3.8-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']).toContain(GEMINI_MODEL)
+describe('stripJsonFence (Pure JSON Handling)', () => {
+    it('loại bỏ khối markdown code block ```json ... ```', () => {
+        const raw = '```json\n{"home":{"xgf":1.8}}\n```'
+        expect(stripJsonFence(raw)).toBe('{"home":{"xgf":1.8}}')
     })
 
-    it('endpoint gọi đúng chuẩn https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent', () => {
-        expect(GEMINI_ENDPOINT).toBe(
-            `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
-        )
+    it('loại bỏ khối markdown code block không định danh ``` ... ```', () => {
+        const raw = '```\n{"test": true}\n```'
+        expect(stripJsonFence(raw)).toBe('{"test": true}')
     })
 
-    it('endpoint streaming gọi đúng chuỗi streamGenerateContent?alt=sse', () => {
-        expect(GEMINI_STREAM_ENDPOINT).toBe(
-            `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse`,
-        )
+    it('giữ nguyên chuỗi JSON thuần không có markdown', () => {
+        const raw = '{"pure": "json"}'
+        expect(stripJsonFence(raw)).toBe('{"pure": "json"}')
+    })
+})
+
+describe('xKiro Model & Endpoint Standards', () => {
+    it('sử dụng model chuẩn qwen/qwen3.8-max:free', () => {
+        expect(XKIRO_MODEL).toBe('qwen/qwen3.8-max:free')
+        expect(GEMINI_MODEL).toBe('qwen/qwen3.8-max:free')
     })
 
-    it('appendApiKey gắn query param key chính xác cho cả endpoint thường và stream', () => {
-        const url1 = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent'
-        expect(appendApiKey(url1, 'my-key')).toBe(`${url1}?key=my-key`)
-
-        const url2 = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent?alt=sse'
-        expect(appendApiKey(url2, 'my-key')).toBe(`${url2}&key=my-key`)
+    it('endpoint gọi đúng chuẩn OpenAI https://api.xkiro.com/v1/chat/completions', () => {
+        expect(XKIRO_ENDPOINT).toBe('https://api.xkiro.com/v1/chat/completions')
+        expect(GEMINI_ENDPOINT).toBe('https://api.xkiro.com/v1/chat/completions')
+        expect(GEMINI_STREAM_ENDPOINT).toBe('https://api.xkiro.com/v1/chat/completions')
     })
 
-    it('getModelCandidates chứa model chính và các model dự phòng chuẩn', () => {
+    it('appendApiKey gắn query param key chính xác khi cần', () => {
+        const url = 'https://api.xkiro.com/v1/chat/completions'
+        expect(appendApiKey(url, 'my-key')).toBe(`${url}?key=my-key`)
+    })
+
+    it('getModelCandidates chứa model chính xKiro', () => {
         const candidates = getModelCandidates()
-        expect(candidates.length).toBeGreaterThanOrEqual(2)
-        expect(candidates[0]).toBe(GEMINI_MODEL)
-        expect(candidates).toContain('gemini-2.0-flash')
+        expect(candidates).toContain('qwen/qwen3.8-max:free')
+        expect(candidates[0]).toBe(XKIRO_MODEL)
     })
 })

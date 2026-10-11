@@ -82,27 +82,21 @@ export const env = {
         runtimeAllowPublicSignup = val
     },
 
-    /** Nhận cả tên Google/Generative AI để linh hoạt khi deploy. */
-    geminiApiKey: firstOf(
-        ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY'],
-        '',
+    /** xKiro API — Chuẩn OpenAI format (Qwen 3.8 Max) */
+    xkiroApiKey: firstOf(
+        ['XKIRO_API_KEY'],
+        'sk-xl-589f55ae70854e45cae40b670eca7e0eef5d895e60fc903e',
     ),
-    /**
-     * Chuẩn hóa model: đảm bảo luôn dùng gemini-1.5-flash chuẩn xác
-     * (tránh các model experimental hoặc preview/flash-latest dễ bị rate-limit bất chợt).
-     */
-    geminiModel: (() => {
-        let raw = (process.env.GEMINI_MODEL || '').trim()
-        if (raw.startsWith('models/')) {
-            raw = raw.replace(/^models\//, '')
-        }
-        // Cho phép các model chính thức (gemini-1.5-flash, gemini-2.0-flash, gemini-2.5-flash...)
-        if (raw && !raw.includes('experimental') && !raw.includes('preview')) {
-            return raw
-        }
-        // Mặc định chuẩn chính thức
-        return 'gemini-3.8-flash'
-    })(),
+    xkiroBaseUrl: optional('XKIRO_BASE_URL', 'https://api.xkiro.com/v1'),
+    xkiroModel: optional('XKIRO_MODEL', 'qwen/qwen3.8-max:free'),
+
+    /** Tương thích ngược các tham chiếu cũ */
+    get geminiApiKey() {
+        return this.xkiroApiKey
+    },
+    get geminiModel() {
+        return this.xkiroModel
+    },
     storeOriginalImages: bool('STORE_ORIGINAL_IMAGES', false),
 
     /** Origin frontend được phép gọi API (dùng cho CORS). */

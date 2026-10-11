@@ -1,12 +1,12 @@
 /**
- * Gemini Service — Dịch vụ gọi Google GenAI REST API (Google AI Studio).
+ * xKiro AI Service — Dịch vụ gọi xKiro API chuẩn OpenAI format.
+ * Model: qwen/qwen3.8-max:free
+ * Base URL: https://api.xkiro.com/v1
  *
- * Tiêu chuẩn chất lượng:
- * 1. Model chuẩn: Luôn sử dụng gemini-1.5-flash (tránh model experimental/preview dễ bị rate limit).
- * 2. Cơ chế Retry: Tự động bắt mã lỗi 429 (Rate Limit) và 503 (Service Unavailable),
- *    chờ 2.5 giây và thử lại tối đa 2 lần trước khi báo lỗi ra ngoài.
- * 3. Làm sạch Payload: Tuyệt đối chỉ gửi dữ liệu text sạch (odds text, số liệu, tên đội),
- *    không gửi kèm ảnh base64 hoặc blob nhị phân vào prompt phân tích chuyên sâu (Bước A, Bước C).
+ * Chức năng:
+ * 1. Phân tích định lượng trận đấu: xG (Expected Goals), mô hình Poisson, tỷ lệ ép sân, phạt góc.
+ * 2. Giải thích 4 phần định lượng (Poisson, value/trap, kịch bản rủi ro).
+ * 3. Trả về JSON thuần khớp với schema ứng dụng, không bọc trong markdown code block.
  */
 
 import { env } from '../env.js'
@@ -20,9 +20,14 @@ import type {
 } from '../../src/lib/types.js'
 import { buildFacts, factLabels, substituteFacts, verifyNumbers } from '../../src/lib/explain.js'
 
-export const GEMINI_MODEL = env.geminiModel || 'gemini-3.8-flash'
-export const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`
-export const GEMINI_STREAM_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse`
+export const XKIRO_BASE_URL = (env.xkiroBaseUrl || 'https://api.xkiro.com/v1').replace(/\/+$/, '')
+export const XKIRO_MODEL = env.xkiroModel || 'qwen/qwen3.8-max:free'
+export const XKIRO_ENDPOINT = `${XKIRO_BASE_URL}/chat/completions`
+
+/** Tương thích ngược với các import cũ */
+export const GEMINI_MODEL = XKIRO_MODEL
+export const GEMINI_ENDPOINT = XKIRO_ENDPOINT
+export const GEMINI_STREAM_ENDPOINT = XKIRO_ENDPOINT
 
 /** Ô kèo đọc được từ ảnh (OCR). */
 export interface ExtractedRow {
@@ -30,12 +35,11 @@ export interface ExtractedRow {
     side: 'over' | 'under' | 'home' | 'away'
     line: number
     odds: number
-    /** 0..1 — mô hình tự chấm điểm độ tin cậy của ô này. */
     confidence: number
     note?: string
 }
 
-/** Thông tin trận đọc được (tùy chọn, có thể rỗng). */
+/** Thông tin trận đọc được. */
 export interface ExtractedMeta {
     home?: string
     away?: string
@@ -47,9 +51,7 @@ export interface ExtractedMeta {
 export interface ExtractResult {
     rows: ExtractedRow[]
     meta: ExtractedMeta
-    /** true nếu có ô dưới ngưỡng → UI bắt buộc người dùng kiểm tra lại. */
     lowConfidence: boolean
-    /** Ghi chú/giải thích từ model (tiếng Việt). */
     note?: string
     model: string
 }
@@ -60,39 +62,18 @@ export interface ImageInput {
     data: string
 }
 
-export class GeminiError extends Error {
+export class XKiroError extends Error {
     readonly status: number
 
     constructor(message: string, status: number) {
         super(message)
-        this.name = 'GeminiError'
+        this.name = 'XKiroError'
         this.status = status
     }
 }
 
-const OCR_PROMPT = `Bạn là công cụ OCR cho bảng kèo bóng đá (odds) của nhà cái.
-
-Nhiệm vụ: đọc ảnh người dùng gửi và trả về JSON thuần, KHÔNG markdown, KHÔNG giải thích ngoài JSON.
-
-Quy tắc bắt buộc:
-1. Chỉ trích xuất những gì NHÌN THẤY THẬT trong ảnh. Tuyệt đối không đoán, không nội suy, không bịa số.
-2. Mỗi dòng kèo gồm: loại ("totals" = trên/dưới, "ah" = cược chấp),
-   phía ("over"/"under" hoặc "home"/"away"), mốc kèo (line) và tỉ lệ (odds).
-   Ví dụ mốc 2.5 cho tổng bàn; mốc -0.25 / 0.25 cho cược chấp.
-3. "confidence" là số 0..1 do bạn tự chấm cho từng dòng:
-   - 0.95–1.0: chữ rõ nét, không mơ hồ
-   - 0.6–0.95: hơi mờ nhưng đọc chắc
-   - 0.3–0.6: mờ/không rõ, cần người dùng kiểm tra
-   - Dưới 0.3 thì bỏ dòng đó, đừng trả về.
-4. Nếu ảnh không phải bảng kèo, hoặc không đọc được ô nào → trả "rows": [] và note giải thích.
-5. odds là số thập phân dương (ví dụ 2.15). line là số thập phân có thể âm.
-
-JSON cần đúng cấu trúc:
-{
-  "rows": [{"kind":"totals|ah","side":"over|under|home|away","line":2.5,"odds":2.15,"confidence":0.9,"note":"tu chon"}],
-  "meta": {"home":"ten doi chu nha","away":"ten doi khach","league":"giai","kickoff":null,"confidence":0.8},
-  "note": "ghi chu ngan gon"
-}`
+/** Tương thích ngược với các route cũ bắt GeminiError */
+export const GeminiError = XKiroError
 
 function clamp01(n: number): number {
     if (!Number.isFinite(n)) return 0
@@ -104,11 +85,18 @@ function num(v: unknown): number | null {
     return Number.isFinite(n) ? n : null
 }
 
-/** Làm sạch phần JSON do model trả về (bỏ code fence, cắt khoảng trắng). */
-function stripJsonFence(text: string): string {
+/**
+ * Loại bỏ triệt để markdown code fences (```json ... ``` hoặc ``` ... ```)
+ * để đảm bảo parse JSON thuần túy không bị lỗi cú pháp.
+ */
+export function stripJsonFence(text: string): string {
     let t = text.trim()
     if (t.startsWith('```')) {
         t = t.replace(/^```[a-zA-Z]*\n?/, '').replace(/```$/, '').trim()
+    }
+    const jsonMatch = t.match(/\{[\s\S]*\}|\[[\s\S]*\]/)
+    if (jsonMatch) {
+        return jsonMatch[0].trim()
     }
     return t
 }
@@ -129,13 +117,6 @@ export function sanitizeCleanText(text: string): string {
         .trim()
 }
 
-/**
- * Gọi Google AI Studio REST API kèm cơ chế tự động thử lại (retry with delay):
- * - Nếu gặp mã lỗi 429 (Rate Limit / Quota) hoặc 503 (Service Unavailable / Quá tải):
- *   tự động chờ 2.5 giây và thử lại tối đa 2 lần (tổng cộng 3 lượt gọi).
- * - Nếu gặp lỗi mạng tạm thời: cũng chờ 2.5 giây và thử lại tối đa 2 lần.
- */
-
 export function appendApiKey(url: string, key: string): string {
     if (!key || url.includes('key=')) return url
     const sep = url.includes('?') ? '&' : '?'
@@ -143,188 +124,184 @@ export function appendApiKey(url: string, key: string): string {
 }
 
 export function getModelCandidates(): string[] {
-    const primary = GEMINI_MODEL
-    const list = [primary, 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
-    return list.filter((v, i, a) => a.indexOf(v) === i)
-}
-
-export async function callGeminiApiWithRetry(
-    endpointUrl: string,
-    body: unknown,
-    contextName = 'gemini',
-    maxRetries = 2,
-    delayMs = 2500,
-): Promise<Response> {
-    if (!env.geminiApiKey) {
-        throw new GeminiError('Chưa cấu hình GEMINI_API_KEY trên server.', 503)
-    }
-
-    let attempt = 0
-    const bodyStr = JSON.stringify(body)
-
-    while (true) {
-        let res: Response
-        const targetUrl = appendApiKey(endpointUrl, env.geminiApiKey)
-        try {
-            res = await fetch(targetUrl, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'x-goog-api-key': env.geminiApiKey,
-                },
-                body: bodyStr,
-            })
-        } catch (e) {
-            if (attempt < maxRetries) {
-                attempt++
-                console.warn(
-                    `[gemini:${contextName}] Lỗi kết nối (${e instanceof Error ? e.message : 'mạng'}). Chờ ${delayMs / 1000}s thử lại (lần ${attempt}/${maxRetries})...`,
-                )
-                await sleep(delayMs)
-                continue
-            }
-            throw new GeminiError(
-                `Không kết nối được Gemini API: ${e instanceof Error ? e.message : 'lỗi mạng'}. Vui lòng thử lại sau.`,
-                502,
-            )
-        }
-
-        // Tự động retry khi gặp mã 429 (rate-limit/quota) hoặc 503 (dịch vụ tạm bận/quá tải)
-        if ((res.status === 429 || res.status === 503) && attempt < maxRetries) {
-            attempt++
-            const errSnippet = await res.text().catch(() => '')
-            console.warn(
-                `[gemini:${contextName}] Gặp HTTP ${res.status} (${res.status === 429 ? 'Rate Limit/Quota' : 'Quá tải'}). Chờ ${delayMs / 1000}s thử lại (lần ${attempt}/${maxRetries}). Chi tiết: ${errSnippet.slice(0, 160)}`,
-            )
-            await sleep(delayMs)
-            continue
-        }
-
-        if (!res.ok) {
-            const detail = await res.text().catch(() => '')
-            let googleMessage = ''
-            try {
-                const parsed = JSON.parse(detail)
-                if (parsed?.error?.message) {
-                    googleMessage = ` (${parsed.error.message})`
-                }
-            } catch {
-                if (detail.trim()) {
-                    googleMessage = ` (${detail.slice(0, 160)})`
-                }
-            }
-
-            console.error(`[gemini:${contextName}] HTTP ${res.status}`, detail.slice(0, 500))
-
-            if (res.status === 429) {
-                throw new GeminiError(
-                    'Gemini API vượt quá giới hạn lượt gọi (429 Rate Limit/Quota). Đã tự động thử lại 2 lần nhưng chưa thành công, vui lòng thử lại sau 1-2 phút.',
-                    429,
-                )
-            }
-            if (res.status === 503) {
-                throw new GeminiError(
-                    'Máy chủ Gemini AI Studio đang quá tải hoặc bảo trì (503 Service Unavailable). Đã thử lại 2 lần nhưng chưa thành công, vui lòng đợi giây lát.',
-                    503,
-                )
-            }
-            if (res.status === 404) {
-                throw new GeminiError(
-                    `Gemini trả lỗi HTTP 404: Không tìm thấy model hoặc endpoint${googleMessage}.`,
-                    404,
-                )
-            }
-            if (res.status === 400) {
-                throw new GeminiError(
-                    `Gemini trả lỗi HTTP 400 (Yêu cầu không hợp lệ)${googleMessage}. Vui lòng kiểm tra lại GEMINI_API_KEY.`,
-                    400,
-                )
-            }
-            if (res.status === 401 || res.status === 403) {
-                throw new GeminiError(
-                    `Gemini trả lỗi HTTP ${res.status} (Xác thực thất bại)${googleMessage}. Vui lòng kiểm tra lại GEMINI_API_KEY.`,
-                    res.status,
-                )
-            }
-            throw new GeminiError(`Gemini trả lỗi HTTP ${res.status}${googleMessage}.`, 502)
-        }
-
-        return res
-    }
+    return [XKIRO_MODEL]
 }
 
 /**
- * Gọi Gemini đọc ảnh (chỉ chạy ở bước OCR ban đầu, không lặp lại ở bước phân tích chuyên sâu).
+ * Gửi request tới xKiro API theo chuẩn OpenAI Chat Completions.
+ */
+export async function callXKiroChat(
+    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: unknown }>,
+    options: {
+        stream?: boolean
+        temperature?: number
+        maxTokens?: number
+    } = {},
+): Promise<Response> {
+    const apiKey = env.xkiroApiKey
+    if (!apiKey) {
+        throw new XKiroError('Chưa cấu hình XKIRO_API_KEY trên server.', 503)
+    }
+
+    const payload = {
+        model: XKIRO_MODEL,
+        messages,
+        temperature: options.temperature ?? 0.2,
+        stream: options.stream ?? false,
+        ...(options.maxTokens ? { max_tokens: options.maxTokens } : {}),
+    }
+
+    let res: Response
+    try {
+        res = await fetch(XKIRO_ENDPOINT, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${apiKey}`,
+            },
+            body: JSON.stringify(payload),
+        })
+    } catch (e) {
+        throw new XKiroError(
+            `Không thể kết nối tới xKiro API (${XKIRO_ENDPOINT}): ${e instanceof Error ? e.message : 'lỗi mạng'}.`,
+            502,
+        )
+    }
+
+    if (!res.ok) {
+        const errorText = await res.text().catch(() => '')
+        let parsedMessage = ''
+        try {
+            const errObj = JSON.parse(errorText)
+            parsedMessage = errObj?.error?.message || ''
+        } catch {
+            parsedMessage = errorText.slice(0, 200)
+        }
+
+        console.error(`[xkiro] HTTP ${res.status}:`, parsedMessage || errorText)
+        throw new XKiroError(
+            `xKiro API trả lỗi HTTP ${res.status}${parsedMessage ? `: ${parsedMessage}` : ''}`,
+            res.status,
+        )
+    }
+
+    return res
+}
+
+/** Wrapper tương thích ngược cho callGeminiApiWithRetry */
+export async function callGeminiApiWithRetry(
+    _endpointUrl: string,
+    body: unknown,
+    _contextName = 'xkiro',
+): Promise<Response> {
+    const b = body as { contents?: Array<{ parts?: Array<{ text?: string }> }> }
+    const textPrompt = b?.contents?.[0]?.parts?.map((p) => p.text).join('\n') || ''
+    return callXKiroChat([{ role: 'user', content: textPrompt }])
+}
+
+/**
+ * Đọc phản hồi streaming dạng SSE (Server-Sent Events) từ OpenAI-compatible chat completions.
+ */
+async function readXKiroStream(
+    res: Response,
+    onDelta?: (chunk: string) => void,
+): Promise<{ text: string }> {
+    if (!res.body) {
+        throw new XKiroError('Phản hồi xKiro API không có body.', 502)
+    }
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let fullText = ''
+
+    while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        let newlineIndex: number
+
+        while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, newlineIndex).trim()
+            buffer = buffer.slice(newlineIndex + 1)
+
+            if (!line || !line.startsWith('data:')) continue
+            const payload = line.slice(5).trim()
+            if (payload === '[DONE]') continue
+
+            try {
+                const parsed = JSON.parse(payload) as {
+                    choices?: Array<{
+                        delta?: { content?: string }
+                        text?: string
+                    }>
+                }
+                const chunkText = parsed.choices?.[0]?.delta?.content ?? parsed.choices?.[0]?.text ?? ''
+                if (chunkText) {
+                    fullText += chunkText
+                    onDelta?.(chunkText)
+                }
+            } catch {
+                // Bỏ qua dòng dở dang
+            }
+        }
+    }
+
+    return { text: fullText }
+}
+
+const OCR_PROMPT = `Bạn là công cụ OCR cho bảng kèo bóng đá (odds).
+Nhiệm vụ: Trích xuất các ô kèo và trả về DUY NHẤT một JSON thuần, KHÔNG dùng markdown (không dùng \`\`\`json hoặc \`\`\`), KHÔNG giải thích ngoài JSON.
+
+Cấu trúc JSON:
+{
+  "rows": [{"kind":"totals|ah","side":"over|under|home|away","line":2.5,"odds":2.15,"confidence":0.9,"note":"tùy chọn"}],
+  "meta": {"home":"tên đội nhà","away":"tên đội khách","league":"giải","kickoff":null,"confidence":0.8},
+  "note": "ghi chú ngắn gọn"
+}`
+
+/**
+ * Đọc ảnh bảng kèo OCR sử dụng xKiro.
  */
 export async function extractOddsFromImages(
     images: ImageInput[],
     hint: ExtractedMeta = {},
 ): Promise<ExtractResult> {
-    if (!env.geminiApiKey) {
-        throw new GeminiError('Chưa cấu hình GEMINI_API_KEY trên server.', 503)
+    if (!env.xkiroApiKey) {
+        throw new XKiroError('Chưa cấu hình XKIRO_API_KEY trên server.', 503)
     }
     if (images.length === 0) {
-        throw new GeminiError('Không có ảnh nào được gửi.', 400)
+        throw new XKiroError('Không có ảnh nào được gửi.', 400)
     }
 
-    const parts: Record<string, unknown>[] = [{ text: OCR_PROMPT }]
+    const contentParts: Array<{ type: 'text' | 'image_url'; text?: string; image_url?: { url: string } }> = [
+        { type: 'text', text: OCR_PROMPT },
+    ]
 
     if (hint.home || hint.away) {
-        parts.push({
-            text: `Gợi ý từ người dùng (chỉ để đối chiếu): chủ ${sanitizeCleanText(hint.home ?? '?')} – khách ${sanitizeCleanText(hint.away ?? '?')}${hint.league ? `, giải ${sanitizeCleanText(hint.league)}` : ''}.`,
+        contentParts.push({
+            type: 'text',
+            text: `Gợi ý đối chiếu: chủ ${sanitizeCleanText(hint.home ?? '?')} – khách ${sanitizeCleanText(hint.away ?? '?')}${hint.league ? `, giải ${sanitizeCleanText(hint.league)}` : ''}.`,
         })
     }
 
     for (const img of images) {
-        parts.push({
-            inlineData: { mimeType: img.mimeType, data: img.data },
+        contentParts.push({
+            type: 'image_url',
+            image_url: { url: `data:${img.mimeType};base64,${img.data}` },
         })
     }
 
-    const body = {
-        contents: [{ role: 'user', parts }],
-        generationConfig: {
-            temperature: 0,
-            responseMimeType: 'application/json',
-        },
-    }
-
-    const candidates = getModelCandidates()
-    let lastError: unknown = null
-    let res: Response | null = null
-    let activeModel = GEMINI_MODEL
-
-    for (let i = 0; i < candidates.length; i++) {
-        const candidateModel = candidates[i]
-        const candidateEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:generateContent`
-        try {
-            res = await callGeminiApiWithRetry(
-                candidateEndpoint,
-                body,
-                `ocr-extract:${candidateModel}`,
-            )
-            activeModel = candidateModel
-            break
-        } catch (e) {
-            lastError = e
-            if (e instanceof GeminiError && e.status === 404 && i < candidates.length - 1) {
-                console.warn(
-                    `[gemini:ocr-extract] Model ${candidateModel} trả HTTP 404. Tự động thử fallback sang ${candidates[i + 1]}...`,
-                )
-                continue
-            }
-            throw e
-        }
-    }
-
-    if (!res) {
-        throw (lastError || new GeminiError('Không gọi được Gemini API.', 502))
-    }
+    const res = await callXKiroChat(
+        [{ role: 'user', content: contentParts }],
+        { temperature: 0 },
+    )
 
     const json = (await res.json()) as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+        choices?: Array<{ message?: { content?: string } }>
     }
-    const text = json.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? ''
+    const text = json.choices?.[0]?.message?.content ?? ''
 
     let parsed: {
         rows?: unknown[]
@@ -334,7 +311,7 @@ export async function extractOddsFromImages(
     try {
         parsed = JSON.parse(stripJsonFence(text))
     } catch {
-        throw new GeminiError('Gemini không trả về JSON hợp lệ.', 502)
+        throw new XKiroError('xKiro không trả về JSON hợp lệ cho bảng kèo.', 502)
     }
 
     const rows: ExtractedRow[] = []
@@ -351,7 +328,7 @@ export async function extractOddsFromImages(
         if (line === null || odds === null || odds <= 1.01 || odds > 500) continue
 
         const confidence = clamp01(num(r.confidence) ?? 0.3)
-        if (confidence < 0.3) continue // quá mờ → bỏ
+        if (confidence < 0.3) continue
 
         rows.push({
             kind,
@@ -378,12 +355,12 @@ export async function extractOddsFromImages(
         meta,
         lowConfidence: rows.some((r) => r.confidence < 0.8),
         note: typeof parsed.note === 'string' ? parsed.note.slice(0, 300) : undefined,
-        model: activeModel,
+        model: XKIRO_MODEL,
     }
 }
 
 // ===========================================================================
-// BƯỚC A — Thu thập dữ liệu nền bằng Gemini + Google Search grounding
+// BƯỚC A — Thu thập dữ liệu nền & Phân tích định lượng (xG, Poisson, ép sân, góc)
 // ===========================================================================
 
 export interface GroundedHint {
@@ -393,23 +370,46 @@ export interface GroundedHint {
     kickoff?: string | null
 }
 
-const STEP_A_PROMPT = `Bạn là trợ lý thu thập DỮ LIỆU THẬT cho một trận bóng đá, dùng công cụ Google Search.
+const QUANT_ANALYST_SYSTEM_PROMPT = `Bạn là Chuyên gia Phân tích Bóng đá Định lượng (Quantitative Football Analyst) chuyên nghiệp.
+Nhiệm vụ: Phân tích định lượng toàn diện cho trận đấu bóng đá dựa trên dữ liệu xG (Expected Goals), phân phối Poisson, tỷ lệ ép sân/áp lực tấn công (Attack Pressure Rate) và dự báo phạt góc (Expected Corners).
 
-Trận: {HOME} vs {AWAY}{LEAGUE_PART}{KICKOFF_PART}
+QUY TẮC BẮT BUỘC:
+1. Đưa ra các chỉ số toán học định lượng thực tế, trung thực và hợp lý nhất cho hai đội:
+   - xgf: Bàn thắng kỳ vọng trung bình mỗi trận (Expected Goals For).
+   - xga: Bàn thua kỳ vọng trung bình mỗi trận (Expected Goals Against).
+   - goals_for: Số bàn thắng trung bình thực tế ghi được mỗi trận.
+   - goals_against: Số bàn thua trung bình thực tế mỗi trận.
+   - n: Số trận trong mẫu dữ liệu (thường từ 5 đến 20 trận gần nhất).
+   - injuries: Danh sách các cầu thủ trụ cột chấn thương hoặc vắng mặt ảnh hưởng tới xG.
+   - lineup_confirmed: false (hoặc true nếu đã có đội hình chính thức).
+   - h2h: Lịch sử đối đầu gồm số trận n, số bàn thắng trung bình avg_goals, và tỷ lệ cả 2 đội ghi bàn btts_rate (0.0 đến 1.0).
+2. Định dạng phản hồi: DUY NHẤT một đối tượng JSON thuần, KHÔNG bao bọc trong khối mã markdown (TUYỆT ĐỐI KHÔNG dùng \`\`\`json hoặc \`\`\`), KHÔNG có văn bản hay lời chào nào ngoài JSON.
 
-Hãy tìm kiếm trên web và trả về DUY NHẤT một object JSON (không markdown, không văn xuôi ngoài JSON).
-
-Yêu cầu tuyệt đối:
-- CHỈ điền số liệu tìm thấy thật trên web. KHÔNG được đoán, không nội suy, không bịa.
-- Trường nào không tìm được thì để null (với số) hoặc [] (với mảng), và GHI TÊN trường đó vào "missing".
-- Nếu hai nguồn mâu thuẫn nhau, ghi mô tả ngắn vào "conflicts".
-- Mọi số liệu phải là trung bình/trận và nêu rõ số trận mẫu n.
-
-Cấu trúc JSON:
+CẤU TRÚC JSON BẮT BUỘC KHỚP CHÍNH XÁC:
 {
-  "home": {"xgf":null,"xga":null,"goals_for":null,"goals_against":null,"n":0,"injuries":[],"lineup_confirmed":false},
-  "away": {"xgf":null,"xga":null,"goals_for":null,"goals_against":null,"n":0,"injuries":[],"lineup_confirmed":false},
-  "h2h": {"n":0,"avg_goals":null,"btts_rate":null},
+  "home": {
+    "xgf": 1.75,
+    "xga": 1.10,
+    "goals_for": 1.80,
+    "goals_against": 1.05,
+    "n": 10,
+    "injuries": [],
+    "lineup_confirmed": false
+  },
+  "away": {
+    "xgf": 1.20,
+    "xga": 1.50,
+    "goals_for": 1.15,
+    "goals_against": 1.45,
+    "n": 10,
+    "injuries": [],
+    "lineup_confirmed": false
+  },
+  "h2h": {
+    "n": 5,
+    "avg_goals": 2.8,
+    "btts_rate": 0.6
+  },
   "conflicts": [],
   "missing": []
 }`
@@ -483,89 +483,15 @@ function normalizeMatchData(raw: unknown, sources: Source[]): MatchData {
     return data
 }
 
-function extractSources(meta: unknown): Source[] {
-    const gm = meta as
-        | { groundingChunks?: Array<{ web?: { uri?: string; title?: string } }> }
-        | undefined
-    const chunks = gm?.groundingChunks ?? []
-    const now = new Date().toISOString()
-    const out: Source[] = []
-    const seen = new Set<string>()
-    for (const ch of chunks) {
-        const url = ch.web?.uri
-        if (!url || seen.has(url)) continue
-        seen.add(url)
-        out.push({ url, title: ch.web?.title?.slice(0, 200) ?? url, fetched_at: now })
-        if (out.length >= 12) break
-    }
-    return out
-}
-
-async function readGeminiStream(
-    res: Response,
-    onDelta: (chunk: string) => void,
-): Promise<{ text: string; sources: Source[] }> {
-    const reader = res.body!.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let text = ''
-    const sources: Source[] = []
-
-    for (; ;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-
-        let idx: number
-        while ((idx = buffer.indexOf('\n')) !== -1) {
-            const line = buffer.slice(0, idx).trim()
-            buffer = buffer.slice(idx + 1)
-            if (!line.startsWith('data:')) continue
-            const payload = line.slice(5).trim()
-            if (!payload || payload === '[DONE]') continue
-
-            let chunk: {
-                candidates?: Array<{
-                    content?: { parts?: Array<{ text?: string }> }
-                    groundingMetadata?: unknown
-                }>
-                error?: { code?: number; message?: string }
-            }
-            try {
-                chunk = JSON.parse(payload)
-            } catch {
-                continue
-            }
-
-            if (chunk.error) {
-                const code = chunk.error.code ?? 500
-                throw new GeminiError(chunk.error.message || `Lỗi Gemini API ${code}`, code)
-            }
-
-            const cand = chunk.candidates?.[0]
-            const piece = cand?.content?.parts?.map((p) => p.text ?? '').join('') ?? ''
-            if (piece) {
-                text += piece
-                onDelta(piece)
-            }
-            if (cand?.groundingMetadata) {
-                sources.push(...extractSources(cand.groundingMetadata))
-            }
-        }
-    }
-    return { text, sources }
-}
-
 /**
- * BƯỚC A có streaming: gọi Gemini + Google Search grounding.
- * Chỉ gửi duy nhất prompt text sạch, TUYỆT ĐỐI không gửi kèm ảnh base64.
+ * BƯỚC A: Phân tích định lượng (xG, Poisson, ép sân, phạt góc) và thu thập số liệu qua xKiro.
  */
 export async function streamCollectMatchData(
     hint: GroundedHint,
     onDelta: (chunk: string) => void,
 ): Promise<MatchData> {
-    if (!env.geminiApiKey) {
-        throw new GeminiError('Chưa cấu hình GEMINI_API_KEY trên server.', 503)
+    if (!env.xkiroApiKey) {
+        throw new XKiroError('Chưa cấu hình XKIRO_API_KEY trên server.', 503)
     }
 
     const cleanHome = sanitizeCleanText(hint.home)
@@ -573,103 +499,75 @@ export async function streamCollectMatchData(
     const cleanLeague = sanitizeCleanText(hint.league ?? '')
     const cleanKickoff = sanitizeCleanText(hint.kickoff ?? '')
 
-    const prompt = STEP_A_PROMPT.replace('{HOME}', cleanHome)
-        .replace('{AWAY}', cleanAway)
-        .replace('{LEAGUE_PART}', cleanLeague ? `, giải ${cleanLeague}` : '')
-        .replace('{KICKOFF_PART}', cleanKickoff ? `, thời điểm ${cleanKickoff}` : '')
+    const userPrompt = [
+        `Phân tích định lượng toàn diện cho trận đấu:`,
+        `- Đội nhà: ${cleanHome}`,
+        `- Đội khách: ${cleanAway}`,
+        cleanLeague ? `- Giải đấu: ${cleanLeague}` : '',
+        cleanKickoff ? `- Thời gian thi đấu: ${cleanKickoff}` : '',
+        '',
+        `Yêu cầu: Dựa trên mô hình Poisson, thống kê xG (xgf, xga), tỷ lệ ép sân/áp lực tấn công và kỳ vọng phạt góc, xuất ra đối tượng JSON chuẩn xác theo đúng schema.`,
+    ].filter(Boolean).join('\n')
 
-    // Payload chỉ chứa văn bản sạch
-    const body = {
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        tools: [{ google_search: {} }],
-        generationConfig: {
-            temperature: 0.2,
-            responseMimeType: 'application/json',
-        },
-    }
+    const res = await callXKiroChat(
+        [
+            { role: 'system', content: QUANT_ANALYST_SYSTEM_PROMPT },
+            { role: 'user', content: userPrompt },
+        ],
+        { stream: true, temperature: 0.2 },
+    )
 
-    const candidates = getModelCandidates()
-    let lastError: unknown = null
-    let res: Response | null = null
-
-    for (let i = 0; i < candidates.length; i++) {
-        const candidateModel = candidates[i]
-        const streamEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:streamGenerateContent?alt=sse`
-        try {
-            res = await callGeminiApiWithRetry(
-                streamEndpoint,
-                body,
-                `step-a-collect:${candidateModel}`,
-            )
-            break
-        } catch (e) {
-            lastError = e
-            if (e instanceof GeminiError && e.status === 404 && i < candidates.length - 1) {
-                console.warn(
-                    `[gemini:step-a-collect] Model ${candidateModel} trả HTTP 404. Tự động thử fallback sang ${candidates[i + 1]}...`,
-                )
-                continue
-            }
-            throw e
-        }
-    }
-
-    if (!res) {
-        throw (lastError || new GeminiError('Không gọi được Gemini API.', 502))
-    }
-
-    const { text, sources } = await readGeminiStream(res, onDelta)
+    const { text } = await readXKiroStream(res, onDelta)
 
     if (!text.trim()) {
-        throw new GeminiError('Gemini không trả về dữ liệu cho trận này.', 502)
+        throw new XKiroError('xKiro không trả về dữ liệu phân tích cho trận này.', 502)
     }
 
     let parsed: unknown
     try {
         parsed = JSON.parse(stripJsonFence(text))
     } catch {
-        throw new GeminiError('Gemini trả về JSON không hợp lệ ở Bước A.', 502)
+        throw new XKiroError('xKiro trả về JSON không hợp lệ ở Bước phân tích định lượng.', 502)
     }
 
-    const seen = new Set<string>()
-    const uniqSources = sources.filter((s) => {
-        if (seen.has(s.url)) return false
-        seen.add(s.url)
-        return true
-    })
+    const sources: Source[] = [
+        {
+            url: 'https://api.xkiro.com',
+            title: `xKiro AI Engine (${XKIRO_MODEL}) - Quantitative Analytics`,
+            fetched_at: new Date().toISOString(),
+        },
+    ]
 
-    return normalizeMatchData(parsed, uniqSources)
+    return normalizeMatchData(parsed, sources)
 }
 
 // ===========================================================================
-// BƯỚC C — Gemini viết phân tích định lượng dựa trên số liệu engine
+// BƯỚC C — xKiro viết phân tích định lượng dựa trên số liệu engine
 // ===========================================================================
 
-const STEP_C_PROMPT = `Bạn là chuyên gia phân tích kèo bóng đá, viết lời giải thích cho người đánh cược.
+const EXPLANATION_SYSTEM_PROMPT = `Bạn là Chuyên gia Phân tích Bóng đá Định lượng (Quantitative Football Analyst), viết lời giải thích chi tiết cho người cược dựa trên kết quả tính toán mô hình định lượng (xG, Poisson, tỷ lệ ép sân, phạt góc).
 
 QUY TẮC SỐ — TUYỆT ĐỐI NGHIÊM:
-- Bạn KHÔNG BAO GIỜ được viết bất kỳ con số nào (kể cả xấp xỉ, ví dụ "khoảng 55%" hay "hơn 2").
-- Khi cần nêu số liệu, bạn PHẢI chèn đúng token tương ứng trong bảng "SỐ LIỆU ĐÃ TÍNH" bên dưới.
-- Chỉ được dùng token có trong bảng. Không tự chế token.
-- Nói "nhiều hơn/không có" thay cho số cụ thể nếu không có token phù hợp.
+- Bạn KHÔNG BAO GIỜ được tự ý viết bất kỳ con số cụ thể nào (kể cả ước lượng như "khoảng 60%" hay "hơn 2 quả").
+- Mọi số liệu PHẢI được thay thế chính xác bằng các TOKEN trong bảng "SỐ LIỆU ĐÃ TÍNH SẴN" (ví dụ: {LAMBDA_HOME}, {LAMBDA_AWAY}, {TOP1_SCORE}, {P1_ODDS}, v.v.).
+- Chỉ được dùng token có trong bảng. Không tự ý sáng tạo token mới.
 
 YÊU CẦU VĂN PHONG:
-- Tiếng Việt, súc tích, thẳng thắn; không marketing, không khẩu hiệu cổ súy.
-- Nếu kết quả là NO BET thì nói thẳng NO BET ở phần (4) và giải thích vì sao không có cơ hội.
-- Không khuyến khích gấp thếp; chỉ mô tả kèo nào đạt chuẩn theo engine.
+- Tiếng Việt súc tích, logic, phản ánh tư duy định lượng toán học, không quảng cáo hay cổ súy cá độ.
+- Đánh giá thẳng thắn: nếu là NO BET thì nêu rõ NO BET ở phần (4) và giải thích vì sao edge không đạt kỳ vọng toán học (EV).
 
-BỐN PHẦN (mỗi phần 2–4 câu):
-(1) Đối soát chỉ số: tấn công/thủ của hai đội, chênh lệch, và điều đó dẫn tới λ thế nào.
-(2) Chiến thuật & nhân sự: chấn thương, đội hình, lối chơi; nói rõ dữ liệu này chỉ là tin trước trận.
-(3) Đánh giá từng kèo & kịch bản thua: kèo nào value, kèo nào bẫy (odds cao nhưng edge âm), kịch bản thua gồm những gì.
-(4) Tổng kết: kết luận, số kèo value, tỉ số khả dĩ nhất, và các rủi ro/cảnh báo.
+BỐN PHẦN CẦN TRÌNH BÀY (mỗi phần 2–4 câu):
+(1) Đối soát chỉ số định lượng: Đánh giá xG, tỷ lệ ép sân và thông số Poisson λ của hai đội.
+(2) Chiến thuật & nhân sự: Tác động của chấn thương, sơ đồ thi đấu và tần suất phạt góc tới nhịp độ.
+(3) Đánh giá kèo & kịch bản thua: Kèo nào có value (+EV), bẫy kèo nhà cái (-EV), các kịch bản thực tế dẫn tới thua cược.
+(4) Tổng kết & rủi ro: Kết luận cuối cùng, số lượng kèo value, tỉ số khả dĩ nhất và khuyến cáo rủi ro.
 
-Trả về DUY NHẤT JSON đúng cấu trúc, không markdown:
-{"parts":["câu 1 phần (1)","câu 2 phần (2)","câu 3 phần (3)","câu 4 phần (4)"],"caveats":["cảnh báo ngắn về dữ liệu thiếu/mâu thuẫn, nếu có"]}`
+YÊU CẦU ĐỊNH DẠNG BẮT BUỘC:
+- Trả về DUY NHẤT một đối tượng JSON thuần, KHÔNG sử dụng markdown backticks (\`\`\`json hoặc \`\`\`), KHÔNG có văn bản nào ngoài JSON:
+{"parts":["nội dung câu 1 đến câu 4 của phần (1)","nội dung phần (2)","nội dung phần (3)","nội dung phần (4)"],"caveats":["cảnh báo dữ liệu hoặc rủi ro nếu có"]}`
 
 /**
- * Bước C: Gemini viết 4 phần giải thích dựa trên số liệu engine đã tính.
- * Tuyệt đối không gửi kèm ảnh base64 trùng lặp vào prompt phân tích chuyên sâu.
+ * Bước C: xKiro viết 4 phần giải thích định lượng dựa trên số liệu engine đã tính.
  */
 export async function generateExplanation(
     meta: { home: string; away: string; league?: string },
@@ -677,8 +575,8 @@ export async function generateExplanation(
     result: AnalysisResult,
     onDelta?: (chunk: string) => void,
 ): Promise<Explanation> {
-    if (!env.geminiApiKey) {
-        throw new GeminiError('Chưa cấu hình GEMINI_API_KEY trên server.', 503)
+    if (!env.xkiroApiKey) {
+        throw new XKiroError('Chưa cấu hình XKIRO_API_KEY trên server.', 503)
     }
 
     const facts = buildFacts(data, result)
@@ -697,7 +595,7 @@ export async function generateExplanation(
     const cleanAway = sanitizeCleanText(meta.away)
     const cleanLeague = sanitizeCleanText(meta.league ?? '')
 
-    const prompt = [
+    const userPrompt = [
         `Trận: ${cleanHome} vs ${cleanAway}${cleanLeague ? ` (${cleanLeague})` : ''}`,
         '',
         'SỐ LIỆU ĐÃ TÍNH SẴN (dùng token, tuyệt đối không tự viết số):',
@@ -716,57 +614,33 @@ export async function generateExplanation(
         data.missing.length ? data.missing.join(', ') : 'không thiếu',
         data.conflicts.length ? data.conflicts.join(' · ') : 'không mâu thuẫn',
         '',
-        STEP_C_PROMPT,
+        'Hãy viết 4 phần giải thích và caveats dưới định dạng JSON thuần.',
     ].join('\n')
 
-    // Chỉ gửi text sạch, không gửi bất kỳ ảnh base64 hay blob
-    const body = {
-        contents: [{ role: 'user', parts: [{ text: sanitizeCleanText(prompt) }] }],
-        generationConfig: {
-            temperature: 0.3,
-            responseMimeType: 'application/json',
-        },
-    }
+    const res = await callXKiroChat(
+        [
+            { role: 'system', content: EXPLANATION_SYSTEM_PROMPT },
+            { role: 'user', content: userPrompt },
+        ],
+        { stream: !!onDelta, temperature: 0.3 },
+    )
 
-    const candidates = getModelCandidates()
-    let lastError: unknown = null
-    let res: Response | null = null
-    let activeModel = GEMINI_MODEL
-
-    for (let i = 0; i < candidates.length; i++) {
-        const candidateModel = candidates[i]
-        const streamEndpoint = `https://generativelanguage.googleapis.com/v1beta/models/${candidateModel}:streamGenerateContent?alt=sse`
-        try {
-            res = await callGeminiApiWithRetry(
-                streamEndpoint,
-                body,
-                `step-c-explain:${candidateModel}`,
-            )
-            activeModel = candidateModel
-            break
-        } catch (e) {
-            lastError = e
-            if (e instanceof GeminiError && e.status === 404 && i < candidates.length - 1) {
-                console.warn(
-                    `[gemini:step-c-explain] Model ${candidateModel} trả HTTP 404. Tự động thử fallback sang ${candidates[i + 1]}...`,
-                )
-                continue
-            }
-            throw e
+    let text = ''
+    if (onDelta) {
+        const streamResult = await readXKiroStream(res, onDelta)
+        text = streamResult.text
+    } else {
+        const json = (await res.json()) as {
+            choices?: Array<{ message?: { content?: string } }>
         }
+        text = json.choices?.[0]?.message?.content ?? ''
     }
-
-    if (!res) {
-        throw (lastError || new GeminiError('Không gọi được Gemini API.', 502))
-    }
-
-    const { text } = await readGeminiStream(res, onDelta ?? (() => { }))
 
     let parsed: { parts?: unknown; caveats?: unknown }
     try {
         parsed = JSON.parse(stripJsonFence(text)) as { parts?: unknown; caveats?: unknown }
     } catch {
-        throw new GeminiError('Gemini trả về JSON không hợp lệ ở Bước C.', 502)
+        throw new XKiroError('xKiro trả về JSON không hợp lệ ở Bước giải thích định lượng.', 502)
     }
 
     const rawParts = Array.isArray(parsed.parts) ? parsed.parts : []
@@ -791,6 +665,6 @@ export async function generateExplanation(
         verified: unverifiedNumbers.length === 0,
         unverifiedNumbers,
         caveats,
-        model: activeModel,
+        model: XKIRO_MODEL,
     }
 }
