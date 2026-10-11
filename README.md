@@ -14,28 +14,33 @@ Web app tiếng Việt, mobile-first, phân tích xác suất kèo bóng đá b�
 | Giai đoạn | Nội dung | Trạng thái |
 |---|---|---|
 | **G1** | Khung app + giao diện (nền vũ trụ, liquid glass, chuyển động) + module tính toán TypeScript + unit test, dữ liệu giả | ✅ Hoàn tất |
-| G2 | Backend + đăng nhập/JWT cookie HttpOnly + refresh rotation + Upstash (lịch sử, đối soát, calibration) | ⏳ Chưa |
-| G3 | Upload ảnh + Gemini trích xuất + bảng xác nhận số liệu | ⏳ Chưa |
-| G4 | Bước A (Gemini + Google Search grounding) + SSE stream tiến trình | ⏳ Chưa |
-| G5 | Bước C (giải thích + kiểm tra con số) + tối ưu hiệu năng | ⏳ Chưa |
-| G6 | Hướng dẫn deploy + README đầy đủ | ⏳ Chưa |
+| **G2** | Backend + đăng nhập/JWT cookie HttpOnly + refresh rotation + Upstash (lịch sử, đối soát, calibration) | ✅ Hoàn tất |
+| **G3** | Upload ảnh + Gemini trích xuất + bảng xác nhận số liệu | ✅ Hoàn tất |
+| **G4** | Bước A (Gemini + Google Search grounding) + SSE stream tiến trình | ✅ Hoàn tất |
+| **G5** | Bước C (giải thích + kiểm tra con số) + tối ưu hiệu năng | ✅ Hoàn tất |
+| **G6** | Hướng dẫn deploy + README đầy đủ | ✅ Hoàn tất |
 
 ---
 
-## Chạy dự án (G1)
+## Chạy dự án
 
 Yêu cầu: **Node.js ≥ 20** (khuyến nghị LTS 22/24).
 
 ```bash
 npm install
-npm run dev      # mở http://localhost:5173
-npm test         # unit test module tính toán
-npm run build    # typecheck + build production
+npm run dev        # frontend Vite http://localhost:5173 (proxy /api -> 8787)
+npm run dev:api    # backend Hono http://localhost:8787
+npm run dev:all    # chạy cả hai song song
+npm test           # vitest: 16 test (calc 7 + explain 9)
+npm run typecheck  # tsc -b + tsc -p tsconfig.server.json
+npm run build      # typecheck + build production
 ```
+
+Copy `.env.example` thành `.env` rồi điền khóa thật (không commit `.env`).
 
 ---
 
-## Kiến trúc (định hướng)
+## Kiến trúc
 
 ```
 src/
@@ -46,14 +51,33 @@ src/
     markets.ts   # Tài/Xỉu, kèo chấp châu Á, xử lý mốc 1/4
     engine.ts    # EV/Edge, lọc kèo, mức tin cậy, Kelly, analyzeMatch()
     settle.ts    # đối soát sau trận, calibration bin, Brier score
-    mock.ts      # dữ liệu GIẢ cho G1
-  components/    # UI: Starfield, Nav, GlassCard, Button, PickCard, ...
+    explain.ts   # buildFacts / substituteFacts / verifyNumbers (Bước C)
+    mock.ts      # dữ liệu GIẢ cho dev/offline
+  components/    # UI: Starfield, Nav, GlassCard, Button, PickCard, ExplanationPanel, ...
   pages/         # 4 trang: Phân tích, Lịch sử, Hiệu suất, Tài khoản
-  hooks/         # useHashRoute, useSettings
+  hooks/         # useHashRoute, useSettings, useAuth
+server/
+  app.ts         # Hono app: CORS, rate-limit, CSRF, mount routes
+  index.ts       # serve @hono/node-server trên PORT (mặc định 8787)
+  env.ts         # đọc + validate biến môi trường
+  gemini.ts      # extractOddsFromImages, streamCollectMatchData, generateExplanation
+  store.ts       # Upstash Redis: history, settle, stats
+  routes/        # auth.ts, data.ts, extract.ts, stream.ts (SSE)
 ```
 
 **Nguyên tắc bất biến:** frontend **không bao giờ** gọi Gemini hay Upstash trực tiếp.
-Mọi lời gọi đi qua lớp server (G2+). Không có khóa API/token nào trong bundle frontend.
+Mọi lời gọi đi qua lớp server. Không có khóa API/token nào trong bundle frontend.
+
+Luồng phân tích (`POST /api/collect/stream`, SSE qua `fetch` + `ReadableStream`):
+
+1. `step collect` → Gemini + `google_search` thu thập phong độ, H2H, chấn thương (stream `delta`).
+2. `data` → `MatchData` đã chuẩn hoá + `sources` (grounding metadata).
+3. `step extract` → OCR ảnh kèo (nếu có) + bảng xác nhận ở client.
+4. `step compute` → `analyzeMatch()` chạy cục bộ trên server (Poisson/Dixon-Coles).
+5. `step explain` → Gemini viết 4 phần giải thích, **chỉ dùng token số `{{U..}}`** do engine cấp,
+   server thay số thật qua `substituteFacts()` rồi quét lại bằng `verifyNumbers()`.
+6. `explanation` + `result` → client hiển thị `ExplanationPanel` (4 phần + huy hiệu verified/caveats),
+   `saveHistory()` lưu kèm `explanation` để xem lại ở trang Lịch sử.
 
 ---
 
@@ -87,14 +111,17 @@ Edge < 0 nhưng odds cao → gắn cờ `TRAP`.
 **Mức tin cậy:** `(n ≥ 8) + (≥ 2 nguồn) + (lệch thị trường ≤ 7%)` → 3 Cao, 2 TB, còn lại Thấp.
 
 **Mức vốn:** 25% Kelly, chặn trong **1.0%–2.5%** tổng vốn; tin cậy Thấp → 1.0%.
+ROI / Brier / calibration **chỉ tính trên pick có `stakePct > 0`** (pick `noBet` bị loại).
 
-### Unit test (7 test, tất cả xanh)
+### Unit test (16 test, tất cả xanh)
 
 - Tổng ma trận = 1
 - `thắng + hoàn + thua = 1` cho Tài/Xỉu (2.5, 3.0, 1/4 2.75) và chấp châu Á (0, −0.5, −0.25, 0.75)
 - Mốc 1/4 chia đúng: `P(2.75) = (P(2.5) + P(3.0)) / 2`
 - `Edge = EV / odds`
 - Đối soát mốc 1/4: `over 2.75` với tổng 3 bàn → **thắng nửa**; `over 3.0` → **hoàn**
+- `explain.ts` (9 test): `fmt()`, `buildFacts()` sinh token `{{U..}}` + nhãn, `substituteFacts()`
+  thay token và xóa token lạ `{{U999}}`, `verifyNumbers()` bỏ qua số cấu trúc 0–4 và bắt số bịa.
 
 ---
 
@@ -108,6 +135,9 @@ Edge < 0 nhưng odds cao → gắn cờ `TRAP`.
 - **Khúc xạ cong:** SVG `feTurbulence` + `feDisplacementMap` (`#refraction`).
 - **Chuyển động:** chỉ animate `transform`/`opacity`, spring physics, stagger, số đếm lên,
   thanh tiến trình có ánh sáng chạy, skeleton dạng kính.
+- **Bước C:** `ExplanationPanel` hiển thị 4 phần (đối soát chỉ số / chiến thuật & nhân sự /
+  đánh giá kèo & kịch bản thua / tổng kết) + huy hiệu `verified` + hộp `caveats` +
+  hộp số chưa khớp (nếu có).
 
 ---
 
@@ -118,18 +148,29 @@ Xem [`.env.example`](.env.example). Không commit `.env` thật (đã có trong 
 | Biến | Dùng ở | Ghi chú |
 |---|---|---|
 | `GEMINI_API_KEY` | Backend | Không nhúng frontend |
-| `GEMINI_MODEL` | Backend | ví dụ `gemini-2.5-flash` |
+| `GEMINI_MODEL` | Backend | mặc định `gemini-flash-latest` (alias đã kiểm chứng); hoặc ID chính xác từ nút "Copy cURL quickstart" trong AI Studio |
 | `UPSTASH_REDIS_REST_URL` | Backend | |
 | `UPSTASH_REDIS_REST_TOKEN` | Backend | |
 | `JWT_SECRET` | Backend | chuỗi ngẫu nhiên ≥ 32 ký tự |
 | `ADMIN_EMAIL` | Backend | tài khoản được tạo khi tắt đăng ký công khai |
 | `ALLOW_PUBLIC_SIGNUP` | Backend | mặc định `false` |
 | `STORE_ORIGINAL_IMAGES` | Backend | mặc định `false` |
+| `PORT` | Backend | mặc định `8787` |
+| `CORS_ORIGINS` | Backend | danh sách origin cho phép, cách nhau dấu phẩy |
+| `VITE_DEV_API_TARGET` | Frontend (dev) | target proxy `/api` khi `npm run dev` |
 
 ---
 
+## Deploy (G6)
+
+- Build: `npm run build` → `dist/` (frontend) + typecheck server xong.
+- Chạy server: `node dist-server/index.js` (hoặc `npm run dev:api` khi dev), đặt sau reverse proxy
+  và trỏ frontend tới cùng origin `/api`.
+- Bắt buộc đặt `JWT_SECRET`, `UPSTASH_*`, `GEMINI_API_KEY` trên host (Vercel / Cloud Run / VPS).
+- Không bao giờ expose `GEMINI_API_KEY` hay `UPSTASH_*` cho frontend.
+
 ## Ghi chú
 
-- G1 dùng **dữ liệu giả** (`src/lib/mock.ts`) — mọi nơi hiển thị đều ghi rõ "giả lập".
-- Nếu môi trường không chạy backend an toàn được, sẽ đề xuất export qua **Cloud Run**
-  hoặc **Vercel**; khóa chỉ nằm ở server.
+- Dev/offline dùng **dữ liệu giả** (`src/lib/mock.ts`) — mọi nơi hiển thị đều ghi rõ "giả lập".
+- Auth: JWT access + refresh xoay vòng trong cookie HttpOnly (`fq_at`, `fq_rt`) + CSRF double-submit (`fq_csrf`).
+- Rate-limit API: 240 req/phút/IP (in-memory).

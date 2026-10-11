@@ -20,6 +20,8 @@ export interface HistoryRecord {
     picks: Pick[]
     /** Kết quả thực tế (null = chưa quyết toán). */
     result: (ActualResult & { note?: string }) | null
+    /** Văn bản giải thích 4 phần do Gemini viết (null nếu chưa/bỏ qua). */
+    explanation?: import('../src/lib/types.js').Explanation | null
 }
 
 function keyHash(s: string): string {
@@ -94,59 +96,11 @@ export async function computeStats(userId: string): Promise<{
             settled.push(settlePick(p, actual, 'ft'))
         }
     }
+    // Lợi nhuận chỉ tính trên pick THỰC SỰ có vốn — pick bị loại không được đặt tiền.
+    const staked = settled.filter((s) => s.pick.stakePct > 0)
     return {
         settled,
-        profit: totalProfit(settled),
+        profit: totalProfit(staked),
         calibration: buildCalibration(settled),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Zod schemas cho các route (tránh trùng định nghĩa trong app.ts)
-// ---------------------------------------------------------------------------
-
-import { z } from 'zod'
-
-export const settleSchema = z.object({
-    id: z.string().min(1),
-    htHome: z.number().int().min(0).max(30).optional(),
-    htAway: z.number().int().min(0).max(30).optional(),
-    ftHome: z.number().int().min(0).max(30),
-    ftAway: z.number().int().min(0).max(30),
-})
-
-export const analyzeSchema = z.object({
-    home: z.string().min(1).max(80),
-    away: z.string().min(1).max(80),
-    league: z.string().max(80).optional(),
-    kickoff: z.string().max(64).nullable().optional(),
-    // Cho phép frontend truyền sẵn analysis (giai đoạn G2 chạy local chưa có Gemini)
-    analysis: z
-        .object({
-            lambdas: z.object({
-                home: z.number(),
-                away: z.number(),
-            }),
-            picks: z.array(
-                z.object({
-                    kind: z.enum(['totals', 'ah']),
-                    line: z.number(),
-                    side: z.enum(['over', 'under', 'home', 'away']),
-                    odds: z.number().min(1).optional(),
-                    pModel: z.number().min(0).max(1).optional(),
-                }),
-            ),
-        })
-        .passthrough()
-        .optional(),
-    oddsLines: z
-        .array(
-            z.object({
-                kind: z.enum(['totals', 'ah']),
-                line: z.number(),
-                odds: z.coerce.number().min(1.01).max(500),
-                side: z.enum(['over', 'under', 'home', 'away']).optional(),
-            }),
-        )
-        .optional(),
-})

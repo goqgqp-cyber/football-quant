@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { GlassCard } from '../components/ui/GlassCard'
 import { Button } from '../components/ui/Button'
 import { TextInput } from '../components/ui/Field'
+import { ExplanationPanel } from '../components/ExplanationPanel'
 import { settlePick } from '../lib/settle'
 import { ApiError, api, type HistoryItem } from '../lib/api'
 import type { SettledPick } from '../lib/types'
@@ -182,6 +183,17 @@ function HistoryRow({
                     </button>
                 </div>
             </div>
+
+            {item.explanation && (
+                <details className="mt-3">
+                    <summary className="cursor-pointer text-xs text-violet-400">
+                        Xem giải thích (Bước C){item.explanation.verified ? '' : ' — có số chưa khớp'}
+                    </summary>
+                    <div className="mt-2">
+                        <ExplanationPanel explanation={item.explanation} />
+                    </div>
+                </details>
+            )}
 
             {!item.result ? (
                 <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">

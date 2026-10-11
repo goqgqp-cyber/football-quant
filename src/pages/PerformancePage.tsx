@@ -31,18 +31,24 @@ export function PerformancePage() {
     }, [load])
 
     const settled = stats?.settled ?? []
-    const nPicks = settled.length
-    const wins = settled.filter((s) => s.outcome === 'win').length
+    /**
+     * Chỉ tính ROI/tỉ lệ thắng trên những pick THỰC SỰ có vốn (stakePct > 0).
+     * Pick bị loại (rejected/no_bet) không được đặt tiền → nếu gộp vào sẽ làm
+     * sai cả tử số lẫn mẫu số của ROI.
+     */
+    const staked = useMemo(() => settled.filter((s) => s.pick.stakePct > 0), [settled])
+    const nPicks = staked.length
+    const wins = staked.filter((s) => s.outcome === 'win').length
     const winRate = nPicks ? wins / nPicks : 0
 
     const profit = stats?.profit ?? 0
-    const stakedTotal = settled.reduce((sum, s) => sum + (s.pick.stakePct || 0), 0)
+    const stakedTotal = staked.reduce((sum, s) => sum + s.pick.stakePct, 0)
     const roi = stakedTotal ? profit / stakedTotal : 0
 
     const bins = useMemo(() => stats?.calibration ?? [], [stats])
     const brier = useMemo(
-        () => brierScore(settled.map((s) => ({ p: s.pick.pWin, win: s.outcome === 'win' }))),
-        [settled],
+        () => brierScore(staked.map((s) => ({ p: s.pick.pWin, win: s.outcome === 'win' }))),
+        [staked],
     )
 
     const enough = nPicks >= CALIBRATION_MIN_PICKS

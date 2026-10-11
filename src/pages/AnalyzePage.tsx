@@ -1,15 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AnimatePresence, motion } from 'framer-motion'
 import { GlassCard } from '../components/ui/GlassCard'
 import { Button } from '../components/ui/Button'
 import { Field, TextInput } from '../components/ui/Field'
 import { PickCard } from '../components/PickCard'
+import { ExplanationPanel } from '../components/ExplanationPanel'
 import { ProgressSteps, type Step } from '../components/ui/ProgressSteps'
 import { Skeleton } from '../components/ui/RefractionFilter'
 import { ApiError, api, collectStream, type ExtractedRow } from '../lib/api'
 import { MOCK_MATCH_DATA, MOCK_MATCH_INPUT, MOCK_ODDS } from '../lib/mock'
 import { useSettings } from '../hooks/useSettings'
-import type { AnalysisResult, MatchData, MatchInput, OddsLine } from '../lib/types'
+import type { AnalysisResult, Explanation, MatchData, MatchInput, OddsLine } from '../lib/types'
 
 interface ConfirmRow {
     line: OddsLine
@@ -67,6 +67,11 @@ export function AnalyzePage() {
     const [result, setResult] = useState<AnalysisResult | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [savedId, setSavedId] = useState<string | null>(null)
+    /** Bước C: văn giải thích do Gemini viết (số do engine cấp qua token). */
+    const [explanation, setExplanation] = useState<Explanation | null>(null)
+    const [explanationError, setExplanationError] = useState<string | null>(null)
+    /** true khi bước giải thích đang chạy (đã qua compute, chưa có kết quả C). */
+    const [explaining, setExplaining] = useState(false)
     /** Text thô Gemini đang phát ra — cho người dùng thấy tiến trình thật. */
     const [liveText, setLiveText] = useState('')
     /** true khi đã nhận dữ liệu nền từ Google Search. */
@@ -90,6 +95,9 @@ export function AnalyzePage() {
         setSavedId(null)
         setLiveText('')
         setGrounded(false)
+        setExplanation(null)
+        setExplanationError(null)
+        setExplaining(false)
 
         const { abort } = collectStream(
             {
@@ -105,6 +113,13 @@ export function AnalyzePage() {
                 switch (e.type) {
                     case 'step':
                         setStepStatus(e.id, e.status)
+                        if (e.id === 'explain' && e.status === 'active') setExplaining(true)
+                        if (e.id === 'explain' && e.status === 'error') {
+                            setExplaining(false)
+                            setExplanationError(
+                                'Bước giải thích gặp lỗi — kết quả tính toán vẫn dùng được bình thường.',
+                            )
+                        }
                         break
                     case 'delta':
                         // Giới hạn độ dài để không dồn text vô hạn vào state
@@ -114,15 +129,21 @@ export function AnalyzePage() {
                         setData(e.matchData)
                         setGrounded(true)
                         break
+                    case 'explanation':
+                        setExplanation(e.explanation)
+                        setExplaining(false)
+                        break
                     case 'result':
                         setResult(e.result)
                         setSavedId(e.recordId)
                         setRunning(false)
+                        setExplaining(false)
                         abortRef.current = null
                         break
                     case 'error':
                         setError(e.message)
                         setRunning(false)
+                        setExplaining(false)
                         abortRef.current = null
                         break
                 }
@@ -764,36 +785,12 @@ export function AnalyzePage() {
                         </p>
                     </GlassCard>
 
-                    {/* 4 phần giải thích — placeholder cho Bước C (Gemini sẽ viết ở G5) */}
-                    <GlassCard>
-                        <p className="font-display text-sm font-bold text-ink-100">Giải thích (G5: Gemini — hiện tại là mẫu cục bộ)</p>
-                        <AnimatePresence>
-                            <motion.div
-                                initial={{ opacity: 0 }}
-                                animate={{ opacity: 1 }}
-                                className="mt-3 space-y-3 text-sm leading-relaxed text-ink-300"
-                            >
-                                <p>
-                                    <span className="font-semibold text-ink-100">(1) Đối soát chỉ số:</span> chênh lệch tấn công/thủ dựa trên
-                                    shr(x,n) và Dixon-Coles. Dữ liệu giả — chưa phải dữ liệu thật từ web.
-                                </p>
-                                <p>
-                                    <span className="font-semibold text-ink-100">(2) Chiến thuật &amp; nhân sự:</span> G4/G5 sẽ trích đội hình
-                                    dự kiến và chấn thương từ web/ảnh; G2 để trống.
-                                </p>
-                                <p>
-                                    <span className="font-semibold text-ink-100">(3) Đánh giá từng kèo &amp; kịch bản thua:</span> xem bảng
-                                    trên; kèo 1/4 được chia đôi tiền vào 2 mốc kề nhau.
-                                </p>
-                                <p>
-                                    <span className="font-semibold text-ink-100">(4) Tổng kết:</span>{' '}
-                                    {valuePicks.length === 0
-                                        ? 'NO BET — không kèo nào đủ Edge/EV và lệch mô hình chấp nhận được.'
-                                        : `${valuePicks.length} kèo VALUE đạt chuẩn; top tỉ số ${result.topScorelines[0]?.score ?? '—'}.`}
-                                </p>
-                            </motion.div>
-                        </AnimatePresence>
-                    </GlassCard>
+                    {/* Bước C — 4 phần giải thích do Gemini viết, số do engine cấp qua token */}
+                    <ExplanationPanel
+                        explanation={explanation}
+                        loading={explaining}
+                        error={explanationError}
+                    />
                 </>
             )}
         </div>

@@ -1,3 +1,4 @@
+import './dotenv.js'
 import { serve } from '@hono/node-server'
 import { app } from './app.js'
 import { env, isProd } from './env.js'

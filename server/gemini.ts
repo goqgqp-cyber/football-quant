@@ -10,7 +10,15 @@
  */
 
 import { env } from './env.js'
-import type { H2H, MatchData, Source, TeamStats } from '../src/lib/types.js'
+import type {
+    AnalysisResult,
+    Explanation,
+    H2H,
+    MatchData,
+    Source,
+    TeamStats,
+} from '../src/lib/types.js'
+import { buildFacts, factLabels, substituteFacts, verifyNumbers } from '../src/lib/explain.js'
 
 const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models'
 
@@ -349,6 +357,58 @@ function extractSources(meta: unknown): Source[] {
 }
 
 /**
+ * Đọc luồng SSE của Gemini (`alt=sse`), phát dần text qua `onDelta`,
+ * gom nguồn web từ groundingMetadata. Dùng chung cho Bước A và Bước C.
+ */
+async function readGeminiStream(
+    res: Response,
+    onDelta: (chunk: string) => void,
+): Promise<{ text: string; sources: Source[] }> {
+    const reader = res.body!.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let text = ''
+    const sources: Source[] = []
+
+    for (; ;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+
+        let idx: number
+        while ((idx = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.slice(0, idx).trim()
+            buffer = buffer.slice(idx + 1)
+            if (!line.startsWith('data:')) continue
+            const payload = line.slice(5).trim()
+            if (!payload || payload === '[DONE]') continue
+
+            let chunk: {
+                candidates?: Array<{
+                    content?: { parts?: Array<{ text?: string }> }
+                    groundingMetadata?: unknown
+                }>
+            }
+            try {
+                chunk = JSON.parse(payload)
+            } catch {
+                continue
+            }
+            const cand = chunk.candidates?.[0]
+            const piece = cand?.content?.parts?.map((p) => p.text ?? '').join('') ?? ''
+            if (piece) {
+                text += piece
+                onDelta(piece)
+            }
+            if (cand?.groundingMetadata) {
+                sources.push(...extractSources(cand.groundingMetadata))
+            }
+        }
+    }
+    return { text, sources }
+}
+
+/**
  * BƯỚC A có streaming: gọi Gemini + Google Search grounding, phát dần text cho
  * client qua `onDelta`, cuối cùng trả MatchData đã chuẩn hoá.
  *
@@ -399,48 +459,7 @@ export async function streamCollectMatchData(
         throw new GeminiError(`Gemini trả lỗi HTTP ${res.status}.`, 502)
     }
 
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    let text = ''
-    const sources: Source[] = []
-
-    // Đọc SSE của Gemini: các dòng "data: {...}"
-    for (; ;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer += decoder.decode(value, { stream: true })
-
-        let idx: number
-        while ((idx = buffer.indexOf('\n')) !== -1) {
-            const line = buffer.slice(0, idx).trim()
-            buffer = buffer.slice(idx + 1)
-            if (!line.startsWith('data:')) continue
-            const payload = line.slice(5).trim()
-            if (!payload || payload === '[DONE]') continue
-
-            let chunk: {
-                candidates?: Array<{
-                    content?: { parts?: Array<{ text?: string }> }
-                    groundingMetadata?: unknown
-                }>
-            }
-            try {
-                chunk = JSON.parse(payload)
-            } catch {
-                continue
-            }
-            const cand = chunk.candidates?.[0]
-            const piece = cand?.content?.parts?.map((p) => p.text ?? '').join('') ?? ''
-            if (piece) {
-                text += piece
-                onDelta(piece)
-            }
-            if (cand?.groundingMetadata) {
-                sources.push(...extractSources(cand.groundingMetadata))
-            }
-        }
-    }
+    const { text, sources } = await readGeminiStream(res, onDelta)
 
     if (!text.trim()) {
         throw new GeminiError('Gemini không trả về dữ liệu cho trận này.', 502)
@@ -462,4 +481,152 @@ export async function streamCollectMatchData(
     })
 
     return normalizeMatchData(parsed, uniqSources)
+}
+
+// ===========================================================================
+// BƯỚC C — Gemini viết phân tích 4 phần, nhưng KHÔNG được tự viết số
+// ===========================================================================
+
+const STEP_C_PROMPT = `Bạn là chuyên gia phân tích kèo bóng đá, viết lời giải thích cho người đánh cược.
+
+QUY TẮC SỐ — TUYỆT ĐỐI NGHIÊM:
+- Bạn KHÔNG BAO GIỜ được viết bất kỳ con số nào (kể cả xấp xỉ, ví dụ "khoảng 55%" hay "hơn 2").
+- Khi cần nêu số liệu, bạn PHẢI chèn đúng token tương ứng trong bảng "SỐ LIỆU ĐÃ TÍNH" bên dưới.
+- Chỉ được dùng token có trong bảng. Không tự chế token.
+- Nói "nhiều hơn/không có" thay cho số cụ thể nếu không có token phù hợp.
+
+YÊU CẦU VĂN PHONG:
+- Tiếng Việt, súc tích, thẳng thắn; không marketing, không khẩu hiệu cổ súy.
+- Nếu kết quả là NO BET thì nói thẳng NO BET ở phần (4) và giải thích vì sao không có cơ hội.
+- Không khuyến khược gấp thếp; chỉ mô tả kèo nào đạt chuẩn theo engine.
+
+BỐN PHẦN (mỗi phần 2–4 câu):
+(1) Đối soát chỉ số: tấn công/thủ của hai đội, chênh lệch, và điều đó dẫn tới λ thế nào.
+(2) Chiến thuật & nhân sự: chấn thương, đội hình, lối chơi; nói rõ dữ liệu này chỉ là tin trước trận.
+(3) Đánh giá từng kèo & kịch bản thua: kèo nào value, kèo nào bẫy (odds cao nhưng edge âm), kịch bản thua gồm những gì.
+(4) Tổng kết: kết luận, số kèo value, tỉ số khả dĩ nhất, và các rủi ro/cảnh báo.
+
+Trả về DUY NHẤT JSON đúng cấu trúc, không markdown:
+{"parts":["câu 1 phần (1)","câu 2 phần (2)","câu 3 phần (3)","câu 4 phần (4)"],"caveats":["cảnh báo ngắn về dữ liệu thiếu/mâu thuẫn, nếu có"]}`
+
+/**
+ * Bước C: Gemini viết 4 phần giải thích dựa trên số liệu engine đã tính.
+ *
+ * Cơ chế chống bịa số (3 lớp):
+ *  1. Gemini không được viết số — chỉ chèn token `{{U..}}`.
+ *  2. Server thay token bằng số engine đã tính (`substituteFacts`).
+ *  3. Server quét lại văn bản; số nào không truy được về engine sẽ bị gắn cờ
+ *     (`verified: false`, `unverifiedNumbers`) để UI cảnh báo người dùng.
+ *
+ * @param onDelta cho phép phát text thô ra SSE (tuỳ chọn).
+ */
+export async function generateExplanation(
+    meta: { home: string; away: string; league?: string },
+    data: MatchData,
+    result: AnalysisResult,
+    onDelta?: (chunk: string) => void,
+): Promise<Explanation> {
+    if (!env.geminiApiKey) {
+        throw new GeminiError('Chưa cấu hình GEMINI_API_KEY trên server.', 503)
+    }
+
+    const facts = buildFacts(data, result)
+    const labels = factLabels(facts)
+    const factsTable = facts.map((f) => `- ${f.token} = ${f.value}`).join('\n')
+
+    const pickLines = result.picks
+        .slice(0, 6)
+        .map((p, i) => {
+            const k = `P${i + 1}`
+            return `- ${k}: ${p.kind === 'totals' ? (p.side === 'over' ? 'Trên' : 'Dưới') : `Chấp ${p.side}`} ${labels[`${k}_LINE`]} @ ${labels[`${k}_ODDS`]} · xác suất ${labels[`${k}_PWIN`]} · thị trường ${labels[`${k}_PIMPLIED`]} · edge ${labels[`${k}_EDGE`]} · stake ${labels[`${k}_STAKE`]} · trạng thái ${p.status}`
+        })
+        .join('\n')
+
+    const prompt = [
+        `Trận: ${meta.home} vs ${meta.away}${meta.league ? ` (${meta.league})` : ''}`,
+        '',
+        'SỐ LIỆU ĐÃ TÍNH SẴN (dùng token, tuyệt đối không tự viết số):',
+        factsTable,
+        '',
+        'BẢNG NHÃN:',
+        `- LAMBDA_HOME=${labels.LAMBDA_HOME} LAMBDA_AWAY=${labels.LAMBDA_AWAY}`,
+        `- Tỉ số khả dĩ: ${labels.TOP1_SCORE} (${labels.TOP1_P}), ${labels.TOP2_SCORE} (${labels.TOP2_P}), ${labels.TOP3_SCORE} (${labels.TOP3_P})`,
+        `- H2H: ${labels.H2H_N} trận, trung bình ${labels.H2H_AVG} bàn/trận`,
+        `- Nguồn dữ liệu: ${labels.SOURCE_COUNT}; kèo value: ${labels.VALUE_COUNT}/${labels.PICK_COUNT}`,
+        '',
+        'CÁC KÈO ĐÃ TÍNH:',
+        pickLines || '(chưa có kèo nào)',
+        '',
+        'DỮ LIỆU THIẾU / MÂU THUẪN (phải nêu trong caveats nếu có):',
+        data.missing.length ? data.missing.join(', ') : 'không thiếu',
+        data.conflicts.length ? data.conflicts.join(' · ') : 'không mâu thuẫn',
+        '',
+        STEP_C_PROMPT,
+    ].join('\n')
+
+    const body = {
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        generationConfig: {
+            temperature: 0.3,
+            responseMimeType: 'application/json',
+        },
+    }
+
+    let res: Response
+    try {
+        res = await fetch(`${ENDPOINT}/${env.geminiModel}:streamGenerateContent?alt=sse`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-goog-api-key': env.geminiApiKey,
+            },
+            body: JSON.stringify(body),
+        })
+    } catch (e) {
+        throw new GeminiError(
+            `Không gọi được Gemini: ${e instanceof Error ? e.message : 'lỗi mạng'}`,
+            502,
+        )
+    }
+    if (!res.ok || !res.body) {
+        const detail = await res.text().catch(() => '')
+        console.error('[gemini] step C HTTP', res.status, detail.slice(0, 500))
+        throw new GeminiError(`Gemini trả lỗi HTTP ${res.status}.`, 502)
+    }
+
+    const { text } = await readGeminiStream(res, onDelta ?? (() => { }))
+
+    let parsed: { parts?: unknown; caveats?: unknown }
+    try {
+        parsed = JSON.parse(stripJsonFence(text)) as { parts?: unknown; caveats?: unknown }
+    } catch {
+        throw new GeminiError('Gemini trả về JSON không hợp lệ ở Bước C.', 502)
+    }
+
+    // Lấy đúng 4 phần; phần thiếu thì để chuỗi rỗng (UI sẽ hiện "không có nội dung")
+    const rawParts = Array.isArray(parsed.parts) ? parsed.parts : []
+    const parts = [0, 1, 2, 3].map((i) =>
+        typeof rawParts[i] === 'string'
+            ? substituteFacts((rawParts[i] as string).slice(0, 1200), facts)
+            : '',
+    ) as [string, string, string, string]
+
+    const caveats = Array.isArray(parsed.caveats)
+        ? (parsed.caveats as unknown[])
+            .filter((c): c is string => typeof c === 'string' && c.trim().length > 0)
+            .map((c) => substituteFacts(c.trim().slice(0, 200), facts))
+            .slice(0, 8)
+        : []
+
+    // Kiểm chứng số trên TOÀN BỘ văn bản đã hiển thị
+    const allText = parts.join('\n') + '\n' + caveats.join('\n')
+    const unverifiedNumbers = verifyNumbers(allText, facts)
+
+    return {
+        parts,
+        verified: unverifiedNumbers.length === 0,
+        unverifiedNumbers,
+        caveats,
+        model: env.geminiModel,
+    }
 }

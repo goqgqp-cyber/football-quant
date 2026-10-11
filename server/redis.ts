@@ -1,15 +1,35 @@
 import { Redis } from '@upstash/redis'
 import { env } from './env.js'
+import { MemoryRedis } from './memory-store.js'
 
 /**
- * Client Upstash Redis qua REST.
+ * Client Redis qua REST.
  * Chỉ dùng ở server. Không bao giờ lộ URL/TOKEN ra frontend.
+ *
+ * - Production / có cấu hình: dùng Upstash đúng như cũ.
+ * - DEV thiếu `UPSTASH_REDIS_REST_URL`/`UPSTASH_REDIS_REST_TOKEN`:
+ *   tự dùng store in-memory trong tiến trình để chạy được ngay
+ *   (dữ liệu mất khi restart, không dùng cho production).
  */
-export const redis = new Redis({
-    url: env.upstashUrl,
-    token: env.upstashToken,
-    automaticDeserialization: true,
-})
+const hasUpstash = Boolean(env.upstashUrl) && Boolean(env.upstashToken)
+
+if (!hasUpstash) {
+    console.warn(
+        '[server] Thiếu UPSTASH_* — dùng store in-memory (DEV, dữ liệu mất khi restart).',
+    )
+}
+
+export const usingMemoryStore = !hasUpstash
+
+const client: Redis = hasUpstash
+    ? new Redis({
+        url: env.upstashUrl,
+        token: env.upstashToken,
+        automaticDeserialization: true,
+    })
+    : (new MemoryRedis() as unknown as Redis)
+
+export const redis = client
 
 /**
  * Quy ước khóa — MỌI dữ liệu người dùng đều nằm dưới tiền tố `u:{userId}:`
@@ -45,6 +65,7 @@ export const keys = {
 
 /** Đảm bảo kết nối Redis hoạt động (dùng ở health check). */
 export async function pingRedis(): Promise<boolean> {
+    if (usingMemoryStore) return true
     try {
         const pong = await redis.ping()
         return pong === 'PONG'

@@ -7,21 +7,22 @@
  * ReadableStream để đọc SSE — vẫn là text/event-stream chuẩn.
  *
  * Chuỗi sự kiện:
- *   event: step   → {"id":"collect","status":"active"}
- *   event: delta  → {"text":"..."}        (text thô Gemini phát ra, để UI thấy tiến trình)
- *   event: data   → {"matchData":{...}}   (dữ liệu nền đã chuẩn hoá + nguồn)
- *   event: result → {"result":{...},"recordId":"..."}
- *   event: error  → {"message":"..."}
+ *   event: step        → {"id":"collect","status":"active"}
+ *   event: delta       → {"text":"..."}         (text thô Gemini phát ra, để UI thấy tiến trình)
+ *   event: data        → {"matchData":{...}}    (dữ liệu nền đã chuẩn hoá + nguồn)
+ *   event: explanation → {"explanation":{...}}  (Bước C: 4 phần + kiểm chứng số)
+ *   event: result      → {"result":{...},"recordId":"..."}
+ *   event: error       → {"message":"..."}
  */
 
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { z } from 'zod'
-import { GeminiError, streamCollectMatchData } from '../gemini.js'
+import { GeminiError, generateExplanation, streamCollectMatchData } from '../gemini.js'
 import { requireAuth, type Vars } from '../middleware.js'
 import { saveHistory } from '../store.js'
 import { analyzeMatch } from '../../src/lib/engine.js'
-import type { MatchData, OddsLine } from '../../src/lib/types.js'
+import type { Explanation, MatchData, OddsLine } from '../../src/lib/types.js'
 
 export const streamApp = new Hono<{ Variables: Vars }>()
 
@@ -98,7 +99,33 @@ streamApp.post('/collect/stream', async (c) => {
             )
             await step('compute', 'done')
 
-            // ---- Lưu lịch sử ----
+            // ---- Bước C: Gemini viết 4 phần, số do engine cấp qua token ----
+            await step('explain', 'active')
+            let explanation: Explanation | null = null
+            try {
+                explanation = await generateExplanation(
+                    { home: input.home, away: input.away, league: input.league },
+                    matchData,
+                    result,
+                    (chunk) => {
+                        void stream.writeSSE({
+                            event: 'delta',
+                            data: JSON.stringify({ text: chunk }),
+                        })
+                    },
+                )
+                await stream.writeSSE({
+                    event: 'explanation',
+                    data: JSON.stringify({ explanation }),
+                })
+                await step('explain', 'done')
+            } catch (e) {
+                // Bước C lỗi KHÔNG được làm hỏng kết quả tính toán đã có
+                console.error('[collect/stream] step C', e)
+                await step('explain', 'error')
+            }
+
+            // ---- Lưu lịch sử (kèm giải thích nếu có) ----
             const record = await saveHistory(userId, {
                 meta: {
                     home: input.home,
@@ -109,11 +136,8 @@ streamApp.post('/collect/stream', async (c) => {
                 analysis: result,
                 picks: result.picks,
                 result: null,
+                explanation,
             })
-
-            // ---- Giải thích: G5 sẽ thay bằng Gemini viết văn ----
-            await step('explain', 'active')
-            await step('explain', 'done')
 
             await stream.writeSSE({
                 event: 'result',

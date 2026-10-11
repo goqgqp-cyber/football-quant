@@ -38,14 +38,15 @@ export const env = {
     accessTtlSec: int('ACCESS_TTL_SEC', 15 * 60), // 15 phút
     refreshTtlSec: int('REFRESH_TTL_SEC', 30 * 24 * 60 * 60), // 30 ngày
 
-    upstashUrl: required('UPSTASH_REDIS_REST_URL'),
-    upstashToken: required('UPSTASH_REDIS_REST_TOKEN'),
+    // Thiếu thì server/redis.ts tự chuyển sang store in-memory (chỉ hợp cho DEV).
+    upstashUrl: optional('UPSTASH_REDIS_REST_URL', ''),
+    upstashToken: optional('UPSTASH_REDIS_REST_TOKEN', ''),
 
     adminEmail: optional('ADMIN_EMAIL', '').toLowerCase(),
     allowPublicSignup: bool('ALLOW_PUBLIC_SIGNUP', false),
 
     geminiApiKey: optional('GEMINI_API_KEY', ''),
-    geminiModel: optional('GEMINI_MODEL', 'gemini-2.5-flash'),
+    geminiModel: optional('GEMINI_MODEL', 'gemini-flash-latest'),
     storeOriginalImages: bool('STORE_ORIGINAL_IMAGES', false),
 
     /** Origin frontend được phép gọi API (dùng cho CORS). */

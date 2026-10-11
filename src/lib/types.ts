@@ -140,3 +140,22 @@ export interface CalibrationBin {
     sumPred: number
     wins: number
 }
+
+/**
+ * Phân tích văn bản do Gemini viết ở Bước C (G5).
+ *
+ * Ranh giới bắt buộc: MỌI con số trong `parts` đều đến từ engine, không phải từ LLM.
+ * Gemini chỉ được viết văn và chèn token `{{U1}}`, `{{U2}}`…; server thay token
+ * bằng số đã tính sẵn, rồi kiểm tra lại toàn bộ số trong văn bản (verifyNumbers).
+ */
+export interface Explanation {
+    /** 4 phần: (1) đối soát chỉ số, (2) chiến thuật & nhân sự, (3) đánh giá kèo & kịch bản thua, (4) tổng kết */
+    parts: [string, string, string, string]
+    /** true nếu mọi con số trong văn bản đều khớp với số engine tính ra. */
+    verified: boolean
+    /** Các con số không truy được về engine (số thừa, số bịa) — hiển thị cảnh báo cho người dùng. */
+    unverifiedNumbers: string[]
+    /** Ghi chú về dữ liệu thiếu/mâu thuẫn mà Gemini nêu. */
+    caveats: string[]
+    model: string
+}

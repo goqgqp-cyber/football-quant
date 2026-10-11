@@ -8,6 +8,7 @@ import type {
     ActualResult,
     AnalysisResult,
     CalibrationBin,
+    Explanation,
     MatchData,
     OddsLine,
     Pick,
@@ -38,6 +39,7 @@ export type CollectEvent =
     | { type: 'step'; id: string; status: 'active' | 'done' | 'error' }
     | { type: 'delta'; text: string }
     | { type: 'data'; matchData: MatchData }
+    | { type: 'explanation'; explanation: Explanation }
     | { type: 'result'; result: AnalysisResult; recordId: string }
     | { type: 'error'; message: string }
 
@@ -131,6 +133,12 @@ export function collectStream(
                             break
                         case 'data':
                             onEvent({ type: 'data', matchData: o.matchData as MatchData })
+                            break
+                        case 'explanation':
+                            onEvent({
+                                type: 'explanation',
+                                explanation: o.explanation as Explanation,
+                            })
                             break
                         case 'result':
                             onEvent({
@@ -265,6 +273,8 @@ export interface HistoryItem {
     analysis: AnalysisResult
     picks: Pick[]
     result: (ActualResult & { note?: string }) | null
+    /** Văn giải thích 4 phần (Bước C) — null nếu chưa/bỏ qua. */
+    explanation?: Explanation | null
 }
 
 export interface StatsResponse {
