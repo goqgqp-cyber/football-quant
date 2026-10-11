@@ -1,5 +1,6 @@
 /**
- * POST /api/extract — đọc ảnh bảng kèo → JSON có confidence.
+ * POST /api/extract (cùng aliases /api/parse-odds, /api/ocr-odds)
+ * Đọc ảnh bảng kèo nhà cái bằng xKiro Vision (Qwen 3.8 Max) → JSON có confidence.
  *
  * Nhận 2 định dạng (đều yêu cầu đăng nhập + CSRF):
  * 1. application/json: { images: [{ mimeType, data(base64) }], home?, away?, league? }
@@ -9,9 +10,9 @@
  * Kết quả luôn là gợi ý để NGƯỜI DÙNG xác nhận lại, không tự chạy phân tích.
  */
 
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { z } from 'zod'
-import { GeminiError, extractOddsFromImages, type ImageInput } from '../services/gemini.js'
+import { XKiroError, GeminiError, extractOddsFromImages, type ImageInput } from '../services/gemini.js'
 import { requireAuth, type Vars } from '../middleware.js'
 
 export const extractApp = new Hono<{ Variables: Vars }>()
@@ -54,7 +55,7 @@ function validateImages(images: ImageInput[]): string | null {
     return null
 }
 
-extractApp.post('/extract', async (c) => {
+const handleExtract = async (c: Context<{ Variables: Vars }>) => {
     const contentType = c.req.header('content-type') ?? ''
     let images: ImageInput[] = []
     let home: string | undefined
@@ -106,10 +107,15 @@ extractApp.post('/extract', async (c) => {
         const result = await extractOddsFromImages(images, { home, away, league })
         return c.json(result)
     } catch (e) {
-        if (e instanceof GeminiError) {
-            return c.json({ error: 'gemini', message: e.message }, e.status as 400)
+        if (e instanceof XKiroError || e instanceof GeminiError) {
+            return c.json({ error: 'xkiro', message: e.message }, e.status as 400)
         }
         console.error('[extract]', e)
         return c.json({ error: 'internal', message: 'Trích xuất ảnh thất bại.' }, 500)
     }
-})
+}
+
+/** Hỗ trợ cả endpoint chuẩn /extract và aliases /parse-odds, /ocr-odds */
+extractApp.post('/extract', handleExtract)
+extractApp.post('/parse-odds', handleExtract)
+extractApp.post('/ocr-odds', handleExtract)

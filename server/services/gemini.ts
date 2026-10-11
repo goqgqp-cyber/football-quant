@@ -251,14 +251,33 @@ async function readXKiroStream(
     return { text: fullText }
 }
 
-const OCR_PROMPT = `Bạn là công cụ OCR cho bảng kèo bóng đá (odds).
-Nhiệm vụ: Trích xuất các ô kèo và trả về DUY NHẤT một JSON thuần, KHÔNG dùng markdown (không dùng \`\`\`json hoặc \`\`\`), KHÔNG giải thích ngoài JSON.
+const OCR_PROMPT = `Bạn là Chuyên gia Thị giác Máy tính và OCR Bảng Kèo Bóng Đá (Sportsbook Odds Vision Analyst).
+Nhiệm vụ: Phân tích ảnh chụp màn hình bảng kèo nhà cái và bóc tách chính xác các cột kèo Tài/Xỉu (Totals/Over-Under), Kèo Chấp (Asian Handicap/AH), mốc kèo (line) và tỷ lệ cược (odds).
 
-Cấu trúc JSON:
+QUY TẮC BẮT BUỘC:
+1. Bóc tách chính xác các loại kèo nhìn thấy trong ảnh:
+   - Kèo Tài/Xỉu ("totals"): mốc bàn thắng (line) và odds của Tài ("over") / Xỉu ("under").
+   - Kèo Chấp Handicap ("ah"): mốc chấp (line) và odds của Đội Nhà ("home") / Đội Khách ("away").
+2. Chỉ trích xuất số liệu nhìn thấy thật trong ảnh chụp màn hình nhà cái. Không đoán mò, không tự bịa số liệu.
+3. Đánh giá độ tin cậy "confidence" (0.0 đến 1.0) cho từng ô kèo (chữ nét: 0.9–1.0, hơi mờ: 0.6–0.85, mờ không rõ thì bỏ qua).
+4. BẮT BUỘC trả về DUY NHẤT một chuỗi JSON thuần, KHÔNG bọc trong markdown code block (TUYỆT ĐỐI KHÔNG dùng \`\`\`json hoặc \`\`\`), KHÔNG có bất kỳ văn bản hay lời chào nào ngoài JSON.
+
+CẤU TRÚC JSON BẮT BUỘC:
 {
-  "rows": [{"kind":"totals|ah","side":"over|under|home|away","line":2.5,"odds":2.15,"confidence":0.9,"note":"tùy chọn"}],
-  "meta": {"home":"tên đội nhà","away":"tên đội khách","league":"giải","kickoff":null,"confidence":0.8},
-  "note": "ghi chú ngắn gọn"
+  "rows": [
+    { "kind": "totals", "side": "over", "line": 2.5, "odds": 1.95, "confidence": 0.95 },
+    { "kind": "totals", "side": "under", "line": 2.5, "odds": 1.90, "confidence": 0.95 },
+    { "kind": "ah", "side": "home", "line": -0.25, "odds": 2.02, "confidence": 0.92 },
+    { "kind": "ah", "side": "away", "line": 0.25, "odds": 1.88, "confidence": 0.92 }
+  ],
+  "meta": {
+    "home": "Tên đội nhà",
+    "away": "Tên đội khách",
+    "league": "Giải đấu",
+    "kickoff": null,
+    "confidence": 0.9
+  },
+  "note": "Bóc tách thành công các cột kèo Tài/Xỉu và Kèo Chấp"
 }`
 
 /**

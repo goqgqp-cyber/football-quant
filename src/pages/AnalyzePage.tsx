@@ -216,7 +216,7 @@ export function AnalyzePage() {
                 setParseHint(
                     e instanceof ApiError
                         ? e.message
-                        : 'Trích xuất ảnh thất bại. Kiểm tra backend đã chạy và GEMINI_API_KEY đã đặt chưa.',
+                        : 'Trích xuất ảnh thất bại. Vui lòng kiểm tra lại ảnh hoặc thử lại.',
                 )
             } finally {
                 setExtracting(false)
@@ -375,8 +375,8 @@ export function AnalyzePage() {
                 </div>
                 <p className="mt-1 text-xs text-ink-500">
                     {grounded
-                        ? 'Gemini tìm số liệu thật trên web (Google Search grounding). Không có số liệu nào được bịa; trường nào không tìm thấy sẽ nằm trong “Thiếu”.'
-                        : 'Chưa có dữ liệu thật. Bấm “Phân tích ngay” để Gemini tìm dữ liệu — bảng dưới chỉ là dữ liệu mẫu để xem trước.'}
+                        ? 'AI phân tích số liệu định lượng cho trận đấu (xG, Poisson, ép sân, phạt góc).'
+                        : 'Chưa có dữ liệu. Bấm “Phân tích ngay” để AI phân tích định lượng trận đấu.'}
                 </p>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <TeamBox label={`Chủ nhà: ${input.homeTeam}`} team={data.home} />
@@ -412,10 +412,10 @@ export function AnalyzePage() {
                 )}
             </GlassCard>
 
-            {/* Upload ảnh → Gemini đọc kèo (G3) */}
+            {/* Upload ảnh → AI đọc kèo (G3) */}
             <GlassCard>
                 <div className="flex items-center justify-between gap-2">
-                    <p className="font-display text-sm font-bold text-ink-100">Upload ảnh odds (Gemini đọc)</p>
+                    <p className="font-display text-sm font-bold text-ink-100">Upload ảnh odds (AI đọc bảng kèo)</p>
                     <span className="text-xs text-ink-500">Tối đa 4 ảnh · JPEG/PNG/WebP · 8 MB/ảnh</span>
                 </div>
                 <div
@@ -427,7 +427,7 @@ export function AnalyzePage() {
                     }}
                 >
                     {extracting ? (
-                        <p className="text-sm text-violet-300">Đang đọc ảnh bằng Gemini…</p>
+                        <p className="text-sm text-violet-300">Đang đọc ảnh bằng AI (Qwen)…</p>
                     ) : (
                         <p className="text-sm text-ink-300">
                             Kéo-thả ảnh vào đây, hoặc dán ảnh từ clipboard (Ctrl+V), hoặc chọn file.
@@ -466,22 +466,22 @@ export function AnalyzePage() {
                 )}
             </GlassCard>
 
-            {/* Bảng xác nhận số liệu Gemini đọc từ ảnh */}
+            {/* Bảng xác nhận số liệu AI đọc từ ảnh */}
             {confirmRows && (
                 <GlassCard>
                     <div className="flex items-center justify-between gap-2">
                         <p className="font-display text-sm font-bold text-ink-100">
-                            Xác nhận số liệu Gemini đọc được
+                            Xác nhận số liệu AI đọc được
                         </p>
                         <span className="rounded-full bg-warn-500/15 px-2 py-1 text-[11px] font-semibold text-warn-400">
                             Sửa nếu sai rồi mới xác nhận
                         </span>
                     </div>
                     <p className="mt-1 text-xs text-ink-500">
-                        Đây là gợi ý do Gemini đọc từ ảnh, KHÔNG tự động tin. Cột “Tin cậy” là mức tự chấm của model —
+                        Đây là gợi ý do AI đọc từ ảnh, KHÔNG tự động tin. Cột “Tin cậy” là mức tự chấm của model —
                         dòng dưới 80% nên kiểm tra kỹ.
                     </p>
-                    {extractNote && <p className="mt-1 text-xs text-ink-500">Ghi chú Gemini: {extractNote}</p>}
+                    {extractNote && <p className="mt-1 text-xs text-ink-500">Ghi chú AI: {extractNote}</p>}
                     <div className="mt-3 overflow-x-auto rounded-xl border border-white/10">
                         <table className="min-w-full text-sm">
                             <thead className="bg-white/5 text-xs text-ink-500">
@@ -725,7 +725,7 @@ export function AnalyzePage() {
                     {running && liveText && (
                         <div className="mt-3 max-h-40 overflow-y-auto rounded-xl border border-white/10 bg-black/20 p-3">
                             <p className="mb-1 text-[11px] uppercase tracking-wide text-ink-500">
-                                Gemini đang phát (thô)
+                                AI đang phát (thô)
                             </p>
                             <pre className="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-ink-400">
                                 {liveText}

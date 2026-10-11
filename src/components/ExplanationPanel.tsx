@@ -42,7 +42,7 @@ export function ExplanationPanel({
                 )}
             </div>
             <p className="mt-1 text-xs text-ink-500">
-                Gemini chỉ viết văn; mọi con số đều do engine tính rồi chèn vào, sau đó server quét lại
+                AI chỉ viết văn; mọi con số đều do engine tính rồi chèn vào, sau đó server quét lại
                 toàn bộ văn bản.
             </p>
 

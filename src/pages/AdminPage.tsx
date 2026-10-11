@@ -325,12 +325,12 @@ export function AdminPage() {
                 </GlassCard>
 
                 <GlassCard className="!p-4">
-                    <p className="text-[11px] uppercase tracking-wider text-ink-500">Gemini AI Engine</p>
+                    <p className="text-[11px] uppercase tracking-wider text-ink-500">AI Engine (Qwen 3.8 Max)</p>
                     <p className="mt-1 truncate font-display text-base font-bold text-white" title={overview?.geminiModel}>
-                        {overview?.geminiModel ?? 'gemini-flash-latest'}
+                        {overview?.geminiModel ?? 'qwen/qwen3.8-max:free'}
                     </p>
                     <p className="mt-1 text-xs text-ink-500">
-                        {overview?.geminiConfigured ? 'Đã cài đặt API Key' : 'Chưa có key (Mặc định)'}
+                        {overview?.geminiConfigured ? 'Đã kết nối xKiro API Key' : 'Chưa có key (Mặc định)'}
                     </p>
                 </GlassCard>
 

@@ -122,7 +122,7 @@ export function Sidebar({ route }: { route: Route }) {
                     <span className="text-gradient">Football Quant</span>
                 </p>
                 <p className="mt-1 text-[11px] uppercase tracking-[0.2em] text-ink-500">
-                    Poisson · Dixon-Coles · Gemini
+                    POISSON · DIXON-COLES · QWEN
                 </p>
             </div>
             <nav aria-label="Điều hướng chính" className="mt-4">
