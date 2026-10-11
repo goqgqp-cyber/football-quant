@@ -1,5 +1,5 @@
 /**
- * POST /api/collect/stream — chạy Bước A (Gemini + Google Search grounding)
+ * POST /api/collect/stream — chạy Bước A (xKiro AI Engine)
  * rồi tính toán engine, phát tiến trình qua Server-Sent Events.
  *
  * Vì sao không dùng EventSource: EventSource không gửi được header
@@ -8,7 +8,7 @@
  *
  * Chuỗi sự kiện:
  *   event: step        → {"id":"collect","status":"active"}
- *   event: delta       → {"text":"..."}         (text thô Gemini phát ra, để UI thấy tiến trình)
+ *   event: delta       → {"text":"..."}         (text thô AI phát ra, để UI thấy tiến trình)
  *   event: data        → {"matchData":{...}}    (dữ liệu nền đã chuẩn hoá + nguồn)
  *   event: explanation → {"explanation":{...}}  (Bước C: 4 phần + kiểm chứng số)
  *   event: result      → {"result":{...},"recordId":"..."}
@@ -18,7 +18,7 @@
 import { Hono } from 'hono'
 import { streamSSE } from 'hono/streaming'
 import { z } from 'zod'
-import { GeminiError, generateExplanation, sanitizeCleanText, streamCollectMatchData } from '../services/gemini.js'
+import { XKiroError, generateExplanation, sanitizeCleanText, streamCollectMatchData } from '../services/xkiro.js'
 import { requireAuth, type Vars } from '../middleware.js'
 import { saveHistory } from '../store.js'
 import { analyzeMatch } from '../../src/lib/engine.js'
@@ -74,7 +74,7 @@ streamApp.post('/collect/stream', async (c) => {
         }
 
         try {
-            // ---- Bước A: thu thập dữ liệu nền (Gemini + grounding) ----
+            // ---- Bước A: phân tích định lượng & thu thập số liệu (xKiro) ----
             await step('collect', 'active')
             const matchData: MatchData = await streamCollectMatchData(
                 {
@@ -108,7 +108,7 @@ streamApp.post('/collect/stream', async (c) => {
             )
             await step('compute', 'done')
 
-            // ---- Bước C: Gemini viết 4 phần, số do engine cấp qua token ----
+            // ---- Bước C: xKiro viết 4 phần, số do engine cấp qua token ----
             await step('explain', 'active')
             let explanation: Explanation | null = null
             try {
@@ -154,7 +154,7 @@ streamApp.post('/collect/stream', async (c) => {
             })
         } catch (e) {
             const message =
-                e instanceof GeminiError
+                e instanceof XKiroError
                     ? e.message
                     : e instanceof Error
                         ? e.message

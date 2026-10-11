@@ -1,5 +1,4 @@
 /**
- * Re-export từ server/services/gemini.ts để giữ tính tương thích ngược
- * cho toàn bộ hệ thống server.
+ * Re-export từ server/services/xkiro.ts
  */
-export * from './services/gemini.js'
+export * from './services/xkiro.js'

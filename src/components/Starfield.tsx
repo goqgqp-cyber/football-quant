@@ -109,14 +109,6 @@ export function Starfield() {
         resize()
         window.addEventListener('resize', resize)
 
-        // Con trỏ nội suy cho parallax
-        const ptr = { x: 0.5, y: 0.5, sx: 0.5, sy: 0.5 }
-        const onPointer = (e: PointerEvent) => {
-            ptr.x = e.clientX / window.innerWidth
-            ptr.y = e.clientY / window.innerHeight
-        }
-        window.addEventListener('pointermove', onPointer, { passive: true })
-
         const running = { on: true }
         let raf = 0
         let last = performance.now()
@@ -130,10 +122,8 @@ export function Starfield() {
             const dt = Math.min(0.05, (now - last) / 1000)
             last = now
 
-            ptr.sx += (ptr.x - ptr.sx) * 0.045
-            ptr.sy += (ptr.y - ptr.sy) * 0.045
-            const px = (ptr.sx - 0.5) * 30
-            const py = (ptr.sy - 0.5) * 22
+            const px = 0
+            const py = 0
 
             ctx.clearRect(0, 0, w, h)
 
@@ -218,7 +208,6 @@ export function Starfield() {
         return () => {
             cancelAnimationFrame(raf)
             window.removeEventListener('resize', resize)
-            window.removeEventListener('pointermove', onPointer)
             document.removeEventListener('visibilitychange', onVisibility)
             mq.removeEventListener?.('change', onMq)
         }

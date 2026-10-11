@@ -409,7 +409,7 @@ export interface AnalyzePayload {
     oddsLines: OddsLine[]
 }
 
-/** Một dòng kèo Gemini đọc được từ ảnh, kèm mức tin cậy của model. */
+/** Một dòng kèo AI (Qwen) đọc được từ ảnh, kèm mức tin cậy của model. */
 export interface ExtractedRow {
     kind: 'totals' | 'ah'
     side: 'over' | 'under' | 'home' | 'away'
@@ -535,7 +535,7 @@ export const api = {
 
     suggestedLines: () => apiFetch<{ lines: OddsLine[] }>('/suggested-lines'),
 
-    /** Gửi ảnh bảng kèo lên server để Gemini đọc (G3). */
+    /** Gửi ảnh bảng kèo lên server để AI tìm dữ liệu / đọc kèo (G3). */
     extract: (files: File[], hint: { home?: string; away?: string; league?: string }) => {
         const fd = new FormData()
         for (const f of files) fd.append('images', f)
@@ -585,8 +585,8 @@ export interface AdminOverview {
     redisConnected: boolean
     redisMode: string
     allowPublicSignup: boolean
-    geminiConfigured: boolean
-    geminiModel: string
+    xkiroConfigured: boolean
+    xkiroModel: string
     nodeEnv: string
     uptime: number
     serverTime: string

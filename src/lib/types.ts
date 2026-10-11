@@ -3,7 +3,7 @@
  * G1 dùng dữ liệu giả (mock) theo đúng schema này; G2+ thay bằng dữ liệu thật.
  */
 
-/** Số liệu một đội (từ Gemini hoặc từ ảnh đã xác nhận). Trường thiếu = null. */
+/** Số liệu một đội (từ AI hoặc từ ảnh đã xác nhận). Trường thiếu = null. */
 export interface TeamStats {
     /** Bàn thắng kỳ vọng mỗi trận (nếu có nguồn xG) */
     xgf: number | null
@@ -33,7 +33,7 @@ export interface Source {
     fetched_at: string
 }
 
-/** JSON chuẩn hoá ở Bước A (Gemini + Google Search grounding). */
+/** JSON chuẩn hoá ở Bước A (xKiro AI Engine). */
 export interface MatchData {
     home: TeamStats
     away: TeamStats
@@ -194,10 +194,10 @@ export interface CalibrationBin {
 }
 
 /**
- * Phân tích văn bản do Gemini viết ở Bước C (G5).
+ * Phân tích văn bản do AI (Qwen) viết ở Bước C (G5).
  *
  * Ranh giới bắt buộc: MỌI con số trong `parts` đều đến từ engine, không phải từ LLM.
- * Gemini chỉ được viết văn và chèn token `{{U1}}`, `{{U2}}`…; server thay token
+ * AI chỉ được viết văn và chèn token `{{U1}}`, `{{U2}}`…; server thay token
  * bằng số đã tính sẵn, rồi kiểm tra lại toàn bộ số trong văn bản (verifyNumbers).
  */
 export interface Explanation {
@@ -207,7 +207,7 @@ export interface Explanation {
     verified: boolean
     /** Các con số không truy được về engine (số thừa, số bịa) — hiển thị cảnh báo cho người dùng. */
     unverifiedNumbers: string[]
-    /** Ghi chú về dữ liệu thiếu/mâu thuẫn mà Gemini nêu. */
+    /** Ghi chú về dữ liệu thiếu/mâu thuẫn mà AI nêu. */
     caveats: string[]
     model: string
 }

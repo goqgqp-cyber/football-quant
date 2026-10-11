@@ -2,7 +2,7 @@ import type { MatchData, MatchInput, OddsLine, ActualResult } from './types'
 
 /**
  * Dữ liệu GIẢ cho G1 — mô phỏng đúng schema Bước A.
- * KHÔNG dùng làm dữ liệu thật. G4 sẽ thay bằng output Gemini + grounding.
+ * KHÔNG dùng làm dữ liệu thật. G4 sẽ thay bằng output AI (Qwen).
  * Ghi rõ nguồn 'mock' để không nhầm với dữ liệu thật.
  */
 export const MOCK_MATCH_INPUT: MatchInput = {

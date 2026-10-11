@@ -12,7 +12,7 @@
 
 import { Hono, type Context } from 'hono'
 import { z } from 'zod'
-import { XKiroError, GeminiError, extractOddsFromImages, type ImageInput } from '../services/gemini.js'
+import { XKiroError, extractOddsFromImages, type ImageInput } from '../services/xkiro.js'
 import { requireAuth, type Vars } from '../middleware.js'
 
 export const extractApp = new Hono<{ Variables: Vars }>()
@@ -107,7 +107,7 @@ const handleExtract = async (c: Context<{ Variables: Vars }>) => {
         const result = await extractOddsFromImages(images, { home, away, league })
         return c.json(result)
     } catch (e) {
-        if (e instanceof XKiroError || e instanceof GeminiError) {
+        if (e instanceof XKiroError) {
             return c.json({ error: 'xkiro', message: e.message }, e.status as 400)
         }
         console.error('[extract]', e)

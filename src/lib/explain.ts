@@ -1,11 +1,11 @@
 /**
  * Bước C (G5) — cơ chế "con số do máy tính, văn do LLM".
  *
- * Vấn đề: nếu để Gemini tự viết số, nó có thể bịa hoặc làm tròn sai (ảo giác số).
+ * Vấn đề: nếu để AI tự viết số, nó có thể bịa hoặc làm tròn sai (ảo giác số).
  * Cách chặn:
  *   1. Engine tính xong TẤT CẢ con số.
  *   2. Ta gán mỗi con số một token `{{U1}}`, `{{U2}}`… kèm giá trị đã định dạng.
- *   3. Gemini chỉ được viết văn và chèn token — TUYỆT ĐỐI không viết số.
+ *   3. AI chỉ được viết văn và chèn token — TUYỆT ĐỐI không viết số.
  *   4. Server thay token bằng giá trị thật, rồi `verifyNumbers()` quét lại văn bản:
  *      con số nào không truy được về engine sẽ bị gắn cờ `verified: false`.
  *

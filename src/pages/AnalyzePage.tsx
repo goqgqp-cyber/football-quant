@@ -14,7 +14,7 @@ import type { AnalysisResult, Explanation, MatchData, MatchInput, OddsLine } fro
 
 interface ConfirmRow {
     line: OddsLine
-    /** 0..1 — Gemini tự chấm. Dưới 0.8 sẽ hiện cảnh báo đỏ. */
+    /** 0..1 — AI tự chấm. Dưới 0.8 sẽ hiện cảnh báo đỏ. */
     confidence: number
     note: string
 }
@@ -25,7 +25,7 @@ function newLineId(): string {
     return `x-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
 }
 
-/** Chuẩn hoá dòng Gemini đọc được thành OddsLine + confidence. */
+/** Chuẩn hoá dòng AI đọc được thành OddsLine + confidence. */
 function toConfirmRow(r: ExtractedRow): ConfirmRow {
     return {
         line: { id: newLineId(), kind: r.kind, side: r.side, line: r.line, odds: r.odds },
@@ -36,10 +36,10 @@ function toConfirmRow(r: ExtractedRow): ConfirmRow {
 
 /**
  * Trang Phân tích.
- *  - G3: upload ảnh → `POST /api/extract` (Gemini OCR) → bảng xác nhận kèo có confidence.
- *  - G4: `POST /api/collect/stream` (SSE) — Bước A dùng Gemini + Google Search grounding
- *    để lấy số liệu thật, phát tiến trình thật về UI, rồi engine thuần TS tính toán.
- * Phần tính toán KHÔNG dùng LLM; Gemini chỉ thu thập dữ liệu và (G5) viết giải thích.
+ *  - G3: upload ảnh → `POST /api/extract` (Qwen OCR) → bảng xác nhận kèo có confidence.
+ *  - G4: `POST /api/collect/stream` (SSE) — Bước A dùng xKiro AI Engine
+ *    để lấy số liệu định lượng, phát tiến trình thật về UI, rồi engine thuần TS tính toán.
+ * Phần tính toán KHÔNG dùng LLM; AI chỉ thu thập dữ liệu và (G5) viết giải thích.
  */
 export function AnalyzePage() {
     const { settings } = useSettings()
@@ -50,7 +50,7 @@ export function AnalyzePage() {
     const [oddsLines, setOddsLines] = useState<OddsLine[]>(MOCK_ODDS)
     const [bankroll] = useState(settings.bankroll)
 
-    // ---- Ảnh → Gemini đọc kèo (G3) ----
+    // ---- Ảnh → Qwen OCR đọc kèo (G3) ----
     const [imagePreviews, setImagePreviews] = useState<string[]>([])
     const [confirmRows, setConfirmRows] = useState<ConfirmRow[] | null>(null)
     const [parseHint, setParseHint] = useState<string | null>(null)
@@ -68,12 +68,12 @@ export function AnalyzePage() {
     const [result, setResult] = useState<AnalysisResult | null>(null)
     const [error, setError] = useState<string | null>(null)
     const [savedId, setSavedId] = useState<string | null>(null)
-    /** Bước C: văn giải thích do Gemini viết (số do engine cấp qua token). */
+    /** Bước C: văn giải thích do Qwen viết (số do engine cấp qua token). */
     const [explanation, setExplanation] = useState<Explanation | null>(null)
     const [explanationError, setExplanationError] = useState<string | null>(null)
     /** true khi bước giải thích đang chạy (đã qua compute, chưa có kết quả C). */
     const [explaining, setExplaining] = useState(false)
-    /** Text thô Gemini đang phát ra — cho người dùng thấy tiến trình thật. */
+    /** Text thô AI đang phát ra — cho người dùng thấy tiến trình thật. */
     const [liveText, setLiveText] = useState('')
     /** true khi đã nhận dữ liệu nền từ Google Search. */
     const [grounded, setGrounded] = useState(false)
@@ -353,13 +353,9 @@ export function AnalyzePage() {
                 <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                         <p className="font-display text-sm font-bold text-ink-100">Số liệu nền tảng</p>
-                        {grounded ? (
+                        {grounded && (
                             <span className="rounded-full border border-value-400/40 bg-value-400/10 px-2 py-0.5 text-[11px] font-semibold text-value-400">
                                 Dữ liệu thật · Google Search
-                            </span>
-                        ) : (
-                            <span className="rounded-full border border-warn-400/40 bg-warn-400/10 px-2 py-0.5 text-[11px] font-semibold text-warn-400">
-                                Mẫu (giả lập)
                             </span>
                         )}
                     </div>
@@ -415,7 +411,7 @@ export function AnalyzePage() {
             {/* Upload ảnh → AI đọc kèo (G3) */}
             <GlassCard>
                 <div className="flex items-center justify-between gap-2">
-                    <p className="font-display text-sm font-bold text-ink-100">Upload ảnh odds (AI đọc bảng kèo)</p>
+                    <p className="font-display text-sm font-bold text-ink-100">Upload ảnh odds (Qwen OCR)</p>
                     <span className="text-xs text-ink-500">Tối đa 4 ảnh · JPEG/PNG/WebP · 8 MB/ảnh</span>
                 </div>
                 <div
@@ -788,7 +784,7 @@ export function AnalyzePage() {
                         </p>
                     </GlassCard>
 
-                    {/* Bước C — 4 phần giải thích do Gemini viết, số do engine cấp qua token */}
+                    {/* Bước C — 4 phần giải thích do Qwen viết, số do engine cấp qua token */}
                     <ExplanationPanel
                         explanation={explanation}
                         loading={explaining}

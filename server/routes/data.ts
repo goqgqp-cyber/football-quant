@@ -17,7 +17,7 @@ import { MOCK_MATCH_DATA } from '../../src/lib/mock.js'
 import type { Explanation, MatchData, OddsLine } from '../../src/lib/types.js'
 
 import { env } from '../env.js'
-import { generateExplanation, sanitizeCleanText } from '../services/gemini.js'
+import { generateExplanation, sanitizeCleanText } from '../services/xkiro.js'
 import { getMatchLiveStatus } from '../services/sportapi.js'
 
 export const dataApp = new Hono<{ Variables: Vars }>()
@@ -122,7 +122,7 @@ dataApp.post('/analyze', async (c) => {
     const away = sanitizeCleanText(input.away)
     const league = sanitizeCleanText(input.league ?? '')
 
-    // G2 chưa có Bước A (Gemini). Nếu client không gửi matchData → dùng mock có nhãn rõ.
+    // Nếu client không gửi matchData → dùng mock có nhãn rõ.
     const matchData = (input.matchData as MatchData | undefined) ?? MOCK_MATCH_DATA
     const oddsLines = input.oddsLines as OddsLine[]
 
@@ -134,7 +134,7 @@ dataApp.post('/analyze', async (c) => {
     )
 
     let explanation: Explanation | null = null
-    if (input.withExplanation && env.geminiApiKey) {
+    if (input.withExplanation && env.xkiroApiKey) {
         try {
             explanation = await generateExplanation(
                 { home, away, league },

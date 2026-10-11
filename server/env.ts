@@ -90,13 +90,6 @@ export const env = {
     xkiroBaseUrl: optional('XKIRO_BASE_URL', 'https://api.xkiro.com/v1'),
     xkiroModel: optional('XKIRO_MODEL', 'qwen/qwen3.8-max:free'),
 
-    /** Tương thích ngược các tham chiếu cũ */
-    get geminiApiKey() {
-        return this.xkiroApiKey
-    },
-    get geminiModel() {
-        return this.xkiroModel
-    },
     storeOriginalImages: bool('STORE_ORIGINAL_IMAGES', false),
 
     /** Origin frontend được phép gọi API (dùng cho CORS). */

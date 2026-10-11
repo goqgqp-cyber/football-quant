@@ -10,7 +10,7 @@ const PART_TITLES = [
 ] as const
 
 /**
- * Hiển thị 4 phần giải thích do Gemini viết ở Bước C.
+ * Hiển thị 4 phần giải thích do Qwen viết ở Bước C.
  *
  * Mọi con số trong văn bản đã được engine tính sẵn và server thay token
  * `{{U..}}` trước khi gửi xuống; `verified` cho biết quét lại có còn số nào

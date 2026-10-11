@@ -15,7 +15,7 @@ void ensureAdminUser().catch((e) => console.error('[admin] seed error', e))
 
 /**
  * App API chính.
- * - Frontend KHÔNG BAO GIỜ gọi Gemini/Upstash trực tiếp — mọi khóa nằm ở server.
+ * - Frontend KHÔNG BAO GIỜ gọi xKiro/Upstash trực tiếp — mọi khóa nằm ở server.
  * - Auth dùng cookie HttpOnly (fq_at, fq_rt) + double-submit CSRF cho các method ghi.
  */
 export const app = new Hono()

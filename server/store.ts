@@ -27,7 +27,7 @@ export interface HistoryRecord {
     picks: Pick[]
     /** Kết quả thực tế (null = chưa quyết toán). */
     result: (ActualResult & { note?: string }) | null
-    /** Văn bản giải thích 4 phần do Gemini viết (null nếu chưa/bỏ qua). */
+    /** Văn bản giải thích 4 phần do AI viết (null nếu chưa/bỏ qua). */
     explanation?: import('../src/lib/types.js').Explanation | null
 }
 

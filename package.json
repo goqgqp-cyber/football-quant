@@ -3,7 +3,7 @@
     "private": true,
     "version": "0.1.0",
     "type": "module",
-    "description": "Web app phân tích kèo bóng đá (Poisson/Dixon-Coles + Gemini). Tiếng Việt, mobile-first.",
+    "description": "Web app phân tích kèo bóng đá (Poisson/Dixon-Coles + Qwen). Tiếng Việt, mobile-first.",
     "scripts": {
         "dev": "vite",
         "dev:api": "tsx watch server/index.ts",

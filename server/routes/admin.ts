@@ -20,7 +20,7 @@ adminApp.use('*', requireAdmin)
 
 /**
  * GET /api/admin/overview
- * Tổng quan hệ thống, tài khoản, trạng thái kết nối DB/Redis và Gemini AI.
+ * Tổng quan hệ thống, tài khoản, trạng thái kết nối DB/Redis và xKiro AI (Qwen).
  */
 adminApp.get('/overview', async (c) => {
     const users = await listAllUsers()
@@ -33,8 +33,8 @@ adminApp.get('/overview', async (c) => {
         redisConnected: redisStatus.ok,
         redisMode: redisStatus.mode,
         allowPublicSignup: env.allowPublicSignup,
-        geminiConfigured: Boolean(env.geminiApiKey),
-        geminiModel: env.geminiModel,
+        xkiroConfigured: Boolean(env.xkiroApiKey),
+        xkiroModel: env.xkiroModel,
         nodeEnv: env.nodeEnv,
         uptime: Math.round(process.uptime()),
         serverTime: new Date().toISOString(),
