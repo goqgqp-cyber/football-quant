@@ -1,51 +1,49 @@
 @import 'tailwindcss';
 
 /* ==========================================================================
-   FOOTBALL QUANT — Design tokens
-   Tông "Noir Cosmos" ĐƠN SẮC: đen hư không, trắng nguyệt, bạc kim loại.
-   KHÔNG dùng màu bão hoà. Chỉ có các bậc sáng-tối đơn sắc + quầng lạnh.
-   Tên token được giữ nguyên (void/ink/violet/value/warn/danger) để toàn bộ
-   utility Tailwind hiện có vẫn biên dịch — nhưng giá trị đã đổi sang đơn sắc.
+   FOOTBALL QUANT — High-Contrast Modern Theme
+   Nền đen sâu obsidian, thẻ kính có độ đục cao (không mờ nhòe, không trong suốt),
+   chữ trắng sắc nét chuẩn WCAG AAA và các điểm nhấn rực rỡ (Emerald / Amber / Rose).
    ========================================================================== */
 @theme {
-    /* Nền sâu — hư không tuyệt đối → obsidian */
-    --color-void-900: #000000;
-    --color-void-800: #050505;
-    --color-void-700: #0a0a0a;
-    --color-void-600: #101012;
+    /* Nền sâu — obsidian */
+    --color-void-900: #050608;
+    --color-void-800: #0a0c10;
+    --color-void-700: #0f1117;
+    --color-void-600: #151821;
 
-    /* "violet" → trắng nguyệt / bạch kim (tương phản cực đại) */
-    --color-violet-300: #e4e4e7;
-    --color-violet-400: #ffffff;
-    --color-violet-500: #f4f4f5;
-    --color-violet-600: #e4e4e7;
+    /* Violet / Indigo — nhận diện thương hiệu hiện đại */
+    --color-violet-300: #c7d2fe;
+    --color-violet-400: #818cf8;
+    --color-violet-500: #6366f1;
+    --color-violet-600: #4f46e5;
 
-    /* Điểm nhấn phụ — bạc lạnh */
-    --color-magenta-500: #a1a1aa;
-    --color-indigo-500: #71717a;
+    /* Điểm nhấn phụ */
+    --color-magenta-500: #ec4899;
+    --color-indigo-500: #6366f1;
 
-    /* Chữ */
-    --color-ink-100: #f4f4f5;
-    /* chữ chính gần trắng */
-    --color-ink-300: #a1a1aa;
-    /* chữ phụ — bạc */
-    --color-ink-500: #71717a;
-    /* chữ mờ — xám kim loại */
+    /* Chữ — Tương phản cao, siêu sắc nét */
+    --color-ink-100: #ffffff;
+    /* chữ chính: trắng tinh khiết */
+    --color-ink-300: #e2e8f0;
+    /* chữ phụ: slate sáng rõ ràng */
+    --color-ink-500: #94a3b8;
+    /* nhãn/mô tả: slate-400, không bị tối mờ */
 
-    /* Ngữ nghĩa (đơn sắc): "value" = trắng phát sáng, "warn" = bạc, "danger" = xám lạnh */
-    --color-value-400: #ffffff;
-    --color-value-500: #e4e4e7;
-    --color-warn-400: #d4d4d8;
-    --color-warn-500: #a1a1aa;
-    --color-danger-400: #a1a1aa;
-    --color-danger-500: #71717a;
+    /* Ngữ nghĩa có màu sắc sống động (Vibrant UI) */
+    --color-value-400: #34d399;
+    --color-value-500: #10b981;
+    --color-warn-400: #fbbf24;
+    --color-warn-500: #f59e0b;
+    --color-danger-400: #f87171;
+    --color-danger-500: #ef4444;
 
-    /* Bạch kim (dùng cho viền/ánh sáng đặc biệt) */
-    --color-platinum-300: #d4d4d8;
-    --color-platinum-500: #a1a1aa;
+    /* Bạch kim */
+    --color-platinum-300: #e2e8f0;
+    --color-platinum-500: #cbd5e1;
 
-    /* Font — biên tập, sạch, hỗ trợ đầy đủ tiếng Việt */
-    --font-sans: 'Inter', 'Be Vietnam Pro', system-ui, -apple-system, 'Segoe UI', sans-serif;
+    /* Font — hỗ trợ đầy đủ tiếng Việt */
+    --font-sans: 'Inter', 'Be Vietnam Pro', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
     --font-display: 'Inter', 'Be Vietnam Pro', system-ui, -apple-system, sans-serif;
 
     /* Chuyển động */
@@ -60,20 +58,18 @@
    ========================================================================== */
 :root {
     color-scheme: dark;
-    /* Liquid glass */
-    --glass-blur: 20px;
-    --glass-saturate: 140%;
-    --glass-bg: 0.06;
-    --glass-border: 0.12;
-    /* Ánh sáng lạnh trung tâm (bạch kim) */
+    /* Thẻ kính: độ đục cao và blur nhẹ để chữ luôn sắc nét */
+    --glass-blur: 10px;
+    --glass-saturate: 120%;
+    --glass-bg: 0.88;
+    --glass-border: 0.16;
     --glow: 255, 255, 255;
 }
 
 @media (max-width: 640px) {
     :root {
-        /* Mobile: giảm blur để đỡ tốn GPU */
-        --glass-blur: 14px;
-        --glass-saturate: 130%;
+        --glass-blur: 8px;
+        --glass-saturate: 110%;
     }
 }
 
@@ -96,109 +92,98 @@ body {
     font-family: var(--font-sans);
     letter-spacing: 0.01em;
     color: var(--color-ink-100);
-    background: #000000;
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
+    background: #060709;
     text-rendering: optimizeLegibility;
     overflow-x: hidden;
 }
 
-/* Nền bầu trời sao băng (canvas 2D) — đặt sau mọi nội dung, không bắt sự kiện */
+/* Nền bầu trời sao (canvas 2D) */
 .star-layer {
     position: fixed;
     inset: 0;
     z-index: 0;
     pointer-events: none;
     background:
-        radial-gradient(120% 90% at 50% 40%, rgba(255, 255, 255, 0.05), transparent 55%),
-        radial-gradient(90% 70% at 12% 88%, rgba(255, 255, 255, 0.03), transparent 60%),
-        #000000;
+        radial-gradient(120% 90% at 50% 30%, rgba(30, 41, 59, 0.25), transparent 60%),
+        radial-gradient(90% 70% at 12% 88%, rgba(15, 23, 42, 0.4), transparent 65%),
+        #060709;
 }
 
-/* Tối viền nhẹ giúp chữ nổi trên nền sao, vẫn giữ được sao ở rìa */
+/* Viền tối nhẹ quanh rìa màn hình */
 .star-vignette {
     position: fixed;
     inset: 0;
     z-index: 1;
     pointer-events: none;
     background: radial-gradient(120% 90% at 50% 42%,
-            transparent 45%,
-            rgba(0, 0, 0, 0.35) 82%,
-            rgba(0, 0, 0, 0.72) 100%);
+            transparent 55%,
+            rgba(6, 7, 9, 0.4) 85%,
+            rgba(6, 7, 9, 0.85) 100%);
 }
 
-/* Nội dung UI nằm trên cùng */
+/* Lớp UI chính */
 .ui-layer {
     position: relative;
     z-index: 2;
 }
 
-/* Scrollbar tối, đơn sắc */
+/* Scrollbar */
 ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
 }
 
 ::-webkit-scrollbar-track {
-    background: rgba(255, 255, 255, 0.02);
+    background: rgba(255, 255, 255, 0.03);
 }
 
 ::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg, #3f3f46, #18181b);
+    background: linear-gradient(180deg, #475569, #1e293b);
     border-radius: 999px;
     border: 2px solid transparent;
     background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(180deg, #52525b, #27272a);
+    background: linear-gradient(180deg, #64748b, #334155);
     background-clip: padding-box;
 }
 
-/* Focus ring rõ ràng (a11y) — trắng, độ tương phản cao */
+/* Focus ring */
 :where(a, button, input, select, textarea, [tabindex]):focus-visible {
-    outline: 2px solid rgba(255, 255, 255, 0.85);
+    outline: 2px solid #818cf8;
     outline-offset: 2px;
     border-radius: 8px;
 }
 
 /* ==========================================================================
-   Liquid Glass (kính lỏng bạch kim)
+   Liquid Glass — Nâng cấp độ tương phản, nền tối đục sắc nét, viền rõ ràng
    ========================================================================== */
 .glass {
     position: relative;
-    background: linear-gradient(150deg,
-            rgba(255, 255, 255, calc(var(--glass-bg) + 0.03)) 0%,
-            rgba(255, 255, 255, var(--glass-bg)) 45%,
-            rgba(0, 0, 0, 0.18) 100%);
+    background: linear-gradient(165deg,
+            rgba(20, 22, 28, 0.92) 0%,
+            rgba(12, 14, 18, 0.96) 100%);
     backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
-    border: 1px solid rgba(255, 255, 255, var(--glass-border));
+    border: 1px solid rgba(255, 255, 255, 0.14);
     border-radius: 18px;
     box-shadow:
-        0 18px 50px -24px rgba(0, 0, 0, 0.9),
-        0 1px 0 rgba(255, 255, 255, 0.06),
-        inset 0 1px 1px rgba(255, 255, 255, 0.2),
-        inset 0 -1px 1px rgba(0, 0, 0, 0.35);
+        0 20px 45px -18px rgba(0, 0, 0, 0.85),
+        0 1px 0 rgba(255, 255, 255, 0.08),
+        inset 0 1px 0 rgba(255, 255, 255, 0.12);
 }
 
-/* Fallback khi trình duyệt không hỗ trợ backdrop-filter */
-@supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
-    .glass {
-        background: linear-gradient(150deg, rgba(18, 18, 20, 0.94), rgba(5, 5, 5, 0.94));
-    }
-}
-
-/* Specular highlight theo con trỏ (CSS var --mx/--my do JS đặt) */
+/* Specular highlight theo con trỏ */
 .glass--specular::before {
     content: '';
     position: absolute;
     inset: 0;
     border-radius: inherit;
     pointer-events: none;
-    background: radial-gradient(260px 140px at var(--mx, 22%) var(--my, 0%),
-            rgba(255, 255, 255, 0.16),
-            transparent 62%);
+    background: radial-gradient(280px 150px at var(--mx, 22%) var(--my, 0%),
+            rgba(255, 255, 255, 0.14),
+            transparent 65%);
     opacity: 0;
     transition: opacity var(--dur-base) var(--ease-out-quint);
 }
@@ -208,16 +193,16 @@ body {
     opacity: 1;
 }
 
-/* Vệt sheen lỏng chạy theo con trỏ (tương tác từ tính quang học) */
+/* Vệt sheen */
 .glass--sheen::after {
     content: '';
     position: absolute;
     inset: 0;
     border-radius: inherit;
     pointer-events: none;
-    background: radial-gradient(180px 180px at var(--sx, 50%) var(--sy, 50%),
-            rgba(255, 255, 255, 0.1),
-            transparent 60%);
+    background: radial-gradient(200px 200px at var(--sx, 50%) var(--sy, 50%),
+            rgba(255, 255, 255, 0.08),
+            transparent 65%);
     opacity: 0;
     transition: opacity var(--dur-base) var(--ease-out-quint);
     mix-blend-mode: screen;
@@ -227,7 +212,7 @@ body {
     opacity: 1;
 }
 
-/* Viền sáng gradient bạch kim mảnh */
+/* Viền sáng gradient mảnh */
 .glass--edge {
     background-clip: padding-box;
 }
@@ -239,7 +224,7 @@ body {
     border-radius: inherit;
     padding: 1px;
     pointer-events: none;
-    background: linear-gradient(150deg, rgba(255, 255, 255, 0.55), rgba(161, 161, 170, 0.18) 45%, transparent 72%);
+    background: linear-gradient(150deg, rgba(255, 255, 255, 0.45), rgba(148, 163, 184, 0.15) 50%, transparent 75%);
     -webkit-mask:
         linear-gradient(#000 0 0) content-box,
         linear-gradient(#000 0 0);
@@ -247,11 +232,10 @@ body {
     mask-composite: exclude;
 }
 
-/* Ghi đè: khi bật cả specular + sheen thì ::after là sheen, viền dùng box-shadow */
 .glass--sheen.glass--edge::after {
-    background: radial-gradient(180px 180px at var(--sx, 50%) var(--sy, 50%),
-            rgba(255, 255, 255, 0.1),
-            transparent 60%);
+    background: radial-gradient(200px 200px at var(--sx, 50%) var(--sy, 50%),
+            rgba(255, 255, 255, 0.08),
+            transparent 65%);
     -webkit-mask: none;
     mask-composite: add;
     padding: 0;
@@ -266,18 +250,18 @@ body {
 }
 
 .text-gradient {
-    background: linear-gradient(100deg, #ffffff 0%, #d4d4d8 45%, #71717a 100%);
+    background: linear-gradient(100deg, #ffffff 0%, #f1f5f9 60%, #cbd5e1 100%);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
 }
 
-/* Chữ dạng nhãn biên tập */
 .eyebrow {
     text-transform: uppercase;
     letter-spacing: 0.28em;
     font-size: 11px;
-    color: var(--color-ink-500);
+    font-weight: 600;
+    color: #94a3b8;
 }
 
 /* ==========================================================================
@@ -299,15 +283,14 @@ body {
 
 .skeleton {
     background: linear-gradient(100deg,
-            rgba(255, 255, 255, 0.03) 30%,
-            rgba(255, 255, 255, 0.12) 50%,
-            rgba(255, 255, 255, 0.03) 70%);
+            rgba(255, 255, 255, 0.04) 30%,
+            rgba(255, 255, 255, 0.15) 50%,
+            rgba(255, 255, 255, 0.04) 70%);
     background-size: 200% 100%;
     animation: shimmer 1.6s infinite linear;
     border-radius: 12px;
 }
 
-/* Thanh tiến trình có ánh sáng chạy */
 @keyframes sweep {
     0% {
         transform: translateX(-100%);
@@ -327,11 +310,7 @@ body {
     animation: sweep 1.4s infinite var(--ease-out-quint);
 }
 
-/* ==========================================================================
-   Reduced motion
-   ========================================================================== */
 @media (prefers-reduced-motion: reduce) {
-
     *,
     *::before,
     *::after {
@@ -347,7 +326,6 @@ body {
     }
 }
 
-/* Safe area cho thanh nav dưới trên mobile */
 .pb-safe {
     padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem);
 }

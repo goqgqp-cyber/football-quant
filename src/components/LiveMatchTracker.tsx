@@ -116,7 +116,7 @@ export function LiveMatchTracker({ home, away, recordId, onSettled }: LiveMatchT
     const isFinished = liveData?.isFinished
 
     return (
-        <div className="relative overflow-hidden rounded-xl border border-white/10 bg-gradient-to-b from-neutral-900/80 to-black/80 p-4 shadow-xl backdrop-blur-md">
+        <div className="relative overflow-hidden rounded-xl border border-white/10 bg-gradient-to-b from-neutral-900/95 to-neutral-950/98 p-4 shadow-2xl border-white/16">
             {/* Header thanh trạng thái live */}
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/8 pb-3">
                 <div className="flex items-center gap-2">
@@ -137,19 +137,19 @@ export function LiveMatchTracker({ home, away, recordId, onSettled }: LiveMatchT
                             ⏳ {liveData?.statusDescription || 'Sắp diễn ra'}
                         </span>
                     ) : (
-                        <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-xs font-semibold text-neutral-400">
+                        <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/5 px-2.5 py-0.5 text-xs font-semibold text-slate-300">
                             📡 SportAPI Live Tracker
                         </span>
                     )}
 
                     {liveData?.league && (
-                        <span className="text-xs text-neutral-400 truncate max-w-[200px]">
+                        <span className="text-xs text-slate-300 truncate max-w-[200px]">
                             • {liveData.league}
                         </span>
                     )}
                 </div>
 
-                <div className="flex items-center gap-2 text-xs text-neutral-500">
+                <div className="flex items-center gap-2 text-xs text-slate-400">
                     {lastPoll && (
                         <span>
                             Cập nhật: {lastPoll.toLocaleTimeString('vi-VN')}
@@ -159,7 +159,7 @@ export function LiveMatchTracker({ home, away, recordId, onSettled }: LiveMatchT
                         type="button"
                         onClick={() => void fetchLive()}
                         disabled={loading}
-                        className="rounded p-1 hover:bg-white/5 text-neutral-400 hover:text-white transition"
+                        className="rounded p-1 hover:bg-white/5 text-slate-300 hover:text-white transition"
                         title="Làm mới ngay"
                     >
                         🔄 {loading ? '...' : ''}
@@ -188,7 +188,7 @@ export function LiveMatchTracker({ home, away, recordId, onSettled }: LiveMatchT
                                 {liveData.score.home} - {liveData.score.away}
                             </span>
                             {liveData.periodScore?.htHome !== undefined && (
-                                <span className="text-[10px] text-neutral-400 font-medium">
+                                <span className="text-[10px] text-slate-300 font-medium">
                                     HT {liveData.periodScore.htHome}-{liveData.periodScore.htAway}
                                 </span>
                             )}
@@ -213,7 +213,7 @@ export function LiveMatchTracker({ home, away, recordId, onSettled }: LiveMatchT
                         <div>
                             <div className="flex justify-between text-xs font-medium text-neutral-300 mb-1">
                                 <span>{possessionHome}%</span>
-                                <span className="text-neutral-400 font-normal">Kiểm soát bóng (Possession)</span>
+                                <span className="text-slate-300 font-normal">Kiểm soát bóng (Possession)</span>
                                 <span>{possessionAway}%</span>
                             </div>
                             <div className="flex h-2 w-full overflow-hidden rounded-full bg-white/10">
@@ -232,7 +232,7 @@ export function LiveMatchTracker({ home, away, recordId, onSettled }: LiveMatchT
                         <div>
                             <div className="flex justify-between text-xs font-medium text-neutral-300 mb-1">
                                 <span className="font-bold text-emerald-400">{shotsHome}</span>
-                                <span className="text-neutral-400 font-normal">Sút trúng đích (Shots on target)</span>
+                                <span className="text-slate-300 font-normal">Sút trúng đích (Shots on target)</span>
                                 <span className="font-bold text-emerald-400">{shotsAway}</span>
                             </div>
                             <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-white/10">
@@ -255,7 +255,7 @@ export function LiveMatchTracker({ home, away, recordId, onSettled }: LiveMatchT
                         <div>
                             <div className="flex justify-between text-xs font-medium text-neutral-300 mb-1">
                                 <span className="font-bold text-amber-400">{cornersHome}</span>
-                                <span className="text-neutral-400 font-normal">
+                                <span className="text-slate-300 font-normal">
                                     Phạt góc (Tổng: <strong className="text-white">{totalCorners}</strong>)
                                 </span>
                                 <span className="font-bold text-amber-400">{cornersAway}</span>
@@ -278,9 +278,9 @@ export function LiveMatchTracker({ home, away, recordId, onSettled }: LiveMatchT
                     </div>
                 </div>
             ) : (
-                <div className="my-2 py-3 text-center text-xs text-neutral-400">
+                <div className="my-2 py-3 text-center text-xs text-slate-300">
                     <p>Đang tìm kiếm luồng dữ liệu trực tiếp cho trận <strong className="text-white">{home}</strong> vs <strong className="text-white">{away}</strong>...</p>
-                    <p className="mt-1 text-[11px] text-neutral-500">(Tự động làm mới mỗi 20s qua SportAPI RapidAPI)</p>
+                    <p className="mt-1 text-[11px] text-slate-400">(Tự động làm mới mỗi 20s qua SportAPI RapidAPI)</p>
                 </div>
             )}
 

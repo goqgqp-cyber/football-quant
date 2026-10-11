@@ -109,11 +109,11 @@ export default function App() {
                         <AnimatePresence mode="wait">
                             <motion.div
                                 key={route}
-                                initial={reduced ? { opacity: 0 } : { opacity: 0, y: 12, filter: 'blur(6px)' }}
-                                animate={reduced ? { opacity: 1 } : { opacity: 1, y: 0, filter: 'blur(0px)' }}
-                                exit={reduced ? { opacity: 0 } : { opacity: 0, y: -8, filter: 'blur(6px)' }}
+                                initial={reduced ? { opacity: 0 } : { opacity: 0, y: 8 }}
+                                animate={{ opacity: 1, y: 0 }}
+                                exit={reduced ? { opacity: 0 } : { opacity: 0, y: -6 }}
                                 transition={{ duration: 0.28, ease: [0.22, 1, 0.36, 1] }}
-                                className="will-animate"
+                                
                             >
                                 {route === 'analyze' && <AnalyzePage />}
                                 {route === 'history' && <HistoryPage />}

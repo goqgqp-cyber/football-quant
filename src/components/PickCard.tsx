@@ -163,7 +163,7 @@ function Metric({
                     ? 'text-ink-300'
                     : 'text-ink-100'
     return (
-        <div className="rounded-xl border border-white/8 bg-white/4 px-2.5 py-2">
+        <div className="rounded-xl border border-white/12 bg-neutral-900/80 px-2.5 py-2 shadow-xs">
             <p className="text-[10px] uppercase tracking-wider text-ink-500">{label}</p>
             <p className={`mt-0.5 text-lg font-bold ${color}`}>
                 <AnimatedNumber value={value} digits={digits} suffix={suffix} />

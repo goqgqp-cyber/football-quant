@@ -20,10 +20,10 @@ interface ButtonProps {
 /* Đơn sắc: primary = trắng phát sáng, value = bạch kim đặc */
 const variants: Record<Variant, string> = {
     primary:
-        'bg-white text-black border-white/30 shadow-[0_14px_40px_-16px_rgba(255,255,255,0.65)] hover:bg-platinum-300',
-    ghost: 'bg-white/5 text-ink-300 border-white/10 hover:text-ink-100 hover:border-white/25',
-    danger: 'bg-transparent text-ink-300 border-white/20 hover:border-white/45 hover:text-ink-100',
-    value: 'bg-platinum-500 text-black border-white/25 hover:bg-platinum-300',
+        'bg-white text-black font-semibold border-white/40 shadow-[0_10px_30px_-10px_rgba(255,255,255,0.4)] hover:bg-neutral-100',
+    ghost: 'bg-white/8 text-slate-100 border-white/14 hover:bg-white/16 hover:text-white',
+    danger: 'bg-rose-500/20 text-rose-300 border-rose-500/40 hover:bg-rose-500/30 hover:text-rose-200',
+    value: 'bg-emerald-500 text-black font-bold border-emerald-400/40 hover:bg-emerald-400 shadow-md shadow-emerald-500/20',
 }
 
 /** Nút spring physics + magnetic cursor + vệt sheen bạch kim. */
