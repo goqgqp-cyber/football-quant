@@ -1,3 +1,4 @@
+import { formatPickTitle } from '../components/PickCard'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { GlassCard } from '../components/ui/GlassCard'
 import { AnimatedNumber } from '../components/ui/AnimatedNumber'
@@ -298,14 +299,8 @@ export function PerformancePage() {
                                                                 ? 'Phạt góc'
                                                                 : 'Châu Á (AH)'}
                                                     </td>
-                                                    <td className="py-1.5">
-                                                        {p.side === 'over'
-                                                            ? 'Tài (Over)'
-                                                            : p.side === 'under'
-                                                                ? 'Xỉu (Under)'
-                                                                : p.side === 'home'
-                                                                    ? `Chủ (${m.home})`
-                                                                    : `Khách (${m.away})`}
+                                                    <td className="py-1.5 font-medium text-sky-300">
+                                                        {formatPickTitle(p, m.home, m.away)}
                                                     </td>
                                                     <td className="py-1.5 font-mono">
                                                         {p.line >= 0 ? `+${p.line}` : p.line} @ {p.odds.toFixed(2)}
@@ -324,14 +319,14 @@ export function PerformancePage() {
                                                                 }`}
                                                         >
                                                             {p.outcome === 'win'
-                                                                ? 'Thắng'
+                                                                ? 'THẮNG'
                                                                 : p.outcome === 'win_half'
-                                                                    ? 'Thắng nửa'
+                                                                    ? 'THẮNG NỬA'
                                                                     : p.outcome === 'lose'
-                                                                        ? 'Thua'
+                                                                        ? 'THUA'
                                                                         : p.outcome === 'lose_half'
-                                                                            ? 'Thua nửa'
-                                                                            : 'Hòa'}
+                                                                            ? 'THUA NỬA'
+                                                                            : 'HOÀN'}
                                                         </span>
                                                     </td>
                                                     <td

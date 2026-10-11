@@ -158,10 +158,12 @@ export interface LiveMatchData {
     shotsTotal?: { home: number; away: number }
     possession: { home: number; away: number }
     fouls?: { home: number; away: number }
+    accuratePasses?: { home: number; away: number }
     isFinished: boolean
     kickoff?: string
     lastUpdated: number
 }
+
 
 /** Bản ghi trận đấu đã tự động đối soát (Auto-Settle) lưu trong Redis. */
 export interface SettledMatchRecord {

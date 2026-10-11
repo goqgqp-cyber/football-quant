@@ -13,7 +13,6 @@ import {
 } from '../store.js'
 import { getUserById } from '../auth.js'
 import { analyzeMatch, suggestedLines } from '../../src/lib/engine.js'
-import { MOCK_MATCH_DATA } from '../../src/lib/mock.js'
 import type { Explanation, MatchData, OddsLine } from '../../src/lib/types.js'
 
 import { env } from '../env.js'
@@ -35,18 +34,33 @@ const oddsLineSchema = z
     })
     .strip()
 
+const inPlaySchema = z
+    .object({
+        isLive: z.boolean().optional(),
+        currentMinute: z.number().nullable().optional(),
+        currentScore: z
+            .object({
+                home: z.number(),
+                away: z.number(),
+            })
+            .nullable()
+            .optional(),
+    })
+    .strip()
+
 const analyzeSchema = z
     .object({
         home: z.string().min(1).max(80),
         away: z.string().min(1).max(80),
         league: z.string().max(80).optional().default(''),
         kickoff: z.string().max(64).nullable().optional().default(null),
+        eventId: z.coerce.number().optional().nullable(),
         lg_home: z.coerce.number().positive().optional(),
         lg_away: z.coerce.number().positive().optional(),
         oddsLines: z.array(oddsLineSchema).max(60).default([]),
-        /** Dữ liệu nền (Bước A). Nếu không có sẽ dùng mock an toàn. */
         matchData: z.unknown().optional(),
         withExplanation: z.boolean().optional().default(false),
+        inPlay: inPlaySchema.optional().nullable(),
     })
     .strip()
 
@@ -122,8 +136,13 @@ dataApp.post('/analyze', async (c) => {
     const away = sanitizeCleanText(input.away)
     const league = sanitizeCleanText(input.league ?? '')
 
-    // Nếu client không gửi matchData → dùng mock có nhãn rõ.
-    const matchData = (input.matchData as MatchData | undefined) ?? MOCK_MATCH_DATA
+    if (!input.matchData) {
+        return c.json(
+            { error: 'missing_data', message: 'Chưa có dữ liệu trận đấu. Hãy tải ảnh bảng cược hoặc nhập SofaScore Event ID để bắt đầu phân tích.' },
+            400,
+        )
+    }
+    const matchData = input.matchData as MatchData
     const oddsLines = input.oddsLines as OddsLine[]
 
     const result = analyzeMatch(
@@ -131,6 +150,7 @@ dataApp.post('/analyze', async (c) => {
         oddsLines,
         input.lg_home ?? undefined,
         input.lg_away ?? undefined,
+        input.inPlay ?? undefined,
     )
 
     let explanation: Explanation | null = null
@@ -152,6 +172,8 @@ dataApp.post('/analyze', async (c) => {
             away,
             league,
             kickoff: input.kickoff,
+            eventId: input.eventId ?? undefined,
+            inPlay: input.inPlay ?? undefined,
         },
         analysis: result,
         picks: result.picks,

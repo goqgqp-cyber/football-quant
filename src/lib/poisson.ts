@@ -108,3 +108,59 @@ export function topScorelines(
     items.sort((a, b) => b.p - a.p)
     return items.slice(0, n)
 }
+
+/**
+ * Tính ma trận phân phối tỉ số trong trận (In-play Poisson Decay):
+ * - decayFactor = Math.max(0, (90 - currentMinute) / 90)
+ * - lambda_remaining = lambda_baseline * decayFactor
+ * - Simulate remaining score distribution using Dixon-Coles (rho = -0.08)
+ * - Neo tỉ số cuối cùng vào tỉ số hiện tại:
+ *   Final_Score_Home = currentScore.home + Simulated_Remaining_Home
+ *   Final_Score_Away = currentScore.away + Simulated_Remaining_Away
+ */
+export function inPlayScoreMatrix(
+    lambdaHome: number,
+    lambdaAway: number,
+    currentMinute: number,
+    currentScore: { home: number; away: number },
+    rho = DC_RHO,
+): { matrix: number[][]; lambdaRemHome: number; lambdaRemAway: number; decayFactor: number } {
+    const decayFactor = Math.max(0, (90 - currentMinute) / 90)
+    const lambdaRemHome = lambdaHome * decayFactor
+    const lambdaRemAway = lambdaAway * decayFactor
+
+    // Mô phỏng số bàn thắng còn lại bằng Dixon-Coles
+    const remMatrix = scoreMatrix(lambdaRemHome, lambdaRemAway, rho)
+
+    // Neo vào tỉ số hiện tại
+    const curH = Math.max(0, Math.floor(currentScore.home))
+    const curA = Math.max(0, Math.floor(currentScore.away))
+
+    const finalMatrix: number[][] = Array.from({ length: MAX_GOALS + 1 }, () =>
+        Array.from({ length: MAX_GOALS + 1 }, () => 0),
+    )
+
+    for (let i = 0; i <= MAX_GOALS; i++) {
+        for (let j = 0; j <= MAX_GOALS; j++) {
+            const prob = remMatrix[i][j]
+            const targetH = Math.min(MAX_GOALS, curH + i)
+            const targetA = Math.min(MAX_GOALS, curA + j)
+            finalMatrix[targetH][targetA] += prob
+        }
+    }
+
+    // Chuẩn hoá toàn ma trận về tổng = 1
+    const flat = finalMatrix.flat()
+    const normFlat = normalize(flat)
+    const out: number[][] = []
+    let k = 0
+    for (let i = 0; i <= MAX_GOALS; i++) {
+        const row: number[] = []
+        for (let j = 0; j <= MAX_GOALS; j++) {
+            row.push(normFlat[k++])
+        }
+        out.push(row)
+    }
+
+    return { matrix: out, lambdaRemHome, lambdaRemAway, decayFactor }
+}

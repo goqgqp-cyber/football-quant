@@ -7,8 +7,14 @@ import type {
     Triple,
 } from './types'
 import { clamp } from './math'
-import { estimateLambdas, scoreMatrix, topScorelines, DEFAULT_LG_HOME, DEFAULT_LG_AWAY } from './poisson'
+import { estimateLambdas, scoreMatrix, inPlayScoreMatrix, topScorelines, DEFAULT_LG_HOME, DEFAULT_LG_AWAY } from './poisson'
 import { tripleFor } from './markets'
+
+export interface InPlayOptions {
+    isLive?: boolean
+    currentMinute?: number | null
+    currentScore?: { home: number; away: number } | null
+}
 
 // ---- Ngưỡng lọc theo spec ----
 export const MIN_ODDS = 1.5
@@ -99,15 +105,31 @@ function findOpposite(oddsLines: OddsLine[], line: OddsLine): number | null {
 
 /**
  * Phân tích đầy đủ một trận.
+ * Hỗ trợ in-play Poisson decay khi trận đang đá (isLive = true & currentMinute > 0).
  */
 export function analyzeMatch(
     data: MatchData,
     oddsLines: OddsLine[],
     lgHome = DEFAULT_LG_HOME,
     lgAway = DEFAULT_LG_AWAY,
+    inPlay?: InPlayOptions,
 ): AnalysisResult {
-    const { lambdaHome, lambdaAway } = estimateLambdas(data, lgHome, lgAway)
-    const matrix = scoreMatrix(lambdaHome, lambdaAway)
+    const { lambdaHome: baseLambdaHome, lambdaAway: baseLambdaAway } = estimateLambdas(data, lgHome, lgAway)
+
+    let lambdaHome = baseLambdaHome
+    let lambdaAway = baseLambdaAway
+    let matrix: number[][]
+
+    // In-play time decay logic:
+    if (inPlay?.isLive && inPlay.currentMinute != null && inPlay.currentMinute > 0) {
+        const curScore = inPlay.currentScore ?? { home: 0, away: 0 }
+        const decayed = inPlayScoreMatrix(baseLambdaHome, baseLambdaAway, inPlay.currentMinute, curScore)
+        matrix = decayed.matrix
+        lambdaHome = decayed.lambdaRemHome
+        lambdaAway = decayed.lambdaRemAway
+    } else {
+        matrix = scoreMatrix(baseLambdaHome, baseLambdaAway)
+    }
 
     // Gán odds đối diện để loại vig
     const picks: Pick[] = []
@@ -136,12 +158,14 @@ export function analyzeMatch(
             line.odds >= MIN_ODDS &&
             edge >= MIN_EDGE &&
             ev > 0 &&
-            marketDelta <= MAX_MARKET_DELTA
+            marketDelta <= MAX_MARKET_DELTA &&
+            confidence !== 'low'
         ) {
             status = 'value'
         } else if (flags.includes('trap_high_odds_negative_edge')) {
             status = 'trap'
         }
+
 
         const stake = status === 'value' ? stakePct(triple, line.odds, confidence) : 0
 
@@ -225,12 +249,13 @@ export function suggestedLines(): OddsLine[] {
 export function filterRecommendedPicks(picks: Pick[]): Pick[] {
     return picks
         .filter((p) => {
-            const hasEdge = p.edge >= 0.05
-            const hasEv = p.ev > 0
-            const hasOdds = p.odds >= 1.50
-            const hasConf = p.confidence === 'high' || p.confidence === 'medium'
-            return hasEdge && hasEv && hasOdds && hasConf
+            return (
+                p.status === 'value' &&
+                p.edge >= 0.05 &&
+                p.ev > 0 &&
+                p.odds >= 1.50 &&
+                p.confidence !== 'low'
+            )
         })
         .sort((a, b) => b.edge - a.edge)
-        .slice(0, 2)
-}
+}

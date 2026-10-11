@@ -370,6 +370,12 @@ export interface MeResponse {
     user: AuthUser
 }
 
+export interface InPlayPayload {
+    isLive?: boolean
+    currentMinute?: number | null
+    currentScore?: { home: number; away: number } | null
+}
+
 /** Một bản ghi lịch sử phân tích. */
 export interface HistoryItem {
     id: string
@@ -379,6 +385,8 @@ export interface HistoryItem {
         away: string
         league?: string
         kickoff?: string | null
+        eventId?: number | null
+        inPlay?: InPlayPayload | null
     }
     analysis: AnalysisResult
     picks: Pick[]
@@ -404,9 +412,13 @@ export interface AnalyzePayload {
     away: string
     league?: string
     kickoff?: string | null
+    eventId?: number | null
     lg_home?: number
     lg_away?: number
     oddsLines: OddsLine[]
+    matchData?: MatchData
+    withExplanation?: boolean
+    inPlay?: InPlayPayload | null
 }
 
 /** Một dòng kèo AI (Qwen) đọc được từ ảnh, kèm mức tin cậy của model. */
@@ -420,6 +432,13 @@ export interface ExtractedRow {
     note?: string
 }
 
+export interface ExtractedOddsItem {
+    type: 'hdp' | 'ou' | '1x2'
+    target: 'home' | 'away' | 'over' | 'under'
+    line: number
+    odds: number
+}
+
 export interface ExtractResponse {
     rows: ExtractedRow[]
     meta: {
@@ -429,6 +448,14 @@ export interface ExtractResponse {
         kickoff?: string | null
         confidence?: number
     }
+    homeTeam?: string
+    awayTeam?: string
+    league?: string
+    isLive?: boolean
+    currentMinute?: number | null
+    currentScore?: { home: number; away: number } | null
+    period?: string
+    odds?: ExtractedOddsItem[]
     lowConfidence: boolean
     note?: string
     model: string
@@ -509,6 +536,29 @@ export const api = {
         if (eventId) params.set('eventId', String(eventId))
         return apiFetch<LiveMatchData>(`/live/match?${params.toString()}`)
     },
+
+    /** Tự động tìm kiếm match ID trên SofaScore */
+    sofascoreSearch: (homeTeam: string, awayTeam: string) => {
+        const q = `${homeTeam} ${awayTeam}`.trim()
+        return apiFetch<{ eventId?: number; event?: Record<string, unknown>; error?: string }>(
+            `/sofascore/search?q=${encodeURIComponent(q)}&home=${encodeURIComponent(homeTeam)}&away=${encodeURIComponent(awayTeam)}`,
+        )
+    },
+
+    /** Lấy lịch sử đối đầu (H2H) thực tế từ SofaScore */
+    sofascoreH2H: (eventId: number | string) =>
+        apiFetch<{ text?: string; events?: Array<Record<string, unknown>>; error?: string }>(
+            `/sofascore/h2h?eventId=${eventId}`,
+        ),
+
+    /** Lấy thống kê và sự cố trực tiếp từ SofaScore */
+    sofascoreStats: (eventId: number | string) =>
+        apiFetch<{
+            statistics?: Array<Record<string, unknown>>
+            incidents?: Array<Record<string, unknown>>
+            stats?: Record<string, unknown>
+            error?: string
+        }>(`/sofascore/stats?eventId=${eventId}`),
 
     /** Lấy thống kê chi tiết trận đấu từ SofaScore proxy */
     getSofaStatistics: (eventId: number | string) =>

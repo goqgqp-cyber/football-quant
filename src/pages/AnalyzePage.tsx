@@ -7,7 +7,6 @@ import { ExplanationPanel } from '../components/ExplanationPanel'
 import { ProgressSteps, type Step } from '../components/ui/ProgressSteps'
 import { Skeleton } from '../components/ui/RefractionFilter'
 import { ApiError, api, collectStream, type ExtractedRow } from '../lib/api'
-import { MOCK_MATCH_DATA, MOCK_MATCH_INPUT, MOCK_ODDS } from '../lib/mock'
 import { useSettings } from '../hooks/useSettings'
 import { LiveMatchTracker } from '../components/LiveMatchTracker'
 import { filterRecommendedPicks } from '../lib/engine'
@@ -46,11 +45,30 @@ function toConfirmRow(r: ExtractedRow): ConfirmRow {
 export function AnalyzePage() {
     const { settings } = useSettings()
 
-    // ---- Nhập trận ----
-    const [input, setInput] = useState<MatchInput>(MOCK_MATCH_INPUT)
-    const [data, setData] = useState<MatchData>(MOCK_MATCH_DATA)
-    const [oddsLines, setOddsLines] = useState<OddsLine[]>(MOCK_ODDS)
+    // ---- Nhập trận (Khởi tạo sạch 100%, không dữ liệu giả) ----
+    const [input, setInput] = useState<MatchInput>({
+        homeTeam: '',
+        awayTeam: '',
+        league: '',
+        kickoff: '',
+        lg_home: 1.45,
+        lg_away: 1.15,
+    })
+    const setHomeTeam = useCallback((team: string) => {
+        setInput((p) => ({ ...p, homeTeam: team }))
+    }, [])
+    const setAwayTeam = useCallback((team: string) => {
+        setInput((p) => ({ ...p, awayTeam: team }))
+    }, [])
+    const [data, setData] = useState<MatchData | null>(null)
+    const [oddsLines, setOddsLines] = useState<OddsLine[]>([])
     const [bankroll] = useState(settings.bankroll)
+
+    // ---- In-Play Live temporal state ----
+    const [isLive, setIsLive] = useState(false)
+    const [currentMinute, setCurrentMinute] = useState<number | null>(null)
+    const [currentScore, setCurrentScore] = useState<{ home: number; away: number } | null>(null)
+    const [period, setPeriod] = useState<string>('')
 
     // ---- Ảnh → Qwen OCR đọc kèo (G3) ----
     const [imagePreviews, setImagePreviews] = useState<string[]>([])
@@ -156,15 +174,25 @@ export function AnalyzePage() {
             odds: Number(o.odds),
         }))
 
+        const inPlay = isLive
+            ? {
+                  isLive: true,
+                  currentMinute,
+                  currentScore,
+              }
+            : undefined
+
         const { abort } = collectStream(
             {
                 home: input.homeTeam.trim(),
                 away: input.awayTeam.trim(),
                 league: input.league?.trim() || undefined,
                 kickoff: input.kickoff || null,
+                eventId: sofaEventId ? Number(sofaEventId) : undefined,
                 lg_home: input.lg_home,
                 lg_away: input.lg_away,
                 oddsLines: cleanOddsLines,
+                inPlay,
             },
             (e) => {
                 switch (e.type) {
@@ -209,6 +237,8 @@ export function AnalyzePage() {
                                     away: input.awayTeam.trim(),
                                     league: input.league?.trim() || undefined,
                                     kickoff: input.kickoff || null,
+                                    eventId: sofaEventId ? Number(sofaEventId) : undefined,
+                                    inPlay,
                                 },
                                 analysis: e.result,
                                 picks: recPicks,
@@ -248,11 +278,55 @@ export function AnalyzePage() {
             setExtractNote(null)
             setConfirmRows(null)
             try {
-                const res = await api.extract(files, {
-                    home: input.homeTeam,
-                    away: input.awayTeam,
-                    league: input.league,
-                })
+                const hint = {
+                    home: input.homeTeam.trim() || undefined,
+                    away: input.awayTeam.trim() || undefined,
+                    league: input.league.trim() || undefined,
+                }
+
+                const res = await api.extract(files, hint)
+
+                // CẬP NHẬT TÊN ĐỘI TỪ OCR NGAY LẬP TỨC:
+                const extractedHome = res.homeTeam || res.meta?.home || (res as unknown as { home?: string }).home
+                const extractedAway = res.awayTeam || res.meta?.away || (res as unknown as { away?: string }).away
+                const extractedLeague = res.league || res.meta?.league || (res as unknown as { league?: string }).league
+                const extractedKickoff = res.meta?.kickoff || (res as unknown as { kickoff?: string }).kickoff
+
+                if (extractedHome && typeof extractedHome === 'string' && extractedHome.trim()) {
+                    setHomeTeam(extractedHome.trim())
+                }
+                if (extractedAway && typeof extractedAway === 'string' && extractedAway.trim()) {
+                    setAwayTeam(extractedAway.trim())
+                }
+                if (extractedLeague && typeof extractedLeague === 'string' && extractedLeague.trim()) {
+                    setInput((p) => ({ ...p, league: extractedLeague.trim() }))
+                }
+                if (extractedKickoff && typeof extractedKickoff === 'string' && extractedKickoff.trim()) {
+                    setInput((p) => ({ ...p, kickoff: extractedKickoff.trim() }))
+                }
+
+                if (res.isLive !== undefined) setIsLive(Boolean(res.isLive))
+                if (res.currentMinute !== undefined) setCurrentMinute(res.currentMinute)
+                if (res.currentScore !== undefined) setCurrentScore(res.currentScore)
+                if (res.period !== undefined) setPeriod(res.period)
+
+                // Tự động tìm kiếm SofaScore Event ID
+                const h = (extractedHome && typeof extractedHome === 'string' && extractedHome.trim()) || input.homeTeam.trim()
+                const a = (extractedAway && typeof extractedAway === 'string' && extractedAway.trim()) || input.awayTeam.trim()
+                if (h && a) {
+                    api.sofascoreSearch(h, a)
+                        .then((sRes) => {
+                            if (sRes?.eventId) {
+                                setSofaEventId(String(sRes.eventId))
+                                setSofaMsg({
+                                    type: 'success',
+                                    text: `Tự động khớp SofaScore Event ID: ${sRes.eventId}`,
+                                })
+                            }
+                        })
+                        .catch(() => {})
+                }
+
                 const rows = res.rows.map(toConfirmRow)
                 setConfirmRows(rows)
                 setExtractNote(res.note ?? null)
@@ -264,20 +338,6 @@ export function AnalyzePage() {
                             : 'Không đọc được kèo nào từ ảnh. Hãy chụp rõ bảng odds hoặc nhập tay.',
                     )
                     return
-                }
-
-                // Tự động gán kết quả homeTeam, awayTeam, league, kickoff trực tiếp vào state và hiển thị lên các ô này
-                if (res.meta.home) {
-                    setInput((p) => ({ ...p, homeTeam: res.meta.home as string }))
-                }
-                if (res.meta.away) {
-                    setInput((p) => ({ ...p, awayTeam: res.meta.away as string }))
-                }
-                if (res.meta.league) {
-                    setInput((p) => ({ ...p, league: res.meta.league as string }))
-                }
-                if (res.meta.kickoff) {
-                    setInput((p) => ({ ...p, kickoff: res.meta.kickoff as string }))
                 }
 
                 setParseHint(
@@ -295,7 +355,7 @@ export function AnalyzePage() {
                 setExtracting(false)
             }
         },
-        [input.homeTeam, input.awayTeam, input.league],
+        [input.homeTeam, input.awayTeam, input.league, setHomeTeam, setAwayTeam],
     )
 
     const handleFiles = (files: FileList | File[] | null) => {
@@ -339,8 +399,19 @@ export function AnalyzePage() {
         return () => window.removeEventListener('paste', onPaste)
     })
 
-    const valuePicks = useMemo(
-        () => (result ? result.picks.filter((p) => p.status === 'value') : []),
+    // LỌC SẠCH KÈO RÁC: Chỉ giữ các kèo value đạt chuẩn (Edge >= 5%, EV > 0, Odds >= 1.50, confidence !== 'low')
+    const qualifyingPicks = useMemo(
+        () =>
+            result
+                ? result.picks.filter(
+                      (p) =>
+                          p.status === 'value' &&
+                          p.edge >= 0.05 &&
+                          p.ev > 0 &&
+                          p.odds >= 1.50 &&
+                          p.confidence !== 'low',
+                  )
+                : [],
         [result],
     )
 
@@ -397,6 +468,22 @@ export function AnalyzePage() {
                         </p>
                     )}
                 </div>
+
+                {isLive && (
+                    <div className="mb-3 flex flex-wrap items-center gap-2 rounded-xl border border-rose-500/30 bg-rose-950/20 px-3.5 py-2 text-xs text-rose-300">
+                        <span className="flex h-2 w-2 rounded-full bg-rose-500 animate-ping" />
+                        <span className="font-bold">Đang đá trực tiếp (In-Play)</span>
+                        {period && <span className="rounded bg-rose-500/20 px-1.5 py-0.5 font-medium">{period}</span>}
+                        {currentMinute != null && (
+                            <span className="font-mono font-semibold">Phút {currentMinute}&apos;</span>
+                        )}
+                        {currentScore && (
+                            <span className="font-mono font-bold text-white">
+                                Tỉ số: {currentScore.home} - {currentScore.away}
+                            </span>
+                        )}
+                    </div>
+                )}
 
                 <div className="grid gap-3 sm:grid-cols-2">
                     <Field label="Đội nhà" hint="Tự động trích xuất từ OCR / SofaScore">
@@ -465,75 +552,71 @@ export function AnalyzePage() {
             </GlassCard>
 
             {/* Theo dõi trận đấu Live & Tự động đối soát (SofaScore Direct Live Match Tracker) */}
-            {input.homeTeam.trim() && input.awayTeam.trim() && (
-                <LiveMatchTracker
-                    home={input.homeTeam}
-                    away={input.awayTeam}
-                    eventId={sofaEventId ? Number(sofaEventId) : undefined}
-                    recordId={savedId}
-                    onSettled={(settled) => {
-                        console.log('Trận đấu đã tự động đối soát kết quả:', settled)
-                    }}
-                />
-            )}
+            <LiveMatchTracker
+                key={`${input.homeTeam}-${input.awayTeam}-${sofaEventId}`}
+                home={input.homeTeam}
+                away={input.awayTeam}
+                eventId={sofaEventId ? Number(sofaEventId) : undefined}
+                recordId={savedId}
+                onSettled={(settled) => {
+                    console.log('Trận đấu đã tự động đối soát kết quả:', settled)
+                }}
+            />
 
-            {/* Số liệu nền tảng: thật từ Google Search grounding (G4) hoặc dữ liệu mẫu */}
+            {/* Số liệu nền tảng: thật từ Qwen AI Engine & SofaScore (Bước A) */}
             <GlassCard>
                 <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex items-center gap-2">
                         <p className="font-display text-sm font-bold text-ink-100">Số liệu nền tảng</p>
                         {grounded && (
                             <span className="rounded-full border border-value-400/40 bg-value-400/10 px-2 py-0.5 text-[11px] font-semibold text-value-400">
-                                Dữ liệu thật · Google Search
+                                Dữ liệu thật · SofaScore & Web Grounding
                             </span>
                         )}
                     </div>
-                    <button
-                        className="text-xs text-violet-400 hover:text-violet-300"
-                        onClick={() => {
-                            setData(MOCK_MATCH_DATA)
-                            setGrounded(false)
-                        }}
-                    >
-                        Nạp lại dữ liệu mẫu
-                    </button>
                 </div>
-                <p className="mt-1 text-xs text-ink-500">
-                    {grounded
-                        ? 'AI phân tích số liệu định lượng cho trận đấu (xG, Poisson, ép sân, phạt góc).'
-                        : 'Chưa có dữ liệu. Bấm “Phân tích ngay” để AI phân tích định lượng trận đấu.'}
-                </p>
-                <div className="mt-3 grid gap-3 sm:grid-cols-2">
-                    <TeamBox label={`Chủ nhà: ${input.homeTeam}`} team={data.home} />
-                    <TeamBox label={`Khách: ${input.awayTeam}`} team={data.away} />
-                </div>
-                {data.missing.length > 0 && (
-                    <p className="mt-2 text-xs text-warn-400">Thiếu: {data.missing.join(', ')}</p>
-                )}
-                {data.conflicts.length > 0 && (
-                    <p className="mt-1 text-xs text-danger-400">Mâu thuẫn: {data.conflicts.join(' · ')}</p>
-                )}
-                {data.sources.length > 0 && (
-                    <details className="mt-3">
-                        <summary className="cursor-pointer text-xs text-violet-400">
-                            Nguồn ({data.sources.length})
-                        </summary>
-                        <ul className="mt-2 space-y-1">
-                            {data.sources.map((s) => (
-                                <li key={s.url} className="truncate text-xs">
-                                    <a
-                                        href={s.url}
-                                        target="_blank"
-                                        rel="noreferrer noopener"
-                                        className="text-ink-300 underline decoration-white/20 hover:text-violet-300"
-                                        title={s.url}
-                                    >
-                                        {s.title}
-                                    </a>
-                                </li>
-                            ))}
-                        </ul>
-                    </details>
+                {!data ? (
+                    <div className="mt-3 rounded-lg border border-dashed border-white/10 bg-white/5 p-6 text-center text-xs text-ink-500">
+                        Chưa có dữ liệu nền tảng. Hãy tải ảnh bảng cược hoặc nhập SofaScore Event ID rồi bấm "Phân tích ngay" để AI thu thập dữ liệu thật.
+                    </div>
+                ) : (
+                    <>
+                        <p className="mt-1 text-xs text-ink-500">
+                            Số liệu định lượng cho trận đấu (xG, Poisson, ép sân, phạt góc).
+                        </p>
+                        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                            <TeamBox label={`Chủ nhà: ${input.homeTeam || 'Đội nhà'}`} team={data.home} />
+                            <TeamBox label={`Khách: ${input.awayTeam || 'Đội khách'}`} team={data.away} />
+                        </div>
+                        {data.missing.length > 0 && (
+                            <p className="mt-2 text-xs text-warn-400">Thiếu: {data.missing.join(', ')}</p>
+                        )}
+                        {data.conflicts.length > 0 && (
+                            <p className="mt-1 text-xs text-danger-400">Mâu thuẫn: {data.conflicts.join(' · ')}</p>
+                        )}
+                        {data.sources.length > 0 && (
+                            <details className="mt-3">
+                                <summary className="cursor-pointer text-xs text-violet-400">
+                                    Nguồn ({data.sources.length})
+                                </summary>
+                                <ul className="mt-2 space-y-1">
+                                    {data.sources.map((s) => (
+                                        <li key={s.url} className="truncate text-xs">
+                                            <a
+                                                href={s.url}
+                                                target="_blank"
+                                                rel="noreferrer noopener"
+                                                className="text-ink-300 underline decoration-white/20 hover:text-violet-300"
+                                                title={s.url}
+                                            >
+                                                {s.title}
+                                            </a>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </details>
+                        )}
+                    </>
                 )}
             </GlassCard>
 
@@ -792,7 +875,12 @@ export function AnalyzePage() {
                                 {oddsLines.map((o) => (
                                     <tr key={o.id} className="border-t border-white/8">
                                         <td className="px-3 py-1.5">{o.kind === 'totals' ? 'Tài/Xỉu' : 'Chấp'}</td>
-                                        <td className="px-3 py-1.5">{o.side}</td>
+                                        <td className="px-3 py-1.5 font-medium">
+                                            {o.kind === 'totals'
+                                                ? (o.side === 'over' ? 'Tài' : 'Xỉu')
+                                                : (o.side === 'home' ? (input.homeTeam || 'Chủ nhà') : (input.awayTeam || 'Đội khách'))
+                                            }
+                                        </td>
                                         <td className="px-3 py-1.5">{o.line}</td>
                                         <td className="px-3 py-1.5">{o.odds.toFixed(2)}</td>
                                         <td className="px-3 py-1.5 text-center">
@@ -870,20 +958,44 @@ export function AnalyzePage() {
 
             {result && (
                 <>
-                    {result.noBet ? (
-                        <GlassCard>
-                            <p className="font-display text-2xl font-black tracking-tight text-ink-100">NO BET</p>
-                            <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-ink-300">
-                                {result.noBetReasons.map((r, i) => (
-                                    <li key={i}>{r}</li>
-                                ))}
-                            </ul>
+                    {qualifyingPicks.length === 0 ? (
+                        <GlassCard className="border border-amber-500/30 bg-gradient-to-r from-amber-950/40 via-neutral-900/60 to-neutral-900/40 p-5 shadow-lg">
+                            <div className="flex items-start gap-3.5">
+                                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-amber-500/40 bg-amber-500/20 text-xl font-bold text-amber-400">
+                                    ⚠️
+                                </span>
+                                <div>
+                                    <h3 className="font-display text-base font-bold text-amber-300">
+                                        NO BET — Thị trường không có kèo nào đạt biên an toàn (Edge &gt;= 5%, EV &gt; 0). Khuyến nghị bỏ qua trận này.
+                                    </h3>
+                                    <p className="mt-1 text-xs text-neutral-400">
+                                        Toàn bộ các mốc cược trên thị trường hiện tại đều bị âm kỳ vọng (EV ≤ 0), lệch tỷ lệ hoặc có rủi ro bẫy giá (TRAP). Không giải ngân vốn vào trận đấu này.
+                                    </p>
+                                </div>
+                            </div>
                         </GlassCard>
                     ) : (
-                        <div className="grid gap-3 md:grid-cols-2">
-                            {valuePicks.map((pick, i) => (
-                                <PickCard key={pick.oddsLineId} pick={pick} bankroll={bankroll} index={i} />
-                            ))}
+                        <div className="flex flex-col gap-3">
+                            <div className="flex items-center justify-between gap-2">
+                                <h3 className="font-display text-sm font-bold text-ink-100">
+                                    KÈO VALUE KHUYẾN NGHỊ ({qualifyingPicks.length})
+                                </h3>
+                                <span className="rounded-full border border-value-400/30 bg-value-400/10 px-2.5 py-0.5 text-[11px] font-semibold text-value-400">
+                                    Edge ≥ 5% · EV &gt; 0 · Odds ≥ 1.50
+                                </span>
+                            </div>
+                            <div className="grid gap-3 md:grid-cols-2">
+                                {qualifyingPicks.map((pick, i) => (
+                                    <PickCard
+                                        key={pick.oddsLineId}
+                                        pick={pick}
+                                        bankroll={bankroll}
+                                        index={i}
+                                        homeTeam={input.homeTeam}
+                                        awayTeam={input.awayTeam}
+                                    />
+                                ))}
+                            </div>
                         </div>
                     )}
 
@@ -898,16 +1010,6 @@ export function AnalyzePage() {
                                 </div>
                             ))}
                         </div>
-                        {result.picks.length > 0 && (
-                            <>
-                                <p className="mt-4 font-display text-sm font-bold text-ink-100">Toàn bộ kèo</p>
-                                <div className="mt-2 grid gap-3 md:grid-cols-2">
-                                    {result.picks.map((p, i) => (
-                                        <PickCard key={p.oddsLineId} pick={p} bankroll={bankroll} index={i} />
-                                    ))}
-                                </div>
-                            </>
-                        )}
                         <p className="mt-4 text-xs text-ink-500">
                             λ nhà = {result.lambdaHome.toFixed(2)} · λ khách = {result.lambdaAway.toFixed(2)} · rho = -0.08
                         </p>

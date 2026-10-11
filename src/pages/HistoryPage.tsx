@@ -1,3 +1,4 @@
+import { formatPickTitle } from '../components/PickCard'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { GlassCard } from '../components/ui/GlassCard'
 import { Button } from '../components/ui/Button'
@@ -17,11 +18,11 @@ import {
 type Filter = 'all' | 'pending' | 'settled'
 
 const OUTCOME_LABEL: Record<SettledPick['outcome'], string> = {
-    win: '[THẮNG]',
-    win_half: '[THẮNG NỬA]',
-    push: '[HOÀN TIỀN]',
-    lose_half: '[THUA NỬA]',
-    lose: '[THUA]',
+    win: 'THẮNG',
+    win_half: 'THẮNG NỬA',
+    push: 'HOÀN',
+    lose_half: 'THUA NỬA',
+    lose: 'THUA',
 }
 
 const OUTCOME_CLASS: Record<SettledPick['outcome'], string> = {
@@ -284,7 +285,7 @@ function HistoryRow({
                     ) : isMatchLive ? (
                         <span className="rounded-full border border-sky-400/50 bg-sky-500/20 px-3 py-1 text-xs font-bold text-sky-300 animate-pulse flex items-center gap-1.5">
                             <span className="h-2 w-2 rounded-full bg-sky-400 animate-ping" />
-                            Đang đá (Tỉ số {liveData?.score.home} - {liveData?.score.away}{liveData?.minute ? ` · ${liveData.minute}'` : ''})
+                            Đang diễn ra (Phút {liveData?.minute ?? item.meta.inPlay?.currentMinute ?? '—'}) - Tỉ số {liveData?.score.home ?? item.meta.inPlay?.currentScore?.home ?? 0}-{liveData?.score.away ?? item.meta.inPlay?.currentScore?.away ?? 0}
                         </span>
                     ) : (
                         <span className="rounded-full border border-amber-400/40 bg-amber-500/15 px-3 py-1 text-xs font-semibold text-amber-300">
@@ -355,18 +356,8 @@ function HistoryRow({
                                 {item.picks.map((p, idx) => (
                                     <tr key={idx} className="hover:bg-white/[0.02]">
                                         <td className="px-3 py-2 font-medium text-white">
-                                            {p.kind === 'totals' ? 'Tài Xỉu' : p.kind === 'corners' ? 'Phạt góc' : 'Châu Á (AH)'}{' '}
                                             <span className="font-bold text-sky-300">
-                                                {p.side === 'over'
-                                                    ? 'Tài'
-                                                    : p.side === 'under'
-                                                        ? 'Xỉu'
-                                                        : p.side === 'home'
-                                                            ? `Chủ (${item.meta.home})`
-                                                            : `Khách (${item.meta.away})`}
-                                            </span>{' '}
-                                            <span className="font-mono text-amber-300">
-                                                {p.line >= 0 ? `+${p.line}` : p.line}
+                                                {formatPickTitle(p, item.meta.home, item.meta.away)}
                                             </span>
                                         </td>
                                         <td className="px-3 py-2 font-mono text-white font-bold">{p.odds.toFixed(2)}</td>
@@ -461,18 +452,8 @@ function HistoryRow({
                                 {settled?.map((s, idx) => (
                                     <tr key={idx} className="hover:bg-white/[0.02]">
                                         <td className="px-3 py-2 font-medium text-white">
-                                            {s.pick.kind === 'totals' ? 'Tài Xỉu' : s.pick.kind === 'corners' ? 'Phạt góc' : 'Châu Á (AH)'}{' '}
                                             <span className="text-sky-300 font-bold">
-                                                {s.pick.side === 'over'
-                                                    ? 'Tài'
-                                                    : s.pick.side === 'under'
-                                                        ? 'Xỉu'
-                                                        : s.pick.side === 'home'
-                                                            ? `Chủ (${item.meta.home})`
-                                                            : `Khách (${item.meta.away})`}
-                                            </span>{' '}
-                                            <span className="font-mono text-amber-300">
-                                                {s.pick.line >= 0 ? `+${s.pick.line}` : s.pick.line}
+                                                {formatPickTitle(s.pick, item.meta.home, item.meta.away)}
                                             </span>
                                         </td>
                                         <td className="px-3 py-2 font-mono text-neutral-300 font-semibold">{s.pick.odds.toFixed(2)}</td>

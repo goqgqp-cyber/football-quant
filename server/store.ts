@@ -21,6 +21,12 @@ export interface HistoryRecord {
         away: string
         league?: string
         kickoff?: string | null
+        eventId?: number | null
+        inPlay?: {
+            isLive?: boolean
+            currentMinute?: number | null
+            currentScore?: { home: number; away: number } | null
+        } | null
     }
     /** Input thuần (dùng để tính lại khi cần). */
     analysis: AnalysisResult

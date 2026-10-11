@@ -20,6 +20,8 @@ import type {
     TeamStats,
 } from '../../src/lib/types.js'
 import { buildFacts, factLabels, substituteFacts, verifyNumbers } from '../../src/lib/explain.js'
+import { findSofaEvent, getEventH2H } from './sofascore.js'
+
 
 export const XKIRO_BASE_URL = (env.xkiroBaseUrl || 'https://api.xkiro.com/v1').replace(/\/+$/, '')
 export const XKIRO_MODEL = env.xkiroModel || 'qwen/qwen3.8-max:free'
@@ -47,10 +49,24 @@ export interface ExtractedMeta {
 export interface ExtractResult {
     rows: ExtractedRow[]
     meta: ExtractedMeta
+    homeTeam?: string
+    awayTeam?: string
+    league?: string
+    isLive?: boolean
+    currentMinute?: number | null
+    currentScore?: { home: number; away: number } | null
+    period?: string
+    odds?: Array<{
+        type: 'hdp' | 'ou' | '1x2'
+        target: 'home' | 'away' | 'over' | 'under'
+        line: number
+        odds: number
+    }>
     lowConfidence: boolean
     note?: string
     model: string
 }
+
 
 export interface ImageInput {
     mimeType: string
@@ -234,32 +250,49 @@ async function readXKiroStream(
 }
 
 const OCR_PROMPT = `Bạn là Chuyên gia Thị giác Máy tính và OCR Bảng Kèo Bóng Đá (Sportsbook Odds Vision Analyst).
-Nhiệm vụ: Phân tích ảnh chụp màn hình bảng kèo nhà cái và bóc tách chính xác các cột kèo Tài/Xỉu (Totals/Over-Under), Kèo Chấp (Asian Handicap/AH), mốc kèo (line) và tỷ lệ cược (odds).
+Nhiệm vụ: Phân tích ảnh chụp màn hình bảng kèo nhà cái và bóc tách cấu trúc dữ liệu JSON chính xác:
+1. Thông tin hai đội:
+   - homeTeam: string (tên chính xác Đội Nhà hiển thị trong ảnh).
+   - awayTeam: string (tên chính xác Đội Khách hiển thị trong ảnh).
+   - league: string (tên giải đấu, nếu nhìn thấy).
+2. Trạng thái trong trận (Temporal & Live Grounding):
+   - isLive: boolean (true nếu ảnh có dấu hiệu trận đang đá, ví dụ đồng hồ chạy phút "25:27", "Trong Trận", "Live", "2H", tỉ số đang chạy; false nếu là kèo trước trận / pre-match).
+   - currentMinute: integer hoặc null (ví dụ: 25 nếu đồng hồ là "25:27", hoặc null nếu trước trận).
+   - currentScore: object { "home": number, "away": number } (tỉ số hiện tại nếu trận đang đá, ví dụ { "home": 0, "away": 0 }).
+   - period: string ("1st Half", "2nd Half", "Halftime", hoặc "Pre-match").
+3. Bảng kèo cá cược:
+   - odds: mảng các đối tượng { "type": "hdp" | "ou" | "1x2", "target": "home" | "away" | "over" | "under", "line": number, "odds": number }.
+     * type="hdp": Kèo chấp Asian Handicap (target="home" hoặc "away", line là mốc chấp từ góc nhìn đội đó, ví dụ -0.5 hoặc +0.5 hoặc 0, odds là tỷ lệ ăn thập phân).
+     * type="ou": Kèo Tài/Xỉu Over/Under (target="over" hoặc "under", line là mốc bàn thắng ví dụ 2.5, odds là tỷ lệ ăn).
+     * type="1x2": Kèo Châu Âu 1X2 (target="home" hoặc "away", line=0, odds là tỷ lệ ăn).
+   - rows: mảng chuẩn hóa { "kind": "totals" | "ah", "side": "over" | "under" | "home" | "away", "line": number, "odds": number, "confidence": number }.
 
 QUY TẮC BẮT BUỘC:
-1. Bóc tách chính xác các loại kèo nhìn thấy trong ảnh:
-   - Kèo Tài/Xỉu ("totals"): mốc bàn thắng (line) và odds của Tài ("over") / Xỉu ("under").
-   - Kèo Chấp Handicap ("ah"): mốc chấp (line) và odds của Đội Nhà ("home") / Đội Khách ("away").
-2. Chỉ trích xuất số liệu nhìn thấy thật trong ảnh chụp màn hình nhà cái. Không đoán mò, không tự bịa số liệu.
-3. Đánh giá độ tin cậy "confidence" (0.0 đến 1.0) cho từng ô kèo (chữ nét: 0.9–1.0, hơi mờ: 0.6–0.85, mờ không rõ thì bỏ qua).
-4. BẮT BUỘC trả về DUY NHẤT một chuỗi JSON thuần, KHÔNG bọc trong markdown code block (TUYỆT ĐỐI KHÔNG dùng \`\`\`json hoặc \`\`\`), KHÔNG có bất kỳ văn bản hay lời chào nào ngoài JSON.
+1. Chỉ trích xuất số liệu nhìn thấy thật trong ảnh. TUYỆT ĐỐI không mặc định Arsenal hay Chelsea nếu ảnh không phải trận đó.
+2. BẮT BUỘC trả về DUY NHẤT một chuỗi JSON thuần, KHÔNG bọc trong markdown code block (TUYỆT ĐỐI KHÔNG dùng \`\`\`json hoặc \`\`\`), KHÔNG có bất kỳ văn bản hay lời chào nào ngoài JSON.
 
-CẤU TRÚC JSON BẮT BUỘC:
+CẤU TRÚC JSON MẪU BẮT BUỘC:
 {
+  "homeTeam": "Tên đội nhà",
+  "awayTeam": "Tên đội khách",
+  "league": "Giải đấu",
+  "isLive": false,
+  "currentMinute": null,
+  "currentScore": { "home": 0, "away": 0 },
+  "period": "Pre-match",
+  "odds": [
+    { "type": "ou", "target": "over", "line": 2.5, "odds": 1.95 },
+    { "type": "ou", "target": "under", "line": 2.5, "odds": 1.90 },
+    { "type": "hdp", "target": "home", "line": -0.25, "odds": 2.02 },
+    { "type": "hdp", "target": "away", "line": 0.25, "odds": 1.88 }
+  ],
   "rows": [
     { "kind": "totals", "side": "over", "line": 2.5, "odds": 1.95, "confidence": 0.95 },
     { "kind": "totals", "side": "under", "line": 2.5, "odds": 1.90, "confidence": 0.95 },
     { "kind": "ah", "side": "home", "line": -0.25, "odds": 2.02, "confidence": 0.92 },
     { "kind": "ah", "side": "away", "line": 0.25, "odds": 1.88, "confidence": 0.92 }
   ],
-  "meta": {
-    "home": "Tên đội nhà",
-    "away": "Tên đội khách",
-    "league": "Giải đấu",
-    "kickoff": null,
-    "confidence": 0.9
-  },
-  "note": "Bóc tách thành công các cột kèo Tài/Xỉu và Kèo Chấp"
+  "note": "Bóc tách thành công"
 }`
 
 /**
@@ -280,7 +313,10 @@ export async function extractOddsFromImages(
         { type: 'text', text: OCR_PROMPT },
     ]
 
-    if (hint.home || hint.away) {
+    // Chỉ đưa hint nếu người dùng cung cấp và không phải mock mặc định
+    const hasMeaningfulHome = hint.home && hint.home.trim() && hint.home.trim().toLowerCase() !== 'arsenal'
+    const hasMeaningfulAway = hint.away && hint.away.trim() && hint.away.trim().toLowerCase() !== 'chelsea'
+    if (hasMeaningfulHome || hasMeaningfulAway) {
         contentParts.push({
             type: 'text',
             text: `Gợi ý đối chiếu: chủ ${sanitizeCleanText(hint.home ?? '?')} – khách ${sanitizeCleanText(hint.away ?? '?')}${hint.league ? `, giải ${sanitizeCleanText(hint.league)}` : ''}.`,
@@ -307,6 +343,14 @@ export async function extractOddsFromImages(
     let parsed: {
         rows?: unknown[]
         meta?: Record<string, unknown>
+        odds?: unknown[]
+        homeTeam?: string
+        awayTeam?: string
+        league?: string
+        isLive?: boolean
+        currentMinute?: number | null
+        currentScore?: { home: number; away: number }
+        period?: string
         note?: string
     }
     try {
@@ -328,7 +372,7 @@ export async function extractOddsFromImages(
         const odds = num(r.odds)
         if (line === null || odds === null || odds <= 1.01 || odds > 500) continue
 
-        const confidence = clamp01(num(r.confidence) ?? 0.3)
+        const confidence = clamp01(num(r.confidence) ?? 0.85)
         if (confidence < 0.3) continue
 
         rows.push({
@@ -341,24 +385,112 @@ export async function extractOddsFromImages(
         })
     }
 
-    const m = parsed.meta ?? {}
+    const oddsList: Array<{
+        type: 'hdp' | 'ou' | '1x2'
+        target: 'home' | 'away' | 'over' | 'under'
+        line: number
+        odds: number
+    }> = []
+
+    for (const raw of Array.isArray(parsed.odds) ? parsed.odds : []) {
+        const o = raw as Record<string, unknown>
+        const type = o.type === 'hdp' ? 'hdp' : o.type === '1x2' ? '1x2' : 'ou'
+        const target = o.target === 'home' || o.target === 'away' || o.target === 'under' ? o.target : 'over'
+        const line = num(o.line) ?? 0
+        const oddsVal = num(o.odds)
+        if (oddsVal === null || oddsVal <= 1.01 || oddsVal > 500) continue
+        oddsList.push({ type, target, line, odds: oddsVal })
+    }
+
+    // Nếu có odds nhưng rows trống, map odds sang rows để tương thích UI
+    if (rows.length === 0 && oddsList.length > 0) {
+        for (const o of oddsList) {
+            if (o.type === 'ou') {
+                rows.push({
+                    kind: 'totals',
+                    side: o.target === 'under' ? 'under' : 'over',
+                    line: o.line,
+                    odds: o.odds,
+                    confidence: 0.9,
+                })
+            } else if (o.type === 'hdp') {
+                rows.push({
+                    kind: 'ah',
+                    side: o.target === 'away' ? 'away' : 'home',
+                    line: o.line,
+                    odds: o.odds,
+                    confidence: 0.9,
+                })
+            }
+        }
+    }
+
+    // Nếu có rows nhưng oddsList trống, map ngược lại
+    if (oddsList.length === 0 && rows.length > 0) {
+        for (const r of rows) {
+            if (r.kind === 'totals') {
+                oddsList.push({
+                    type: 'ou',
+                    target: r.side === 'under' ? 'under' : 'over',
+                    line: r.line,
+                    odds: r.odds,
+                })
+            } else {
+                oddsList.push({
+                    type: 'hdp',
+                    target: r.side === 'away' ? 'away' : 'home',
+                    line: r.line,
+                    odds: r.odds,
+                })
+            }
+        }
+    }
+
+    const m = (parsed.meta ?? {}) as Record<string, unknown>
+    const pAny = parsed as Record<string, unknown>
+    const rawHome = pAny.homeTeam ?? m.homeTeam ?? m.home ?? pAny.home
+    const rawAway = pAny.awayTeam ?? m.awayTeam ?? m.away ?? pAny.away
+    const rawLeague = pAny.league ?? m.league
+    const rawKickoff = m.kickoff ?? pAny.kickoff
+
+    const isLive = Boolean(pAny.isLive ?? m.isLive ?? false)
+    const currentMinute = num(pAny.currentMinute ?? m.currentMinute ?? pAny.minute ?? m.minute)
+    let currentScore: { home: number; away: number } | null = null
+    const rawScore = (pAny.currentScore ?? m.currentScore ?? pAny.score ?? m.score) as Record<string, unknown> | undefined
+    if (rawScore && typeof rawScore === 'object') {
+        const h = num(rawScore.home) ?? 0
+        const a = num(rawScore.away) ?? 0
+        currentScore = { home: h, away: a }
+    }
+
+    const period = typeof pAny.period === 'string' ? pAny.period : typeof m.period === 'string' ? m.period : undefined
+
     const meta: ExtractedMeta = {
-        home: typeof m.home === 'string' && m.home.trim() ? m.home.trim().slice(0, 80) : undefined,
-        away: typeof m.away === 'string' && m.away.trim() ? m.away.trim().slice(0, 80) : undefined,
+        home: typeof rawHome === 'string' && rawHome.trim() ? rawHome.trim().slice(0, 80) : undefined,
+        away: typeof rawAway === 'string' && rawAway.trim() ? rawAway.trim().slice(0, 80) : undefined,
         league:
-            typeof m.league === 'string' && m.league.trim() ? m.league.trim().slice(0, 80) : undefined,
-        kickoff: typeof m.kickoff === 'string' && m.kickoff.trim() ? m.kickoff.trim().slice(0, 64) : null,
-        confidence: clamp01(num(m.confidence) ?? 0.3),
+            typeof rawLeague === 'string' && rawLeague.trim() ? rawLeague.trim().slice(0, 80) : undefined,
+        kickoff: typeof rawKickoff === 'string' && rawKickoff.trim() ? rawKickoff.trim().slice(0, 64) : null,
+        confidence: clamp01(num(m.confidence) ?? 0.85),
     }
 
     return {
         rows,
         meta,
+        homeTeam: meta.home,
+        awayTeam: meta.away,
+        league: meta.league,
+        isLive,
+        currentMinute: currentMinute !== null ? Math.round(currentMinute) : null,
+        currentScore,
+        period,
+        odds: oddsList,
         lowConfidence: rows.some((r) => r.confidence < 0.8),
         note: typeof parsed.note === 'string' ? parsed.note.slice(0, 300) : undefined,
         model: XKIRO_MODEL,
     }
 }
+
 
 // ===========================================================================
 // BƯỚC A — Thu thập dữ liệu nền & Phân tích định lượng (xG, Poisson, ép sân, góc)
@@ -369,7 +501,9 @@ export interface GroundedHint {
     away: string
     league?: string
     kickoff?: string | null
+    eventId?: number | null
 }
+
 
 const QUANT_ANALYST_SYSTEM_PROMPT = `Bạn là Chuyên gia Phân tích Bóng đá Định lượng (Quantitative Football Analyst).
 Nhiệm vụ: Phân tích định lượng toàn diện cho trận đấu bóng đá dựa trên dữ liệu xG (Expected Goals), phân phối Poisson (Dixon-Coles rho=-0.08), phong độ 6-10 trận gần nhất, và các chỉ số thống kê thực tế. Thị trường cược là nguồn thông tin mạnh, không suy đoán cảm tính.
@@ -501,12 +635,38 @@ export async function streamCollectMatchData(
     const cleanLeague = sanitizeCleanText(hint.league ?? '')
     const cleanKickoff = sanitizeCleanText(hint.kickoff ?? '')
 
+    // Tự động tìm kiếm SofaScore H2H nếu có eventId hoặc tìm theo tên 2 đội
+    let h2hText = ''
+    let sofaEventId = hint.eventId
+    try {
+        if (!sofaEventId) {
+            const sofaEv = await findSofaEvent(cleanHome, cleanAway)
+            if (sofaEv?.id) sofaEventId = sofaEv.id
+        }
+        if (sofaEventId) {
+            const h2hRes = await getEventH2H(sofaEventId)
+            if (h2hRes?.h2hText) {
+                h2hText = h2hRes.h2hText
+            }
+        }
+    } catch {
+        /* ignore h2h fetch error */
+    }
+
     const userPrompt = [
         `Phân tích định lượng toàn diện cho trận đấu:`,
         `- Đội nhà: ${cleanHome}`,
         `- Đội khách: ${cleanAway}`,
         cleanLeague ? `- Giải đấu: ${cleanLeague}` : '',
         cleanKickoff ? `- Thời gian thi đấu: ${cleanKickoff}` : '',
+        h2hText
+            ? [
+                  '',
+                  h2hText,
+                  '',
+                  'QUY TẮC BẮT BUỘC VỀ ĐỐI ĐẦU: Sử dụng CHÍNH XÁC số liệu từ THỰC TẾ LỊCH SỬ ĐỐI ĐẦU (H2H SofaScore) ở trên để điền trường "h2h": { "n", "avg_goals", "btts_rate" }. TUYỆT ĐỐI CẤM bịa đặt hoặc đoán mò lịch sử đối đầu từ trí nhớ!',
+              ].join('\n')
+            : '',
         '',
         `Yêu cầu: Dựa trên mô hình Poisson, thống kê xG (xgf, xga), tỷ lệ ép sân/áp lực tấn công và kỳ vọng phạt góc, xuất ra đối tượng JSON chuẩn xác theo đúng schema.`,
     ].filter(Boolean).join('\n')
@@ -540,8 +700,17 @@ export async function streamCollectMatchData(
         },
     ]
 
+    if (sofaEventId) {
+        sources.push({
+            url: `https://www.sofascore.com/event/${sofaEventId}`,
+            title: `SofaScore Real H2H & Live Match Data (#${sofaEventId})`,
+            fetched_at: new Date().toISOString(),
+        })
+    }
+
     return normalizeMatchData(parsed, sources)
 }
+
 
 // ===========================================================================
 // BƯỚC C — xKiro viết phân tích định lượng dựa trên số liệu engine

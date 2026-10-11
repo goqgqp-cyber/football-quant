@@ -163,6 +163,7 @@ export interface ParsedEventStatistics {
     shotsTotal: { home: number; away: number }
     possession: { home: number; away: number }
     fouls: { home: number; away: number }
+    accuratePasses: { home: number; away: number }
 }
 
 /** Trích xuất 100% số liệu thống kê thật từ SofaScore statistics endpoint */
@@ -175,14 +176,15 @@ export async function extractEventStatistics(eventId: number): Promise<ParsedEve
     let shotsTotal = { home: 0, away: 0 }
     let possession = { home: 50, away: 50 }
     let fouls = { home: 0, away: 0 }
+    let accuratePasses = { home: 0, away: 0 }
 
     if (!statsRes?.statistics || !Array.isArray(statsRes.statistics)) {
-        return { corners, cards, shotsOnTarget, shotsTotal, possession, fouls }
+        return { corners, cards, shotsOnTarget, shotsTotal, possession, fouls, accuratePasses }
     }
 
     const all = statsRes.statistics.find((s) => s.period === 'ALL') || statsRes.statistics[0]
     if (!all?.groups) {
-        return { corners, cards, shotsOnTarget, shotsTotal, possession, fouls }
+        return { corners, cards, shotsOnTarget, shotsTotal, possession, fouls, accuratePasses }
     }
 
     const items = all.groups.flatMap((g) => g.statisticsItems || [])
@@ -243,14 +245,22 @@ export async function extractEventStatistics(eventId: number): Promise<ParsedEve
             const a = Number(item.awayValue ?? item.away) || 0
             fouls = { home: h, away: a }
         }
+
+        // Chuyền chính xác (accurate passes)
+        if (k === 'accuratepasses' || k === 'accurate_passes' || k === 'passes' || n.includes('accurate pass') || n.includes('passes')) {
+            const h = Number(item.homeValue ?? item.home) || 0
+            const a = Number(item.awayValue ?? item.away) || 0
+            accuratePasses = { home: h, away: a }
+        }
     }
 
     // Nếu shotsTotal chưa có nhưng có shotsOnTarget
     if (shotsTotal.home === 0 && shotsOnTarget.home > 0) shotsTotal.home = shotsOnTarget.home
     if (shotsTotal.away === 0 && shotsOnTarget.away > 0) shotsTotal.away = shotsOnTarget.away
 
-    return { corners, cards, shotsOnTarget, shotsTotal, possession, fouls }
+    return { corners, cards, shotsOnTarget, shotsTotal, possession, fouls, accuratePasses }
 }
+
 
 export interface SofaIncident {
     incidentType: string
@@ -435,7 +445,142 @@ export async function getMatchLiveStatus(
         shotsTotal: stats.shotsTotal,
         possession: stats.possession,
         fouls: stats.fouls,
+        accuratePasses: stats.accuratePasses,
         isFinished,
         lastUpdated: Date.now(),
     }
 }
+
+/** Kết quả bóc tách lịch sử đối đầu (H2H) */
+export interface H2HResult {
+    eventId: number
+    events: RawEvent[]
+    h2hText: string
+    n: number
+    avgGoals: number
+    bttsRate: number
+}
+
+/**
+ * Lấy lịch sử đối đầu (H2H) trực tiếp từ SofaScore:
+ * Endpoint: https://api.sofascore.com/api/v1/event/${eventId}/h2h/events
+ * Trích xuất 5-10 trận đối đầu gần nhất và dựng text block chuẩn format:
+ * THỰC TẾ LỊCH SỬ ĐỐI ĐẦU (H2H SofaScore):
+ * - [Date] [League]: [Home] [FT_Score] [Away] (HT: [HT_Score])
+ */
+export async function getEventH2H(eventId: number): Promise<H2HResult> {
+    const res = await fetchSofaScore<{ events?: RawEvent[] }>(`event/${eventId}/h2h/events`, 60)
+    const rawEvents = (res?.events || []).filter((e) => e && e.id)
+    const list = rawEvents.slice(0, 10)
+
+    if (list.length === 0) {
+        return {
+            eventId,
+            events: [],
+            h2hText: 'THỰC TẾ LỊCH SỬ ĐỐI ĐẦU (H2H SofaScore):\n- Chưa có dữ liệu đối đầu gần đây trên SofaScore.',
+            n: 0,
+            avgGoals: 0,
+            bttsRate: 0,
+        }
+    }
+
+    let totalGoals = 0
+    let bttsCount = 0
+    const lines: string[] = ['THỰC TẾ LỊCH SỬ ĐỐI ĐẦU (H2H SofaScore):']
+
+    for (const ev of list) {
+        const dateStr = ev.startTimestamp
+            ? new Date(ev.startTimestamp * 1000).toISOString().split('T')[0]
+            : 'Gần đây'
+        const league = ev.tournament?.name || 'League'
+        const home = ev.homeTeam?.name || 'Home'
+        const away = ev.awayTeam?.name || 'Away'
+
+        const ftHome = Number(ev.homeScore?.current ?? ev.homeScore?.display ?? 0)
+        const ftAway = Number(ev.awayScore?.current ?? ev.awayScore?.display ?? 0)
+        const htHome = Number(ev.homeScore?.period1 ?? 0)
+        const htAway = Number(ev.awayScore?.period1 ?? 0)
+
+        totalGoals += ftHome + ftAway
+        if (ftHome > 0 && ftAway > 0) {
+            bttsCount++
+        }
+
+        lines.push(`- ${dateStr} ${league}: ${home} ${ftHome} - ${ftAway} ${away} (HT: ${htHome} - ${htAway})`)
+    }
+
+    const n = list.length
+    const avgGoals = Number((totalGoals / n).toFixed(2))
+    const bttsRate = Number((bttsCount / n).toFixed(2))
+
+    return {
+        eventId,
+        events: list,
+        h2hText: lines.join('\n'),
+        n,
+        avgGoals,
+        bttsRate,
+    }
+}
+
+/**
+ * Tìm kiếm trận đấu trên SofaScore dựa vào từ khóa hoặc tên 2 đội.
+ * Gọi endpoint https://api.sofascore.com/api/v1/search/all?q=...
+ */
+export async function searchSofaMatch(
+    query: string,
+    home?: string,
+    away?: string,
+): Promise<{ eventId: number; event: RawEvent } | null> {
+    // 1. Thử tìm qua findSofaEvent trước nếu có cả 2 đội
+    if (home && away) {
+        const found = await findSofaEvent(home, away)
+        if (found) {
+            return { eventId: found.id, event: found }
+        }
+    }
+
+    // 2. Tìm qua search/all
+    const searchRes = await fetchSofaScore<{
+        results?: Array<{
+            entity?: Record<string, unknown>
+            type?: number | string
+        }>
+    }>(`search/all?q=${encodeURIComponent(query)}`, 60)
+
+    const results = searchRes?.results || []
+
+    for (const r of results) {
+        const ent = r.entity
+        if (!ent) continue
+        // Nếu là event entity
+        if (ent.id && typeof ent.id === 'number' && (ent.homeTeam || ent.tournament)) {
+            const ev = ent as unknown as RawEvent
+            return { eventId: ev.id, event: ev }
+        }
+    }
+
+    // 3. Nếu query chứa tên đội, thử tìm đội và lấy trận gần nhất / kế tiếp
+    if (home) {
+        const ev = await findSofaEvent(home, away || '')
+        if (ev) return { eventId: ev.id, event: ev }
+    }
+
+    return null
+}
+
+/**
+ * Lấy số liệu thống kê chi tiết & incidents của trận đấu (cache Redis 15s).
+ */
+export async function getEventStatsAndIncidents(eventId: number): Promise<{
+    eventId: number
+    statistics: ParsedEventStatistics
+    incidents: SofaIncident[]
+}> {
+    const [statistics, incidents] = await Promise.all([
+        extractEventStatistics(eventId),
+        getEventIncidents(eventId),
+    ])
+    return { eventId, statistics, incidents }
+}
+

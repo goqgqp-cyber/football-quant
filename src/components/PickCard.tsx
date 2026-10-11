@@ -4,13 +4,6 @@ import { GlassCard } from './ui/GlassCard'
 import { AnimatedNumber } from './ui/AnimatedNumber'
 import { StatusBadge } from './ui/Field'
 
-const SIDE_LABEL: Record<string, string> = {
-    over: 'Tài',
-    under: 'Xỉu',
-    home: 'Đội nhà',
-    away: 'Đội khách',
-}
-
 const FLAG_LABEL: Record<string, string> = {
     odds_below_min: 'Odds < 1.50',
     edge_below_min: 'Edge < 5%',
@@ -19,23 +12,57 @@ const FLAG_LABEL: Record<string, string> = {
     trap_high_odds_negative_edge: 'Cảnh báo TRAP: odds cao nhưng Edge âm',
 }
 
-function marketLabel(p: Pick): string {
-    const kind = p.kind === 'totals' ? 'Tài/Xỉu' : 'Chấp châu Á'
-    return `${kind} · ${SIDE_LABEL[p.side] ?? p.side} ${p.line > 0 ? '+' : ''}${p.line}`
+/**
+ * Định dạng tên hiển thị thẻ cược:
+ * - Kèo Tài/Xỉu: "Tài [mốc]" hoặc "Xỉu [mốc]" (ví dụ: "Tài 2.5", "Xỉu 2.75").
+ * - Kèo Chấp:
+ *   + Home: "[Tên Đội Nhà] ([mốc kèo])". Ví dụ: "Hull City (+0.5)", "Arsenal (-0.5)".
+ *   + Away: "[Tên Đội Khách] ([mốc kèo])". Ví dụ: "Everton (-0.5)", "Chelsea (+0.5)".
+ *   + Đồng banh (mốc 0): "[Tên Đội] (0)".
+ * TUYỆT ĐỐI KHÔNG hiển thị chữ "Đội nhà", "Đội khách", "home", "away".
+ */
+export function formatPickTitle(
+    p: { kind: string; side: string; line: number; homeTeam?: string; awayTeam?: string },
+    homeTeam?: string,
+    awayTeam?: string,
+): string {
+    const home = (homeTeam && homeTeam.trim()) || (p as unknown as { homeTeam?: string }).homeTeam || 'Chủ'
+    const away = (awayTeam && awayTeam.trim()) || (p as unknown as { awayTeam?: string }).awayTeam || 'Khách'
+
+    if (p.kind === 'totals') {
+        const sidePrefix = p.side === 'over' ? 'Tài' : 'Xỉu'
+        return `${sidePrefix} ${p.line}`
+    }
+
+    // Kèo Chấp Asian Handicap (ah)
+    const isHome = p.side === 'home'
+    const team = isHome ? home : away
+
+    if (p.line === 0) {
+        return `${team} (0)`
+    }
+
+    const sign = p.line > 0 ? '+' : ''
+    return `${team} (${sign}${p.line})`
 }
 
-/** Thẻ một kèo: tỉ lệ thắng, P_implied, Edge, EV, tin cậy, vốn. */
+/** Thẻ một kèo value: tỉ lệ thắng, P_implied, Edge, EV, tin cậy, vốn. */
 export function PickCard({
     pick,
     bankroll,
     index = 0,
+    homeTeam,
+    awayTeam,
 }: {
     pick: Pick
     bankroll: number
     index?: number
+    homeTeam?: string
+    awayTeam?: string
 }) {
     const stakeAmount = bankroll * pick.stakePct
     const isValue = pick.status === 'value'
+    const title = formatPickTitle(pick, homeTeam, awayTeam)
 
     return (
         <GlassCard
@@ -49,9 +76,9 @@ export function PickCard({
             >
                 <div className="flex items-start justify-between gap-2">
                     <div>
-                        <p className="text-sm font-semibold text-ink-100">{marketLabel(pick)}</p>
+                        <p className="text-base font-bold text-ink-100">{title}</p>
                         <p className="mt-0.5 text-xs text-ink-500">
-                            Odds <span className="font-display text-ink-300">{pick.odds.toFixed(2)}</span>
+                            Odds <span className="font-display font-semibold text-ink-200">{pick.odds.toFixed(2)}</span>
                         </p>
                     </div>
                     <StatusBadge status={pick.status} confidence={pick.confidence} />

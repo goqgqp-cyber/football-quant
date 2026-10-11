@@ -117,3 +117,40 @@ describe('settle (quarter line)', () => {
         expect(s.profit).toBe(0)
     })
 })
+
+import { formatPickTitle } from '../components/PickCard'
+
+describe('formatPickTitle (Formula check: Tên đội thật + mốc, không chữ Đội nhà/Đội khách)', () => {
+
+    it('renders home handicap as [Tên Đội Nhà] ([mốc])', () => {
+        const p = { kind: 'ah', side: 'home', line: 0.5 }
+        expect(formatPickTitle(p, 'Hull City', 'Everton')).toBe('Hull City (+0.5)')
+
+        const p2 = { kind: 'ah', side: 'home', line: -0.5 }
+        expect(formatPickTitle(p2, 'Arsenal', 'Chelsea')).toBe('Arsenal (-0.5)')
+    })
+
+    it('renders away handicap as [Tên Đội Khách] ([mốc])', () => {
+        const p = { kind: 'ah', side: 'away', line: -0.5 }
+        expect(formatPickTitle(p, 'Hull City', 'Everton')).toBe('Everton (-0.5)')
+
+        const p2 = { kind: 'ah', side: 'away', line: 0.5 }
+        expect(formatPickTitle(p2, 'Arsenal', 'Chelsea')).toBe('Chelsea (+0.5)')
+    })
+
+    it('renders level (0) handicap as [Tên Đội] (0)', () => {
+        const pHome = { kind: 'ah', side: 'home', line: 0 }
+        expect(formatPickTitle(pHome, 'Hull City', 'Everton')).toBe('Hull City (0)')
+
+        const pAway = { kind: 'ah', side: 'away', line: 0 }
+        expect(formatPickTitle(pAway, 'Hull City', 'Everton')).toBe('Everton (0)')
+    })
+
+    it('renders totals as Tài [mốc] or Xỉu [mốc]', () => {
+        const pOver = { kind: 'totals', side: 'over', line: 2.5 }
+        expect(formatPickTitle(pOver, 'Hull City', 'Everton')).toBe('Tài 2.5')
+
+        const pUnder = { kind: 'totals', side: 'under', line: 2.75 }
+        expect(formatPickTitle(pUnder, 'Hull City', 'Everton')).toBe('Xỉu 2.75')
+    })
+})

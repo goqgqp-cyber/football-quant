@@ -38,15 +38,31 @@ const oddsLineSchema = z
     })
     .strip()
 
+const inPlaySchema = z
+    .object({
+        isLive: z.boolean().optional(),
+        currentMinute: z.number().nullable().optional(),
+        currentScore: z
+            .object({
+                home: z.number(),
+                away: z.number(),
+            })
+            .nullable()
+            .optional(),
+    })
+    .strip()
+
 const collectSchema = z
     .object({
         home: z.string().min(1).max(80),
         away: z.string().min(1).max(80),
         league: z.string().max(80).optional().default(''),
         kickoff: z.string().max(64).nullable().optional().default(null),
+        eventId: z.coerce.number().optional().nullable(),
         lg_home: z.coerce.number().positive().optional(),
         lg_away: z.coerce.number().positive().optional(),
         oddsLines: z.array(oddsLineSchema).max(60).default([]),
+        inPlay: inPlaySchema.optional().nullable(),
     })
     .strip()
 
@@ -82,6 +98,7 @@ streamApp.post('/collect/stream', async (c) => {
                     away,
                     league: league || undefined,
                     kickoff: input.kickoff,
+                    eventId: input.eventId ?? undefined,
                 },
                 (chunk) => {
                     // Không chờ: delta chỉ để UI thấy có tiến trình
@@ -105,6 +122,7 @@ streamApp.post('/collect/stream', async (c) => {
                 input.oddsLines as OddsLine[],
                 input.lg_home ?? undefined,
                 input.lg_away ?? undefined,
+                input.inPlay ?? undefined,
             )
             await step('compute', 'done')
 
@@ -141,6 +159,8 @@ streamApp.post('/collect/stream', async (c) => {
                     away,
                     league,
                     kickoff: input.kickoff,
+                    eventId: input.eventId ?? undefined,
+                    inPlay: input.inPlay ?? undefined,
                 },
                 analysis: result,
                 picks: result.picks,
