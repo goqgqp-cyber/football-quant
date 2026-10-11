@@ -149,8 +149,8 @@ Xem [`.env.example`](.env.example). Không commit `.env` thật (đã có trong 
 |---|---|---|
 | `GEMINI_API_KEY` | Backend | Không nhúng frontend |
 | `GEMINI_MODEL` | Backend | mặc định `gemini-flash-latest` (alias đã kiểm chứng); hoặc ID chính xác từ nút "Copy cURL quickstart" trong AI Studio |
-| `UPSTASH_REDIS_REST_URL` | Backend | |
-| `UPSTASH_REDIS_REST_TOKEN` | Backend | |
+| `UPSTASH_REDIS_REST_URL` | Backend | Có thể dùng `KV_REST_API_URL` của Vercel KV thay thế (tự nhận, không đổi code). Chỉ nhận URL dạng `http(s)://` — `KV_URL`/`REDIS_URL` là `rediss://` (TCP) nên bị bỏ qua. |
+| `UPSTASH_REDIS_REST_TOKEN` | Backend | Có thể dùng `KV_REST_API_TOKEN` (token ghi/xóa đầy đủ; `KV_REST_API_READ_ONLY_TOKEN` không chạy được vì app cần ghi history/session). |
 | `JWT_SECRET` | Backend | chuỗi ngẫu nhiên ≥ 32 ký tự |
 | `ADMIN_EMAIL` | Backend | tài khoản được tạo khi tắt đăng ký công khai |
 | `ALLOW_PUBLIC_SIGNUP` | Backend | mặc định `false` |
@@ -163,11 +163,42 @@ Xem [`.env.example`](.env.example). Không commit `.env` thật (đã có trong 
 
 ## Deploy (G6)
 
-- Build: `npm run build` → `dist/` (frontend) + typecheck server xong.
-- Chạy server: `node dist-server/index.js` (hoặc `npm run dev:api` khi dev), đặt sau reverse proxy
-  và trỏ frontend tới cùng origin `/api`.
-- Bắt buộc đặt `JWT_SECRET`, `UPSTASH_*`, `GEMINI_API_KEY` trên host (Vercel / Cloud Run / VPS).
+### Vercel (khuyến nghị — một project, một domain)
+
+Repo đã kèm sẵn cấu hình để cả frontend **và** backend chạy trên cùng một project Vercel:
+
+- `vercel.json` ghim `framework: vite`, build `npm run build` → `dist/`, và rewrite mọi
+  request `/api/(.*)` về function serverless `/api/index`.
+- `api/index.ts` bọc Hono app bằng adapter `hono/vercel` (`export default handle(app)`),
+  nên toàn bộ route `/api/*` (auth, analyze, collect/stream SSE, extract) chạy như function.
+- Frontend gọi same-origin `/api` (xem `src/lib/api.ts`) → **không cần `CORS_ORIGINS`** khi
+  chạy trên Vercel.
+
+**Các bước:**
+
+1. Trên Vercel: **Settings → Build and Deployment → Framework Preset = Vite**,
+   Root Directory = `.`, Build Command = `npm run build`, Output Directory = `dist`.
+2. Thêm biến môi trường (mục dưới), rồi **Redeploy**. Các deploy cũ báo *Error* thường do
+   project bị nhận là Next.js và không có entry serverless — hai file trên đã khắc phục.
+3. Kiểm tra: mở `https://<domain>/api/health` → phải thấy `{"ok":true,...}`.
+
+### Chạy self-host (Cloud Run / VPS)
+
+- Build: `npm run build` → `dist/` (frontend); server chạy bằng `npm run start:api` (tsx)
+  đặt sau reverse proxy và trỏ frontend tới cùng origin `/api`.
+- Bắt buộc đặt `JWT_SECRET`, `UPSTASH_*`, `GEMINI_API_KEY` trên host.
 - Không bao giờ expose `GEMINI_API_KEY` hay `UPSTASH_*` cho frontend.
+
+### Lưu ý khi deploy Vercel
+
+1. **Mọi biến chứa key/token phải lưu dạng Secret**, không dùng Plain Text — Vercel cảnh báo
+   *“looks like a secret, but its value is visible to anyone with access”* nếu để dạng `<>`.
+2. Xoay (rotate) secret đã từng lộ, rồi redeploy để biến mới được inject.
+3. Biến tối thiểu cần có: `GEMINI_API_KEY`, `GEMINI_MODEL`, `JWT_SECRET`,
+   và Redis REST (URL + token ghi/xóa).
+4. `KV_URL` / `REDIS_URL` (`rediss://`) không dùng cho client REST — không cần đặt.
+5. Vercel Hobby giới hạn thời lượng function (~60s); luồng SSE `collect/stream` chạy grounding
+   + Gemini có thể chạm ngưỡng này trên gói free.
 
 ## Ghi chú
 
