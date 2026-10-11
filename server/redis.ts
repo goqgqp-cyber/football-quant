@@ -73,3 +73,26 @@ export async function pingRedis(): Promise<boolean> {
         return false
     }
 }
+
+/**
+ * Chẩn đoán kết nối Redis kèm THÔNG BÁO LỖI thật (dùng cho `/api/health?deep=1`).
+ * Không lộ token — chỉ trả về mode và chuỗi lỗi do client ném ra, giúp phân biệt
+ * "sai/thiếu token KV" với "server không có biến môi trường".
+ */
+export async function redisDiag(): Promise<{
+    mode: 'upstash' | 'memory'
+    ok: boolean
+    error?: string
+}> {
+    if (usingMemoryStore) return { mode: 'memory', ok: true }
+    try {
+        const pong = await redis.ping()
+        return { mode: 'upstash', ok: pong === 'PONG' }
+    } catch (e) {
+        return {
+            mode: 'upstash',
+            ok: false,
+            error: e instanceof Error ? e.message : String(e),
+        }
+    }
+}

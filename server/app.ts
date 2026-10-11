@@ -1,8 +1,8 @@
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
-import { env } from './env.js'
+import { env, missingRequired } from './env.js'
 import { csrfProtect } from './middleware.js'
-import { pingRedis } from './redis.js'
+import { pingRedis, redisDiag } from './redis.js'
 import { authApp } from './routes/auth.js'
 import { dataApp } from './routes/data.js'
 import { extractApp } from './routes/extract.js'
@@ -27,6 +27,26 @@ app.use(
         allowMethods: ['GET', 'POST', 'PATCH', 'DELETE', 'OPTIONS'],
     }),
 )
+
+/**
+ * Chốt cấu hình: nếu thiếu biến bắt buộc (vd `JWT_SECRET` trên Vercel) thì trả JSON
+ * 500 kèm hướng dẫn — tránh chạy với secret rỗng (không an toàn) mà cũng không để
+ * function crash im lặng thành "Lỗi 500" trống. `/api/health` được miễn trừ để còn
+ * chẩn đoán được (nó liệt kê `missing`).
+ */
+app.use('/api/*', async (c, next) => {
+    if (missingRequired.length > 0 && !c.req.path.startsWith('/api/health')) {
+        return c.json(
+            {
+                error: 'config',
+                message: `Máy chủ thiếu biến môi trường: ${missingRequired.join(', ')}. Thêm trên Vercel rồi redeploy.`,
+                missing: missingRequired,
+            },
+            500,
+        )
+    }
+    await next()
+})
 
 // Rate-limit thô theo IP (chống spam/burst) — ghi nhớ trong bộ nhớ process
 const hits = new Map<string, { n: number; resetAt: number }>()
@@ -66,8 +86,24 @@ app.use('/api/*', async (c, next) => {
 // ---- Routes ----
 app.get('/api/health', async (c) => {
     const redisOk = await pingRedis()
-    return c.json({ ok: true, redis: redisOk ? 'ok' : 'down', time: new Date().toISOString() })
+    const base = {
+        ok: true,
+        redis: redisOk ? 'ok' : 'down',
+        // Biến bắt buộc còn thiếu (vd `JWT_SECRET`) — hiển thị để chẩn đoán deploy.
+        missing: missingRequired,
+        time: new Date().toISOString(),
+    }
+    // `?deep=1` trả thêm chẩn đoán Redis kèm thông báo lỗi thật (không lộ token).
+    if (c.req.query('deep') === '1') {
+        const diag = await redisDiag()
+        return c.json({ ...base, redisDiag: diag })
+    }
+    return c.json(base)
 })
+
+// Đích của rewrite trên Vercel — trả thông tin nhận diện thay vì 404
+// (vercel.json rewrite `/api/(.*)` → `/api` nên request `/api` cũng phải có handler).
+app.all('/api', (c) => c.json({ ok: true, service: 'football-quant-api' }))
 
 app.route('/api/auth', authApp)
 app.route('/api', dataApp)

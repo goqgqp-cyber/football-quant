@@ -3,16 +3,6 @@
  * TUYỆT ĐỐI không được import file này từ code frontend (src/).
  */
 
-function required(name: string): string {
-    const v = process.env[name]
-    if (!v) {
-        throw new Error(
-            `Thiếu biến môi trường ${name}. Hãy copy .env.example thành .env và điền giá trị.`,
-        )
-    }
-    return v
-}
-
 function optional(name: string, fallback: string): string {
     return process.env[name] || fallback
 }
@@ -55,7 +45,12 @@ export const env = {
     nodeEnv: optional('NODE_ENV', 'development'),
     port: int('PORT', 8787),
 
-    jwtSecret: required('JWT_SECRET'),
+    /**
+     * Không dùng `required()` ở đây: nếu thiếu, việc ném lỗi ngay lúc import
+     * sẽ làm cả function Vercel crash → client chỉ thấy "Lỗi 500" vô nghĩa.
+     * Thay vào đó để rỗng rồi báo lỗi cấu hình rõ ràng ở `missingRequired`.
+     */
+    jwtSecret: optional('JWT_SECRET', ''),
     accessTtlSec: int('ACCESS_TTL_SEC', 15 * 60), // 15 phút
     refreshTtlSec: int('REFRESH_TTL_SEC', 30 * 24 * 60 * 60), // 30 ngày
 
@@ -100,3 +95,10 @@ export const env = {
 } as const
 
 export const isProd = env.nodeEnv === 'production'
+
+/**
+ * Các biến bắt buộc còn thiếu. Middleware trong `app.ts` dùng danh sách này để
+ * trả JSON 500 kèm hướng dẫn thay vì để function chết lúc khởi động.
+ */
+export const missingRequired: string[] = []
+if (!env.jwtSecret) missingRequired.push('JWT_SECRET')
