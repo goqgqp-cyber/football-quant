@@ -16,6 +16,7 @@ import type {
     SettledMatchRecord,
     SettledPick,
 } from './types'
+import { extractOddsDirectClient } from './ocr-client'
 
 const BASE = '/api'
 
@@ -597,24 +598,14 @@ export const api = {
 
     suggestedLines: () => apiFetch<{ lines: OddsLine[] }>('/suggested-lines'),
 
-    /** Gửi ảnh bảng kèo lên server để AI tìm dữ liệu / đọc kèo (G3). */
+    /** Gửi ảnh bảng kèo trực tiếp qua xKiro Vision từ trình duyệt (loại bỏ hoàn toàn trần 10s Vercel / 504 timeout). */
     extract: (files: File[], hint: { home?: string; away?: string; league?: string }) => {
-        const fd = new FormData()
-        for (const f of files) fd.append('images', f)
-        if (hint.home) fd.append('home', hint.home)
-        if (hint.away) fd.append('away', hint.away)
-        if (hint.league) fd.append('league', hint.league)
-        return apiFetch<ExtractResponse>('/extract', { method: 'POST', body: fd, timeoutMs: 90000 })
+        return extractOddsDirectClient(files, hint)
     },
 
-    /** Alias gọi route OCR Odds chuyên dụng */
+    /** Alias gọi OCR Odds trực tiếp từ trình duyệt */
     ocrOdds: (files: File[], hint: { home?: string; away?: string; league?: string }) => {
-        const fd = new FormData()
-        for (const f of files) fd.append('images', f)
-        if (hint.home) fd.append('home', hint.home)
-        if (hint.away) fd.append('away', hint.away)
-        if (hint.league) fd.append('league', hint.league)
-        return apiFetch<ExtractResponse>('/ocr-odds', { method: 'POST', body: fd, timeoutMs: 90000 })
+        return extractOddsDirectClient(files, hint)
     },
 
     // --- Quản trị viên (Admin) ---

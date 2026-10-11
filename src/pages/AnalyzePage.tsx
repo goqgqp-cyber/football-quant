@@ -6,7 +6,7 @@ import { PickCard } from '../components/PickCard'
 import { ExplanationPanel } from '../components/ExplanationPanel'
 import { ProgressSteps, type Step } from '../components/ui/ProgressSteps'
 import { Skeleton } from '../components/ui/RefractionFilter'
-import { ApiError, api, collectStream, type ExtractedRow } from '../lib/api'
+import { api, collectStream, type ExtractedRow } from '../lib/api'
 import { useSettings } from '../hooks/useSettings'
 import { LiveMatchTracker } from '../components/LiveMatchTracker'
 import { filterRecommendedPicks } from '../lib/engine'
@@ -75,7 +75,7 @@ export function AnalyzePage() {
     const [confirmRows, setConfirmRows] = useState<ConfirmRow[] | null>(null)
     const [parseHint, setParseHint] = useState<string | null>(null)
     const [extracting, setExtracting] = useState(false)
-    const [extractStatusText, setExtractStatusText] = useState<string>('AI đang bóc tách chính xác từng dòng kèo (quá trình này mất khoảng 10-25 giây để đảm bảo độ chuẩn xác 100%)...')
+    const [extractStatusText, setExtractStatusText] = useState<string>('AI đang bóc tách trực tiếp ma trận kèo qua Qwen Omni Flash...')
     const [extractNote, setExtractNote] = useState<string | null>(null)
 
     // ---- Stream + kết quả ----
@@ -155,114 +155,146 @@ export function AnalyzePage() {
         setSteps((prev) => prev.map((s) => ({ ...s, status: 'pending' as const })))
     }
 
-    const runAnalysis = () => {
-        if (running || oddsLines.length === 0) return
-        setRunning(true)
-        setError(null)
-        resetSteps()
-        setResult(null)
-        setSavedId(null)
-        setLiveText('')
-        setGrounded(false)
-        setExplanation(null)
-        latestExplanationRef.current = null
-        setExplanationError(null)
-        setExplaining(false)
+    const triggerAnalysis = useCallback(
+        (overrides?: {
+            home?: string
+            away?: string
+            league?: string
+            kickoff?: string | null
+            eventId?: number
+            oddsLines?: OddsLine[]
+            isLive?: boolean
+            currentMinute?: number | null
+            currentScore?: { home: number; away: number } | null
+        }) => {
+            const h = (overrides?.home !== undefined ? overrides.home : input.homeTeam).trim()
+            const a = (overrides?.away !== undefined ? overrides.away : input.awayTeam).trim()
+            const currentLines = overrides?.oddsLines ?? oddsLines
 
-        const cleanOddsLines: OddsLine[] = oddsLines.map((o) => ({
-            id: String(o.id),
-            kind: o.kind,
-            side: o.side,
-            line: Number(o.line),
-            odds: Number(o.odds),
-        }))
+            if (!h || !a || currentLines.length === 0) return
 
-        const inPlay = isLive
-            ? {
-                  isLive: true,
-                  currentMinute,
-                  currentScore,
-              }
-            : undefined
+            setRunning(true)
+            setError(null)
+            resetSteps()
+            setResult(null)
+            setSavedId(null)
+            setLiveText('')
+            setGrounded(false)
+            setExplanation(null)
+            latestExplanationRef.current = null
+            setExplanationError(null)
+            setExplaining(false)
 
-        const { abort } = collectStream(
-            {
-                home: input.homeTeam.trim(),
-                away: input.awayTeam.trim(),
-                league: input.league?.trim() || undefined,
-                kickoff: input.kickoff || null,
-                eventId: sofaEventId ? Number(sofaEventId) : undefined,
-                lg_home: input.lg_home,
-                lg_away: input.lg_away,
-                oddsLines: cleanOddsLines,
-                inPlay,
-            },
-            (e) => {
-                switch (e.type) {
-                    case 'step':
-                        setStepStatus(e.id, e.status)
-                        if (e.id === 'explain' && e.status === 'active') setExplaining(true)
-                        if (e.id === 'explain' && e.status === 'error') {
+            const cleanOddsLines: OddsLine[] = currentLines.map((o) => ({
+                id: String(o.id),
+                kind: o.kind,
+                side: o.side,
+                line: Number(o.line),
+                odds: Number(o.odds),
+            }))
+
+            const liveFlag = overrides?.isLive !== undefined ? overrides.isLive : isLive
+            const minute = overrides?.currentMinute !== undefined ? overrides.currentMinute : currentMinute
+            const score = overrides?.currentScore !== undefined ? overrides.currentScore : currentScore
+
+            const inPlay = liveFlag
+                ? {
+                      isLive: true,
+                      currentMinute: minute,
+                      currentScore: score,
+                  }
+                : undefined
+
+            const evId =
+                overrides?.eventId !== undefined
+                    ? overrides.eventId
+                    : sofaEventId
+                        ? Number(sofaEventId)
+                        : undefined
+            const leg = overrides?.league !== undefined ? overrides.league : input.league
+            const kof = overrides?.kickoff !== undefined ? overrides.kickoff : input.kickoff
+
+            const { abort } = collectStream(
+                {
+                    home: h,
+                    away: a,
+                    league: leg?.trim() || undefined,
+                    kickoff: kof || null,
+                    eventId: evId,
+                    lg_home: input.lg_home,
+                    lg_away: input.lg_away,
+                    oddsLines: cleanOddsLines,
+                    inPlay,
+                },
+                (e) => {
+                    switch (e.type) {
+                        case 'step':
+                            setStepStatus(e.id, e.status)
+                            if (e.id === 'explain' && e.status === 'active') setExplaining(true)
+                            if (e.id === 'explain' && e.status === 'error') {
+                                setExplaining(false)
+                                setExplanationError(
+                                    'Bước giải thích gặp lỗi — kết quả tính toán vẫn dùng được bình thường.',
+                                )
+                            }
+                            break
+                        case 'delta':
+                            setLiveText((prev) => (prev.length > 4000 ? prev : prev + e.text))
+                            break
+                        case 'data':
+                            setData(e.matchData)
+                            setGrounded(true)
+                            break
+                        case 'explanation':
+                            setExplanation(e.explanation)
+                            latestExplanationRef.current = e.explanation
                             setExplaining(false)
-                            setExplanationError(
-                                'Bước giải thích gặp lỗi — kết quả tính toán vẫn dùng được bình thường.',
-                            )
-                        }
-                        break
-                    case 'delta':
-                        // Giới hạn độ dài để không dồn text vô hạn vào state
-                        setLiveText((prev) => (prev.length > 4000 ? prev : prev + e.text))
-                        break
-                    case 'data':
-                        setData(e.matchData)
-                        setGrounded(true)
-                        break
-                    case 'explanation':
-                        setExplanation(e.explanation)
-                        latestExplanationRef.current = e.explanation
-                        setExplaining(false)
-                        break
-                    case 'result':
-                        setResult(e.result)
-                        setSavedId(e.recordId)
-                        setRunning(false)
-                        setExplaining(false)
-                        abortRef.current = null
+                            break
+                        case 'result':
+                            setResult(e.result)
+                            setSavedId(e.recordId)
+                            setRunning(false)
+                            setExplaining(false)
+                            abortRef.current = null
 
-                        // Lưu ngay vào LocalStorage và phát event để tab Lịch sử hiển thị lập tức không cần F5
-                        try {
-                            const recPicks = filterRecommendedPicks(e.result.picks)
-                            prependLocalHistoryItem({
-                                id: e.recordId,
-                                createdAt: Date.now(),
-                                meta: {
-                                    home: input.homeTeam.trim(),
-                                    away: input.awayTeam.trim(),
-                                    league: input.league?.trim() || undefined,
-                                    kickoff: input.kickoff || null,
-                                    eventId: sofaEventId ? Number(sofaEventId) : undefined,
-                                    inPlay,
-                                },
-                                analysis: e.result,
-                                picks: recPicks,
-                                result: null,
-                                explanation: latestExplanationRef.current,
-                            })
-                        } catch {
-                            /* ignore local cache errors */
-                        }
-                        break
-                    case 'error':
-                        setError(e.message)
-                        setRunning(false)
-                        setExplaining(false)
-                        abortRef.current = null
-                        break
-                }
-            },
-        )
-        abortRef.current = abort
-    }
+                            // Lưu ngay vào LocalStorage và phát event để tab Lịch sử hiển thị lập tức
+                            try {
+                                const recPicks = filterRecommendedPicks(e.result.picks)
+                                prependLocalHistoryItem({
+                                    id: e.recordId,
+                                    createdAt: Date.now(),
+                                    meta: {
+                                        home: h,
+                                        away: a,
+                                        league: leg?.trim() || undefined,
+                                        kickoff: kof || null,
+                                        eventId: evId,
+                                        inPlay,
+                                    },
+                                    analysis: e.result,
+                                    picks: recPicks,
+                                    result: null,
+                                    explanation: latestExplanationRef.current,
+                                })
+                            } catch {
+                                /* ignore */
+                            }
+                            break
+                        case 'error':
+                            setError(e.message)
+                            setRunning(false)
+                            setExplaining(false)
+                            abortRef.current = null
+                            break
+                    }
+                },
+            )
+            abortRef.current = abort
+        },
+        [input, oddsLines, isLive, currentMinute, currentScore, sofaEventId],
+    )
+
+    const runAnalysis = () => triggerAnalysis()
 
     /** Dừng luồng đang chạy. */
     const cancelAnalysis = () => {
@@ -274,113 +306,10 @@ export function AnalyzePage() {
     // Dừng luồng nếu người dùng rời trang khi đang chạy
     useEffect(() => () => abortRef.current?.(), [])
 
-    /**
-     * Tối ưu chất lượng ảnh bảo toàn độ sắc nét tuyệt đối (High-Fidelity):
-     * - Giữ nguyên độ phân giải gốc lên đến 1920px (Full HD).
-     * - Giữ nguyên file PNG gốc nếu dung lượng ≤ 4MB để không mất chi tiết số odds.
-     * - Nén JPEG với quality 0.92 nếu cần resize hoặc chuyển đổi, bảo toàn độ tương phản và nét chữ số nhỏ.
-     */
-    const compressImage = async (file: File): Promise<File> => {
-        return new Promise((resolve) => {
-            if (!file.type.startsWith('image/')) {
-                resolve(file)
-                return
-            }
-
-            const scaleAndCompress = (img: HTMLImageElement) => {
-                const MAX_WIDTH = 1920
-                let { width, height } = img
-
-                if (width > MAX_WIDTH || height > MAX_WIDTH) {
-                    if (width > height) {
-                        height = Math.round((height * MAX_WIDTH) / width)
-                        width = MAX_WIDTH
-                    } else {
-                        width = Math.round((width * MAX_WIDTH) / height)
-                        height = MAX_WIDTH
-                    }
-                }
-
-                const canvas = document.createElement('canvas')
-                canvas.width = width
-                canvas.height = height
-                const ctx = canvas.getContext('2d')
-
-                if (!ctx) {
-                    resolve(file)
-                    return
-                }
-
-                // Bật làm mịn chất lượng cao để mốc kèo không bị mờ hay răng cưa
-                ctx.imageSmoothingEnabled = true
-                ctx.imageSmoothingQuality = 'high'
-
-                // Nền trắng cho trường hợp PNG có nền trong suốt
-                ctx.fillStyle = '#FFFFFF'
-                ctx.fillRect(0, 0, width, height)
-                ctx.drawImage(img, 0, 0, width, height)
-
-                try {
-                    const dataUrl = canvas.toDataURL('image/jpeg', 0.92)
-                    const byteString = atob(dataUrl.split(',')[1])
-                    const ab = new ArrayBuffer(byteString.length)
-                    const ia = new Uint8Array(ab)
-                    for (let i = 0; i < byteString.length; i++) {
-                        ia[i] = byteString.charCodeAt(i)
-                    }
-                    const blob = new Blob([ab], { type: 'image/jpeg' })
-                    const newName = file.name.replace(/\.[^/.]+$/, '') + '.jpg'
-                    const compressed = new File([blob], newName, {
-                        type: 'image/jpeg',
-                        lastModified: Date.now(),
-                    })
-                    resolve(compressed)
-                } catch {
-                    canvas.toBlob(
-                        (blob) => {
-                            if (!blob) {
-                                resolve(file)
-                                return
-                            }
-                            const newName = file.name.replace(/\.[^/.]+$/, '') + '.jpg'
-                            const compressed = new File([blob], newName, {
-                                type: 'image/jpeg',
-                                lastModified: Date.now(),
-                            })
-                            resolve(compressed)
-                        },
-                        'image/jpeg',
-                        0.92,
-                    )
-                }
-            }
-
-            const img = new Image()
-            const objectUrl = URL.createObjectURL(file)
-
-            img.onload = () => {
-                URL.revokeObjectURL(objectUrl)
-                // Giữ nguyên file PNG gốc nếu dung lượng <= 4MB và kích thước <= 1920px
-                if (file.type === 'image/png' && file.size <= 4 * 1024 * 1024 && img.width <= 1920 && img.height <= 1920) {
-                    resolve(file)
-                    return
-                }
-                scaleAndCompress(img)
-            }
-
-            img.onerror = () => {
-                URL.revokeObjectURL(objectUrl)
-                resolve(file)
-            }
-
-            img.src = objectUrl
-        })
-    }
-
     const runExtract = useCallback(
         async (files: File[]) => {
             setExtracting(true)
-            setExtractStatusText('AI đang bóc tách chính xác từng dòng kèo (quá trình này mất khoảng 10-25 giây để đảm bảo độ chuẩn xác 100%)...')
+            setExtractStatusText('AI đang bóc tách trực tiếp ma trận kèo qua Qwen Omni Flash...')
             setParseHint(null)
             setError(null)
             setExtractNote(null)
@@ -392,25 +321,26 @@ export function AnalyzePage() {
                     league: input.league.trim() || undefined,
                 }
 
+                // Gửi ảnh trực tiếp từ trình duyệt đến xKiro Vision API (bỏ qua trần 10s Vercel)
                 const res = await api.extract(files, hint)
 
                 // CẬP NHẬT TÊN ĐỘI TỪ OCR NGAY LẬP TỨC:
-                const extractedHome = res.homeTeam || res.meta?.home || (res as unknown as { home?: string }).home
-                const extractedAway = res.awayTeam || res.meta?.away || (res as unknown as { away?: string }).away
-                const extractedLeague = res.league || res.meta?.league || (res as unknown as { league?: string }).league
-                const extractedKickoff = res.meta?.kickoff || (res as unknown as { kickoff?: string }).kickoff
+                const extractedHome = (res.homeTeam || res.meta?.home || (res as unknown as { home?: string }).home || '').trim()
+                const extractedAway = (res.awayTeam || res.meta?.away || (res as unknown as { away?: string }).away || '').trim()
+                const extractedLeague = (res.league || res.meta?.league || (res as unknown as { league?: string }).league || '').trim()
+                const extractedKickoff = (res.meta?.kickoff || (res as unknown as { kickoff?: string }).kickoff || '').trim()
 
-                if (extractedHome && typeof extractedHome === 'string' && extractedHome.trim()) {
-                    setHomeTeam(extractedHome.trim())
+                if (extractedHome) {
+                    setHomeTeam(extractedHome)
                 }
-                if (extractedAway && typeof extractedAway === 'string' && extractedAway.trim()) {
-                    setAwayTeam(extractedAway.trim())
+                if (extractedAway) {
+                    setAwayTeam(extractedAway)
                 }
-                if (extractedLeague && typeof extractedLeague === 'string' && extractedLeague.trim()) {
-                    setInput((p) => ({ ...p, league: extractedLeague.trim() }))
+                if (extractedLeague) {
+                    setInput((p) => ({ ...p, league: extractedLeague }))
                 }
-                if (extractedKickoff && typeof extractedKickoff === 'string' && extractedKickoff.trim()) {
-                    setInput((p) => ({ ...p, kickoff: extractedKickoff.trim() }))
+                if (extractedKickoff) {
+                    setInput((p) => ({ ...p, kickoff: extractedKickoff }))
                 }
 
                 if (res.isLive !== undefined) setIsLive(Boolean(res.isLive))
@@ -418,26 +348,13 @@ export function AnalyzePage() {
                 if (res.currentScore !== undefined) setCurrentScore(res.currentScore)
                 if (res.period !== undefined) setPeriod(res.period)
 
-                // Tự động tìm kiếm SofaScore Event ID
-                const h = (extractedHome && typeof extractedHome === 'string' && extractedHome.trim()) || input.homeTeam.trim()
-                const a = (extractedAway && typeof extractedAway === 'string' && extractedAway.trim()) || input.awayTeam.trim()
-                if (h && a) {
-                    api.sofascoreSearch(h, a)
-                        .then((sRes) => {
-                            if (sRes?.eventId) {
-                                setSofaEventId(String(sRes.eventId))
-                                setSofaMsg({
-                                    type: 'success',
-                                    text: `Tự động khớp SofaScore Event ID: ${sRes.eventId}`,
-                                    })
-                            }
-                        })
-                        .catch(() => {})
-                }
-
                 const rows = res.rows.map(toConfirmRow)
                 setConfirmRows(rows)
+                const cleanLines = rows.map((r) => r.line)
+                setOddsLines(cleanLines)
                 setExtractNote(res.note ?? null)
+                setError(null)
+                setParseHint(null)
 
                 if (rows.length === 0) {
                     setParseHint(
@@ -453,9 +370,51 @@ export function AnalyzePage() {
                         ? `Có ${rows.filter((r) => r.confidence < 0.8).length} dòng độ tin cậy thấp (ảnh có thể mờ). Bắt buộc kiểm tra lại trước khi tính.`
                         : null,
                 )
+
+                // TỰ ĐỘNG KÍCH HOẠT PHÂN TÍCH ĐỊNH LƯỢNG & SOFASCORE SYNC KHÔNG CẦN BẤM CHUỘT
+                const h = extractedHome || input.homeTeam.trim()
+                const a = extractedAway || input.awayTeam.trim()
+
+                if (h && a && cleanLines.length > 0) {
+                    setExtractStatusText('Đã nạp kèo! Đang tự động phân tích định lượng Poisson & Dixon-Coles...')
+                    api.sofascoreSearch(h, a)
+                        .then((sRes) => {
+                            const evId = sRes?.eventId ? Number(sRes.eventId) : undefined
+                            if (evId) {
+                                setSofaEventId(String(evId))
+                                setSofaMsg({
+                                    type: 'success',
+                                    text: `Tự động khớp SofaScore Event ID: ${evId}`,
+                                })
+                            }
+                            triggerAnalysis({
+                                home: h,
+                                away: a,
+                                league: extractedLeague || input.league?.trim(),
+                                kickoff: extractedKickoff || input.kickoff,
+                                eventId: evId,
+                                oddsLines: cleanLines,
+                                isLive: Boolean(res.isLive),
+                                currentMinute: res.currentMinute,
+                                currentScore: res.currentScore,
+                            })
+                        })
+                        .catch(() => {
+                            triggerAnalysis({
+                                home: h,
+                                away: a,
+                                league: extractedLeague || input.league?.trim(),
+                                kickoff: extractedKickoff || input.kickoff,
+                                oddsLines: cleanLines,
+                                isLive: Boolean(res.isLive),
+                                currentMinute: res.currentMinute,
+                                currentScore: res.currentScore,
+                            })
+                        })
+                }
             } catch (e) {
                 setParseHint(
-                    e instanceof ApiError
+                    e instanceof Error
                         ? e.message
                         : 'Trích xuất ảnh thất bại. Vui lòng kiểm tra lại ảnh hoặc thử lại.',
                 )
@@ -463,7 +422,7 @@ export function AnalyzePage() {
                 setExtracting(false)
             }
         },
-        [input.homeTeam, input.awayTeam, input.league, setHomeTeam, setAwayTeam],
+        [input, setHomeTeam, setAwayTeam, triggerAnalysis],
     )
 
     const handleFiles = async (files: FileList | File[] | null) => {
@@ -490,12 +449,11 @@ export function AnalyzePage() {
         if (valid.length === 0) return
 
         setExtracting(true)
-        setExtractStatusText('AI đang bóc tách chính xác từng dòng kèo (quá trình này mất khoảng 10-25 giây để đảm bảo độ chuẩn xác 100%)...')
+        setExtractStatusText('AI đang bóc tách trực tiếp ma trận kèo qua Qwen Omni Flash...')
         try {
-            const compressed = await Promise.all(valid.map((f) => compressImage(f)))
-            const urls = compressed.map((cf) => URL.createObjectURL(cf))
+            const urls = valid.map((vf) => URL.createObjectURL(vf))
             setImagePreviews(urls)
-            await runExtract(compressed)
+            await runExtract(valid)
         } catch {
             setExtracting(false)
         }
@@ -853,10 +811,10 @@ export function AnalyzePage() {
                         <div className="flex flex-col items-center gap-1.5 py-1">
                             <span className="flex h-3 w-3 rounded-full bg-violet-400 animate-ping mb-1" />
                             <p className="text-sm font-semibold text-violet-300 animate-pulse">
-                                {extractStatusText || 'AI đang bóc tách chính xác từng dòng kèo (quá trình này mất khoảng 10-25 giây để đảm bảo độ chuẩn xác 100%)...'}
+                                {extractStatusText || 'AI đang bóc tách trực tiếp ma trận kèo qua Qwen Omni Flash...'}
                             </p>
                             <span className="text-xs text-neutral-400">
-                                Mô hình thị giác độ chính xác cao Qwen 2.5 VL 72B đang bóc tách ma trận odds…
+                                Kết nối trực tiếp xKiro Vision API (bỏ qua trần 10s Vercel, triệt tiêu lỗi 504)...
                             </span>
                         </div>
                     ) : (
@@ -868,7 +826,7 @@ export function AnalyzePage() {
                         className={`mt-3 inline-flex cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-black ${extracting ? 'cursor-not-allowed bg-white/35 text-ink-500' : 'bg-white hover:bg-platinum-300'
                             }`}
                     >
-                        {extracting ? 'Đang bóc tách chính xác từng dòng kèo…' : 'Chọn ảnh'}
+                        {extracting ? 'Đang bóc tách trực tiếp qua xKiro…' : 'Chọn ảnh'}
                         <input
                             ref={fileInputRef}
                             type="file"
