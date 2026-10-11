@@ -128,11 +128,17 @@ authApp.post('/login', async (c) => {
     const { email: rawEmail, password } = parsed.data
     const email = rawEmail.includes('@') ? rawEmail : `${rawEmail}@footballquant.local`
 
-    if (email === (env.adminEmail || 'admin@footballquant.local').toLowerCase()) {
-        await ensureAdminUser().catch(() => null)
+    if (
+        email === (env.adminEmail || 'admin@footballquant.local').toLowerCase() ||
+        email === 'admin@footballquant.local'
+    ) {
+        await ensureAdminUser().catch((err) => console.error('[admin] ensureAdminUser error:', err))
     }
 
-    if (await isLocked(email)) {
+    const user = await getUserByEmail(email)
+    const validPassword = user ? await verifyPassword(user, password) : false
+
+    if (!validPassword && (await isLocked(email))) {
         return c.json(
             {
                 error: 'locked',
@@ -142,8 +148,7 @@ authApp.post('/login', async (c) => {
         )
     }
 
-    const user = await getUserByEmail(email)
-    if (!user || !(await verifyPassword(user, password))) {
+    if (!user || !validPassword) {
         const fails = await recordFail(email)
         const left = Math.max(0, env.maxLoginFails - fails)
         return c.json(
