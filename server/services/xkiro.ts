@@ -20,6 +20,7 @@ import type {
     TeamStats,
 } from '../../src/lib/types.js'
 import { buildFacts, factLabels, substituteFacts, verifyNumbers } from '../../src/lib/explain.js'
+import { extractValidJson } from '../../src/lib/json-cleaner.js'
 import { findFixture, getFixtureH2H } from './apiFootball.js'
 
 
@@ -388,8 +389,9 @@ export async function extractOddsFromImages(
         note?: string
     }
     try {
-        parsed = JSON.parse(stripJsonFence(text))
-    } catch {
+        parsed = extractValidJson(text)
+    } catch (err) {
+        console.error('[xkiro] Lỗi bóc tách JSON bảng kèo:', err, '\nRaw text:', text.slice(0, 500))
         throw new XKiroError('xKiro không trả về JSON hợp lệ cho bảng kèo.', 502)
     }
 
@@ -723,8 +725,9 @@ export async function streamCollectMatchData(
 
     let parsed: unknown
     try {
-        parsed = JSON.parse(stripJsonFence(text))
-    } catch {
+        parsed = extractValidJson(text)
+    } catch (err) {
+        console.error('[xkiro] Lỗi bóc tách JSON phân tích định lượng:', err, '\nRaw text:', text.slice(0, 500))
         throw new XKiroError('xKiro trả về JSON không hợp lệ ở Bước phân tích định lượng.', 502)
     }
 
@@ -845,8 +848,9 @@ export async function generateExplanation(
 
     let parsed: { parts?: unknown; caveats?: unknown }
     try {
-        parsed = JSON.parse(stripJsonFence(text)) as { parts?: unknown; caveats?: unknown }
-    } catch {
+        parsed = extractValidJson(text) as { parts?: unknown; caveats?: unknown }
+    } catch (err) {
+        console.error('[xkiro] Lỗi bóc tách JSON giải thích định lượng:', err, '\nRaw text:', text.slice(0, 500))
         throw new XKiroError('xKiro trả về JSON không hợp lệ ở Bước giải thích định lượng.', 502)
     }
 

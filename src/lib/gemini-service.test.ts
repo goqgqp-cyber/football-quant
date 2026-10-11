@@ -10,6 +10,7 @@ import {
     appendApiKey,
     getModelCandidates,
 } from '../../server/services/gemini.js'
+import { extractValidJson } from './json-cleaner.js'
 
 describe('sanitizeCleanText (Payload Hygiene)', () => {
     it('giữ nguyên văn bản text sạch thông thường', () => {
@@ -53,6 +54,33 @@ describe('stripJsonFence (Pure JSON Handling)', () => {
     it('giữ nguyên chuỗi JSON thuần không có markdown', () => {
         const raw = '{"pure": "json"}'
         expect(stripJsonFence(raw)).toBe('{"pure": "json"}')
+    })
+})
+
+describe('extractValidJson (Robust JSON Sanitization)', () => {
+    it('bóc tách JSON khi có văn bản đàm thoại và markdown code fences', () => {
+        const text = 'Dưới đây là bảng kèo đã bóc tách:\n```json\n{\n  "home": "Arsenal",\n  "away": "Chelsea"\n}\n```\nHy vọng hữu ích.'
+        const parsed = extractValidJson<{ home: string; away: string }>(text)
+        expect(parsed).toEqual({ home: 'Arsenal', away: 'Chelsea' })
+    })
+
+    it('tự động sửa lỗi dấu phẩy thừa trailing commas', () => {
+        const text = '{"rows": [{"line": 2.5, "odds": 1.95,},],}'
+        const parsed = extractValidJson<{ rows: Array<{ line: number; odds: number }> }>(text)
+        expect(parsed.rows[0].line).toBe(2.5)
+        expect(parsed.rows[0].odds).toBe(1.95)
+    })
+
+    it('tự động phục hồi JSON bị cắt cụt do giới hạn token output', () => {
+        const text = '{"homeTeam": "Liverpool", "awayTeam": "Man City", "rows": [{"kind": "totals", "line": 2.5'
+        const parsed = extractValidJson<{ homeTeam: string; awayTeam: string; rows: Array<{ kind: string; line: number }> }>(text)
+        expect(parsed.homeTeam).toBe('Liverpool')
+        expect(parsed.awayTeam).toBe('Man City')
+        expect(parsed.rows[0].line).toBe(2.5)
+    })
+
+    it('báo lỗi khi phản hồi rỗng', () => {
+        expect(() => extractValidJson('')).toThrow('Phản hồi từ AI rỗng')
     })
 })
 
