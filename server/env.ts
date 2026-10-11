@@ -92,18 +92,15 @@ export const env = {
      * (tránh các model experimental hoặc preview/flash-latest dễ bị rate-limit bất chợt).
      */
     geminiModel: (() => {
-        const raw = (process.env.GEMINI_MODEL || '').trim()
-        if (
-            !raw ||
-            raw === 'gemini-flash-latest' ||
-            raw.includes('experimental') ||
-            raw.includes('preview') ||
-            raw.includes('exp') ||
-            raw.includes('2.0')
-        ) {
-            return 'gemini-1.5-flash'
+        let raw = (process.env.GEMINI_MODEL || '').trim()
+        if (raw.startsWith('models/')) {
+            raw = raw.replace(/^models\//, '')
         }
-        return raw
+        if (raw === 'gemini-2.0-flash' || raw === 'gemini-2.0-flash-001') {
+            return 'gemini-2.0-flash'
+        }
+        // Luôn trả về đúng chuẩn chính thức gemini-1.5-flash
+        return 'gemini-1.5-flash'
     })(),
     storeOriginalImages: bool('STORE_ORIGINAL_IMAGES', false),
 

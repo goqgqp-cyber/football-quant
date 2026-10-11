@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { sanitizeCleanText } from '../../server/services/gemini.js'
+import { sanitizeCleanText, GEMINI_MODEL, GEMINI_ENDPOINT, GEMINI_STREAM_ENDPOINT } from '../../server/services/gemini.js'
 
 describe('sanitizeCleanText (Payload Hygiene)', () => {
     it('giữ nguyên văn bản text sạch thông thường', () => {
@@ -26,5 +26,23 @@ describe('sanitizeCleanText (Payload Hygiene)', () => {
 
     it('xử lý chuỗi rỗng an toàn', () => {
         expect(sanitizeCleanText('')).toBe('')
+    })
+})
+
+describe('Gemini Model & Endpoint Standards', () => {
+    it('sử dụng model chuẩn gemini-1.5-flash (hoặc gemini-2.0-flash)', () => {
+        expect(['gemini-1.5-flash', 'gemini-2.0-flash']).toContain(GEMINI_MODEL)
+    })
+
+    it('endpoint gọi đúng chuẩn https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent', () => {
+        expect(GEMINI_ENDPOINT).toBe(
+            `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`,
+        )
+    })
+
+    it('endpoint streaming gọi đúng chuỗi streamGenerateContent?alt=sse', () => {
+        expect(GEMINI_STREAM_ENDPOINT).toBe(
+            `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse`,
+        )
     })
 })

@@ -20,7 +20,9 @@ import type {
 } from '../../src/lib/types.js'
 import { buildFacts, factLabels, substituteFacts, verifyNumbers } from '../../src/lib/explain.js'
 
-const ENDPOINT = 'https://generativelanguage.googleapis.com/v1beta/models'
+export const GEMINI_MODEL = env.geminiModel === 'gemini-2.0-flash' ? 'gemini-2.0-flash' : 'gemini-1.5-flash'
+export const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`
+export const GEMINI_STREAM_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse`
 
 /** Ô kèo đọc được từ ảnh (OCR). */
 export interface ExtractedRow {
@@ -243,7 +245,7 @@ export async function extractOddsFromImages(
     }
 
     const res = await callGeminiApiWithRetry(
-        `${ENDPOINT}/${env.geminiModel}:generateContent`,
+        GEMINI_ENDPOINT,
         body,
         'ocr-extract',
     )
@@ -516,7 +518,7 @@ export async function streamCollectMatchData(
     }
 
     const res = await callGeminiApiWithRetry(
-        `${ENDPOINT}/${env.geminiModel}:streamGenerateContent?alt=sse`,
+        GEMINI_STREAM_ENDPOINT,
         body,
         'step-a-collect',
     )
@@ -632,7 +634,7 @@ export async function generateExplanation(
     }
 
     const res = await callGeminiApiWithRetry(
-        `${ENDPOINT}/${env.geminiModel}:streamGenerateContent?alt=sse`,
+        GEMINI_STREAM_ENDPOINT,
         body,
         'step-c-explain',
     )
