@@ -101,7 +101,7 @@ export const env = {
             return raw
         }
         // Mặc định chuẩn chính thức
-        return 'gemini-1.5-flash'
+        return 'gemini-3.8-flash'
     })(),
     storeOriginalImages: bool('STORE_ORIGINAL_IMAGES', false),
 

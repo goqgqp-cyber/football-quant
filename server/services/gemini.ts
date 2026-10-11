@@ -20,7 +20,7 @@ import type {
 } from '../../src/lib/types.js'
 import { buildFacts, factLabels, substituteFacts, verifyNumbers } from '../../src/lib/explain.js'
 
-export const GEMINI_MODEL = env.geminiModel === 'gemini-2.0-flash' ? 'gemini-2.0-flash' : 'gemini-1.5-flash'
+export const GEMINI_MODEL = env.geminiModel || 'gemini-3.8-flash'
 export const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`
 export const GEMINI_STREAM_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:streamGenerateContent?alt=sse`
 
@@ -144,7 +144,7 @@ export function appendApiKey(url: string, key: string): string {
 
 export function getModelCandidates(): string[] {
     const primary = GEMINI_MODEL
-    const list = [primary, 'gemini-2.0-flash', 'gemini-2.5-flash', 'gemini-1.5-flash']
+    const list = [primary, 'gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
     return list.filter((v, i, a) => a.indexOf(v) === i)
 }
 

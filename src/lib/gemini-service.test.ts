@@ -37,8 +37,8 @@ describe('sanitizeCleanText (Payload Hygiene)', () => {
 })
 
 describe('Gemini Model & Endpoint Standards', () => {
-    it('sử dụng model chuẩn gemini-1.5-flash (hoặc gemini-2.0-flash)', () => {
-        expect(['gemini-1.5-flash', 'gemini-2.0-flash']).toContain(GEMINI_MODEL)
+    it('sử dụng model chuẩn gemini-3.8-flash (hoặc các model chính thức)', () => {
+        expect(['gemini-3.8-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']).toContain(GEMINI_MODEL)
     })
 
     it('endpoint gọi đúng chuẩn https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent', () => {
