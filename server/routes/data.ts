@@ -18,7 +18,7 @@ import type { Explanation, MatchData, OddsLine } from '../../src/lib/types.js'
 
 import { env } from '../env.js'
 import { generateExplanation, sanitizeCleanText } from '../services/xkiro.js'
-import { getMatchLiveStatus } from '../services/sportapi.js'
+import { getMatchLiveStatus } from '../services/sofascore.js'
 
 export const dataApp = new Hono<{ Variables: Vars }>()
 
@@ -162,7 +162,7 @@ dataApp.post('/analyze', async (c) => {
     return c.json({ result, recordId: record.id, explanation })
 })
 
-/** GET /api/live/match — lấy chỉ số thời gian thực từ SportAPI */
+/** GET /api/live/match — lấy chỉ số thời gian thực từ SofaScore API */
 dataApp.get('/live/match', async (c) => {
     const home = (c.req.query('home') || '').trim()
     const away = (c.req.query('away') || '').trim()

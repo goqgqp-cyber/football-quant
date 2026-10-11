@@ -9,6 +9,7 @@ import type {
     SettledPick,
 } from '../src/lib/types.js'
 import { buildCalibration, settlePick, totalProfit } from '../src/lib/settle.js'
+import { filterRecommendedPicks } from '../src/lib/engine.js'
 
 /** Bản ghi lượt phân tích lưu trong Redis — mỗi bản chỉ thuộc về 1 user. */
 export interface HistoryRecord {
@@ -40,7 +41,15 @@ export async function saveHistory(
     record: Omit<HistoryRecord, 'id' | 'createdAt'>,
 ): Promise<HistoryRecord> {
     const id = `h_${randomUUID().slice(0, 8)}_${keyHash(String(Date.now()))}`
-    const row: HistoryRecord = { ...record, id, createdAt: Date.now() }
+    // LỌC BỎ các kèo tỷ lệ thấp, edge âm hoặc không đủ chuẩn.
+    // CHỈ LƯU các pick đạt chuẩn khuyến nghị: Edge >= 5%, EV > 0, Odds >= 1.50, độ tin cậy từ Trung bình trở lên (tối đa 2 pick chính).
+    const qualifiedPicks = filterRecommendedPicks(record.picks || [])
+    const row: HistoryRecord = {
+        ...record,
+        id,
+        createdAt: Date.now(),
+        picks: qualifiedPicks,
+    }
     await redis.set(keys.historyItem(userId, id), row)
     await redis.lpush(keys.historyIds(userId), id)
     return row
@@ -93,7 +102,7 @@ export async function listSettledMatches(limit = 100): Promise<SettledMatchRecor
 }
 
 /**
- * Đối soát kết quả trận đấu (thủ công hoặc tự động qua SportAPI):
+ * Đối soát kết quả trận đấu (thủ công hoặc tự động qua SofaScore API):
  * - Lưu kết quả thực tế vào HistoryRecord.
  * - Chấm điểm các kèo (Châu Á, Tài xỉu, Phạt góc).
  * - Lưu bản ghi đối soát vĩnh viễn vào Upstash Redis `settled_matches`.

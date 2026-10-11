@@ -10,6 +10,8 @@ import { ApiError, api, collectStream, type ExtractedRow } from '../lib/api'
 import { MOCK_MATCH_DATA, MOCK_MATCH_INPUT, MOCK_ODDS } from '../lib/mock'
 import { useSettings } from '../hooks/useSettings'
 import { LiveMatchTracker } from '../components/LiveMatchTracker'
+import { filterRecommendedPicks } from '../lib/engine'
+import { prependLocalHistoryItem } from '../lib/historyStorage'
 import type { AnalysisResult, Explanation, MatchData, MatchInput, OddsLine } from '../lib/types'
 
 interface ConfirmRow {
@@ -78,6 +80,51 @@ export function AnalyzePage() {
     /** true khi đã nhận dữ liệu nền từ Google Search. */
     const [grounded, setGrounded] = useState(false)
     const abortRef = useRef<(() => void) | null>(null)
+    const latestExplanationRef = useRef<Explanation | null>(null)
+
+    // ---- Nạp tự động từ SofaScore Event ID ----
+    const [sofaEventId, setSofaEventId] = useState('')
+    const [fetchingSofa, setFetchingSofa] = useState(false)
+    const [sofaMsg, setSofaMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
+
+    const handleFetchSofaScore = useCallback(async (idStr: string) => {
+        const cleanId = idStr.trim()
+        const numId = Number(cleanId)
+        if (!numId || isNaN(numId)) {
+            setSofaMsg({ type: 'error', text: 'Vui lòng nhập SofaScore Event ID hợp lệ (chữ số, ví dụ: 11868359).' })
+            return
+        }
+        setFetchingSofa(true)
+        setSofaMsg(null)
+        try {
+            const data = await api.getLiveMatch('', '', numId)
+            if (!data.found || (!data.homeTeam && !data.awayTeam)) {
+                setSofaMsg({
+                    type: 'error',
+                    text: `Không tìm thấy thông tin trận với ID ${numId}. Vui lòng kiểm tra lại ID trên SofaScore.`,
+                })
+                return
+            }
+            setInput((prev) => ({
+                ...prev,
+                homeTeam: data.homeTeam || prev.homeTeam,
+                awayTeam: data.awayTeam || prev.awayTeam,
+                league: data.league || prev.league,
+                kickoff: data.kickoff || prev.kickoff,
+            }))
+            setSofaMsg({
+                type: 'success',
+                text: `Đã nạp tự động: ${data.homeTeam} vs ${data.awayTeam}${data.league ? ` (${data.league})` : ''}`,
+            })
+        } catch (err) {
+            setSofaMsg({
+                type: 'error',
+                text: err instanceof Error ? err.message : 'Lỗi khi nạp dữ liệu trận từ SofaScore.',
+            })
+        } finally {
+            setFetchingSofa(false)
+        }
+    }, [])
 
     const setStepStatus = (id: string, status: Step['status']) => {
         setSteps((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)))
@@ -97,6 +144,7 @@ export function AnalyzePage() {
         setLiveText('')
         setGrounded(false)
         setExplanation(null)
+        latestExplanationRef.current = null
         setExplanationError(null)
         setExplaining(false)
 
@@ -140,6 +188,7 @@ export function AnalyzePage() {
                         break
                     case 'explanation':
                         setExplanation(e.explanation)
+                        latestExplanationRef.current = e.explanation
                         setExplaining(false)
                         break
                     case 'result':
@@ -148,6 +197,27 @@ export function AnalyzePage() {
                         setRunning(false)
                         setExplaining(false)
                         abortRef.current = null
+
+                        // Lưu ngay vào LocalStorage và phát event để tab Lịch sử hiển thị lập tức không cần F5
+                        try {
+                            const recPicks = filterRecommendedPicks(e.result.picks)
+                            prependLocalHistoryItem({
+                                id: e.recordId,
+                                createdAt: Date.now(),
+                                meta: {
+                                    home: input.homeTeam.trim(),
+                                    away: input.awayTeam.trim(),
+                                    league: input.league?.trim() || undefined,
+                                    kickoff: input.kickoff || null,
+                                },
+                                analysis: e.result,
+                                picks: recPicks,
+                                result: null,
+                                explanation: latestExplanationRef.current,
+                            })
+                        } catch {
+                            /* ignore local cache errors */
+                        }
                         break
                     case 'error':
                         setError(e.message)
@@ -196,15 +266,18 @@ export function AnalyzePage() {
                     return
                 }
 
-                // Điền tên đội/giải nếu model đọc được và người dùng chưa nhập
-                if (!input.homeTeam && res.meta.home) {
+                // Tự động gán kết quả homeTeam, awayTeam, league, kickoff trực tiếp vào state và hiển thị lên các ô này
+                if (res.meta.home) {
                     setInput((p) => ({ ...p, homeTeam: res.meta.home as string }))
                 }
-                if (!input.awayTeam && res.meta.away) {
+                if (res.meta.away) {
                     setInput((p) => ({ ...p, awayTeam: res.meta.away as string }))
                 }
-                if (!input.league && res.meta.league) {
+                if (res.meta.league) {
                     setInput((p) => ({ ...p, league: res.meta.league as string }))
+                }
+                if (res.meta.kickoff) {
+                    setInput((p) => ({ ...p, kickoff: res.meta.kickoff as string }))
                 }
 
                 setParseHint(
@@ -275,36 +348,91 @@ export function AnalyzePage() {
         <div className="flex flex-col gap-5">
             {/* Form nhập trận */}
             <GlassCard>
-                <p className="mb-3 font-display text-sm font-bold tracking-wide text-ink-100">Trận đấu</p>
+                <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-display text-sm font-bold tracking-wide text-ink-100">Thông tin trận đấu</p>
+                    <span className="rounded-full border border-sky-400/30 bg-sky-500/10 px-2.5 py-0.5 text-[11px] font-medium text-sky-300">
+                        🔒 Khóa chỉnh sửa tay · Dữ liệu tự động
+                    </span>
+                </div>
+
+                {/* Thanh nạp trận tự động qua SofaScore Event ID */}
+                <div className="mb-4 rounded-xl border border-sky-500/25 bg-gradient-to-r from-sky-950/40 via-neutral-900/60 to-neutral-900/40 p-3.5">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div>
+                            <div className="flex items-center gap-2">
+                                <span className="inline-block h-2 w-2 rounded-full bg-sky-400 animate-pulse" />
+                                <span className="font-display text-xs font-bold text-sky-300">
+                                    Nạp dữ liệu tự động qua SofaScore Event ID
+                                </span>
+                            </div>
+                            <p className="mt-0.5 text-[11px] text-neutral-400">
+                                Nhập ID trận (ví dụ: 11868359) để tự động cập nhật Đội nhà, Đội khách, Giải đấu & Giờ đá.
+                            </p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                            <input
+                                type="text"
+                                placeholder="vd: 11868359"
+                                value={sofaEventId}
+                                onChange={(e) => setSofaEventId(e.target.value.trim())}
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') void handleFetchSofaScore(sofaEventId)
+                                }}
+                                className="w-36 rounded-lg border border-sky-500/30 bg-neutral-950 px-2.5 py-1.5 font-mono text-xs text-white placeholder-neutral-600 focus:border-sky-400 focus:outline-none focus:ring-1 focus:ring-sky-400/40"
+                            />
+                            <Button
+                                variant="primary"
+                                onClick={() => void handleFetchSofaScore(sofaEventId)}
+                                disabled={fetchingSofa || !sofaEventId}
+                                className="px-3 py-1.5 text-xs font-semibold"
+                            >
+                                {fetchingSofa ? 'Đang nạp…' : 'Nạp dữ liệu'}
+                            </Button>
+                        </div>
+                    </div>
+                    {sofaMsg && (
+                        <p className={`mt-2 text-xs font-medium ${sofaMsg.type === 'success' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                            {sofaMsg.type === 'success' ? '✓ ' : '⚠️ '}
+                            {sofaMsg.text}
+                        </p>
+                    )}
+                </div>
+
                 <div className="grid gap-3 sm:grid-cols-2">
-                    <Field label="Đội nhà">
+                    <Field label="Đội nhà" hint="Tự động trích xuất từ OCR / SofaScore">
                         <TextInput
+                            readOnly
+                            tabIndex={-1}
                             value={input.homeTeam}
-                            onChange={(e) => setInput((p) => ({ ...p, homeTeam: e.target.value }))}
-                            placeholder="Ví dụ: Man City"
+                            className="cursor-not-allowed opacity-80 bg-neutral-900/60 border-neutral-800 select-none text-white/90"
+                            placeholder="Chờ trích xuất OCR hoặc SofaScore..."
                         />
                     </Field>
-                    <Field label="Đội khách">
+                    <Field label="Đội khách" hint="Tự động trích xuất từ OCR / SofaScore">
                         <TextInput
+                            readOnly
+                            tabIndex={-1}
                             value={input.awayTeam}
-                            onChange={(e) => setInput((p) => ({ ...p, awayTeam: e.target.value }))}
-                            placeholder="Ví dụ: Liverpool"
+                            className="cursor-not-allowed opacity-80 bg-neutral-900/60 border-neutral-800 select-none text-white/90"
+                            placeholder="Chờ trích xuất OCR hoặc SofaScore..."
                         />
                     </Field>
-                    <Field label="Giải đấu">
+                    <Field label="Giải đấu" hint="Tự động trích xuất từ OCR / SofaScore">
                         <TextInput
+                            readOnly
+                            tabIndex={-1}
                             value={input.league}
-                            onChange={(e) => setInput((p) => ({ ...p, league: e.target.value }))}
-                            placeholder="Premier League"
+                            className="cursor-not-allowed opacity-80 bg-neutral-900/60 border-neutral-800 select-none text-white/90"
+                            placeholder="Chờ trích xuất OCR hoặc SofaScore..."
                         />
                     </Field>
-                    <Field label="Giờ đá (ISO)">
+                    <Field label="Giờ đá (ISO)" hint="Tự động trích xuất từ OCR / SofaScore">
                         <TextInput
+                            readOnly
+                            tabIndex={-1}
                             type="datetime-local"
                             value={input.kickoff.slice(0, 16)}
-                            onChange={(e) =>
-                                setInput((p) => ({ ...p, kickoff: new Date(e.target.value).toISOString() }))
-                            }
+                            className="cursor-not-allowed opacity-80 bg-neutral-900/60 border-neutral-800 select-none text-white/90"
                         />
                     </Field>
                 </div>
@@ -336,11 +464,12 @@ export function AnalyzePage() {
                 
             </GlassCard>
 
-            {/* Theo dõi trận đấu Live & Tự động đối soát (SportAPI RapidAPI 20s Polling) */}
+            {/* Theo dõi trận đấu Live & Tự động đối soát (SofaScore Direct Live Match Tracker) */}
             {input.homeTeam.trim() && input.awayTeam.trim() && (
                 <LiveMatchTracker
                     home={input.homeTeam}
                     away={input.awayTeam}
+                    eventId={sofaEventId ? Number(sofaEventId) : undefined}
                     recordId={savedId}
                     onSettled={(settled) => {
                         console.log('Trận đấu đã tự động đối soát kết quả:', settled)

@@ -3,14 +3,17 @@ import { GlassCard } from '../components/ui/GlassCard'
 import { AnimatedNumber } from '../components/ui/AnimatedNumber'
 import { Button } from '../components/ui/Button'
 import { CALIBRATION_MIN_PICKS, brierScore, binLabel } from '../lib/settle'
-import { ApiError, api, type StatsResponse } from '../lib/api'
+import { ApiError, api, type HistoryItem, type StatsResponse } from '../lib/api'
+import { formatKickoff } from './HistoryPage'
 
 /**
  * Trang Hiệu suất (Performance) — nạp danh sách các trận đã settle từ Upstash Redis
  * để tính tỷ lệ Win Rate (%), ROI, và tổng số trận đoán đúng/sai.
+ * Chỉ tính vào Win Rate và ROI đối với các trận ĐÃ KẾT THÚC và đã có kết quả đối soát.
  */
 export function PerformancePage() {
     const [stats, setStats] = useState<StatsResponse | null>(null)
+    const [historyItems, setHistoryItems] = useState<HistoryItem[]>([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState<string | null>(null)
 
@@ -18,8 +21,12 @@ export function PerformancePage() {
         setLoading(true)
         setError(null)
         try {
-            const data = await api.stats()
+            const [data, hist] = await Promise.all([
+                api.stats(),
+                api.history(150).catch(() => ({ items: [] as HistoryItem[] })),
+            ])
             setStats(data)
+            setHistoryItems(hist.items || [])
         } catch (e) {
             setError(e instanceof ApiError ? e.message : 'Không tải được số liệu hiệu suất.')
         } finally {
@@ -45,6 +52,7 @@ export function PerformancePage() {
     const roi = stats?.roi ?? (stakedTotal ? (profit / stakedTotal) * 100 : 0)
 
     const settledMatches = stats?.settledMatches ?? []
+    const pendingMatches = useMemo(() => historyItems.filter((h) => h.result == null), [historyItems])
 
     const bins = useMemo(() => stats?.calibration ?? [], [stats])
     const brier = useMemo(
@@ -60,7 +68,7 @@ export function PerformancePage() {
                 <div>
                     <h1 className="text-xl font-bold tracking-tight text-white">Hiệu suất & Thống kê đối soát</h1>
                     <p className="text-xs text-neutral-400">
-                        Dữ liệu tự động cập nhật từ Upstash Redis (settled_matches) và lịch sử đối soát.
+                        Chỉ tính các trận ĐÃ KẾT THÚC và đã có kết quả đối soát. Đồng bộ Upstash Redis (settled_matches).
                     </p>
                 </div>
                 <Button variant="ghost" onClick={() => void load()} disabled={loading}>
@@ -107,10 +115,93 @@ export function PerformancePage() {
                         <span className="font-mono text-2xl font-black text-rose-400">{lossesCount}L</span>
                     </div>
                     <p className="mt-1 text-[11px] text-neutral-500">
-                        {winsCount} Thắng · {pushesCount} Hòa · {lossesCount} Thua
+                        {winsCount} Thắng · {pushesCount} Hòa · {lossesCount} Thua (Đã xong)
                     </p>
                 </GlassCard>
             </div>
+
+            {/* Danh sách các trận đang theo dõi (Chưa diễn ra hoặc đang thi đấu) */}
+            <GlassCard>
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                    <div>
+                        <div className="flex items-center gap-2">
+                            <span className="inline-block h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+                            <p className="font-display text-base font-bold text-amber-300">
+                                Trận đang theo dõi ({pendingMatches.length})
+                            </p>
+                        </div>
+                        <p className="text-xs text-neutral-400 mt-0.5">
+                            Các trận chưa đá hoặc đang diễn ra — chỉ theo dõi, KHÔNG tính vào tổng Win Rate và ROI cho đến khi còi mãn cuộc vang lên và có kết quả đối soát.
+                        </p>
+                    </div>
+                    <span className="rounded-full bg-amber-500/10 border border-amber-500/25 px-2.5 py-0.5 text-xs text-amber-300 font-semibold">
+                        ⏳ Chờ kết quả hết trận
+                    </span>
+                </div>
+
+                {pendingMatches.length === 0 ? (
+                    <div className="rounded-xl border border-white/5 bg-black/20 p-5 text-center text-xs text-neutral-400">
+                        Hiện không có trận nào đang theo dõi. Mọi trận phân tích đã được kết thúc và đối soát.
+                    </div>
+                ) : (
+                    <div className="space-y-3">
+                        {pendingMatches.map((m) => (
+                            <div
+                                key={m.id}
+                                className="rounded-xl border border-amber-500/15 bg-neutral-900/60 p-3.5 transition hover:border-amber-500/30"
+                            >
+                                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/5 pb-2">
+                                    <div className="flex items-center gap-2">
+                                        <span className="font-bold text-sm text-white">
+                                            {m.meta.home} vs {m.meta.away}
+                                        </span>
+                                        {m.meta.league && (
+                                            <span className="rounded bg-white/5 px-2 py-0.5 text-[11px] text-neutral-400">
+                                                {m.meta.league}
+                                            </span>
+                                        )}
+                                        <span className="text-xs text-neutral-500">
+                                            · 🕒 {formatKickoff(m.meta.kickoff)}
+                                        </span>
+                                    </div>
+                                    <span className="rounded-full border border-amber-400/40 bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-300">
+                                        ⏳ Đang theo dõi (Chưa tính vào ROI)
+                                    </span>
+                                </div>
+                                <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="text-neutral-400">Kèo khuyến nghị:</span>
+                                        {m.picks.length > 0 ? (
+                                            m.picks.map((p, idx) => (
+                                                <span
+                                                    key={idx}
+                                                    className="rounded bg-white/5 border border-white/10 px-2 py-0.5 font-mono text-neutral-200"
+                                                >
+                                                    {p.kind === 'totals' ? 'T/X' : p.kind === 'corners' ? 'Góc' : 'AH'}{' '}
+                                                    {p.side === 'over'
+                                                        ? 'Tài'
+                                                        : p.side === 'under'
+                                                            ? 'Xỉu'
+                                                            : p.side === 'home'
+                                                                ? `Chủ`
+                                                                : `Khách`}{' '}
+                                                    {p.line >= 0 ? `+${p.line}` : p.line} @ {p.odds.toFixed(2)}{' '}
+                                                    <span className="text-emerald-400 font-semibold">(Edge: +{(p.edge * 100).toFixed(1)}%)</span>
+                                                </span>
+                                            ))
+                                        ) : (
+                                            <span className="text-neutral-500 italic">NO BET (Không có kèo đạt chuẩn)</span>
+                                        )}
+                                    </div>
+                                    <span className="text-[11px] text-neutral-400 italic">
+                                        Chờ kết quả hết trận
+                                    </span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                )}
+            </GlassCard>
 
             {/* Danh sách các trận đã Settle từ Redis settled_matches */}
             <GlassCard>
@@ -120,7 +211,7 @@ export function PerformancePage() {
                             Các trận đã đối soát (Redis: settled_matches)
                         </p>
                         <p className="text-xs text-neutral-400">
-                            Lưu vĩnh viễn kết quả tỷ số, phạt góc và chấm điểm tự động từ SportAPI.
+                            Lưu vĩnh viễn kết quả tỷ số, phạt góc và chấm điểm tự động từ SofaScore.
                         </p>
                     </div>
                     <span className="rounded-full bg-white/5 border border-white/10 px-2.5 py-0.5 text-xs text-neutral-300">

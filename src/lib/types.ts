@@ -140,7 +140,7 @@ export interface SettledPick {
     profit: number
 }
 
-/** Dữ liệu trận đấu thời gian thực từ SportAPI (RapidAPI). */
+/** Dữ liệu trận đấu thời gian thực từ SofaScore API. */
 export interface LiveMatchData {
     found: boolean
     eventId?: number
@@ -155,8 +155,11 @@ export interface LiveMatchData {
     corners: { home: number; away: number; total: number }
     cards: { yellowHome: number; yellowAway: number; redHome: number; redAway: number }
     shotsOnTarget: { home: number; away: number }
+    shotsTotal?: { home: number; away: number }
     possession: { home: number; away: number }
+    fouls?: { home: number; away: number }
     isFinished: boolean
+    kickoff?: string
     lastUpdated: number
 }
 

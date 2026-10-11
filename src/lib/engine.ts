@@ -215,3 +215,22 @@ export function suggestedLines(): OddsLine[] {
         { id: 'aha025', kind: 'ah', side: 'away', line: -0.25, odds: 2.05 },
     ]
 }
+
+/**
+ * Lọc các pick đạt chuẩn khuyến nghị để lưu lịch sử (Bước 5, Bước 6, Bước 7):
+ * - Loại bỏ hoàn toàn các kèo tỷ lệ thấp, edge âm hoặc không đủ chuẩn.
+ * - CHỈ GIỮ các pick: Edge >= 5%, EV > 0, Odds >= 1.50, độ tin cậy từ Trung bình trở lên (medium | high).
+ * - Tối đa 2 pick chính theo Bước 7 (kèo tương quan), sắp xếp theo edge giảm dần.
+ */
+export function filterRecommendedPicks(picks: Pick[]): Pick[] {
+    return picks
+        .filter((p) => {
+            const hasEdge = p.edge >= 0.05
+            const hasEv = p.ev > 0
+            const hasOdds = p.odds >= 1.50
+            const hasConf = p.confidence === 'high' || p.confidence === 'medium'
+            return hasEdge && hasEv && hasOdds && hasConf
+        })
+        .sort((a, b) => b.edge - a.edge)
+        .slice(0, 2)
+}

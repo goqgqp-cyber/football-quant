@@ -27,10 +27,6 @@
         }
     },
     "include": [
-        "server",
-        "src/lib"
-    ],
-    "exclude": [
-        "src/lib/api.ts"
+        "server"
     ]
 }

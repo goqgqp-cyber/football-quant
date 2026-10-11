@@ -501,7 +501,7 @@ export const api = {
             body: payload,
         }),
 
-    /** Lấy dữ liệu trận đấu thời gian thực từ SportAPI */
+    /** Lấy dữ liệu trận đấu thời gian thực từ SofaScore API */
     getLiveMatch: (home: string, away: string, eventId?: number) => {
         const params = new URLSearchParams()
         if (home) params.set('home', home)
@@ -509,6 +509,18 @@ export const api = {
         if (eventId) params.set('eventId', String(eventId))
         return apiFetch<LiveMatchData>(`/live/match?${params.toString()}`)
     },
+
+    /** Lấy thống kê chi tiết trận đấu từ SofaScore proxy */
+    getSofaStatistics: (eventId: number | string) =>
+        apiFetch<unknown>(`/sofascore/event/${eventId}/statistics`),
+
+    /** Lấy diễn biến các sự kiện trận đấu (incidents) từ SofaScore proxy */
+    getSofaIncidents: (eventId: number | string) =>
+        apiFetch<{ incidents?: Array<Record<string, unknown>> }>(`/sofascore/event/${eventId}/incidents`),
+
+    /** Lấy thông tin trận đấu từ SofaScore proxy */
+    getSofaEvent: (eventId: number | string) =>
+        apiFetch<{ event?: Record<string, unknown> }>(`/sofascore/event/${eventId}`),
 
     /** Tự động đối soát kết quả trận đấu khi kết thúc (FT) và lưu vào Redis settled_matches */
     autoSettle: (payload: {
