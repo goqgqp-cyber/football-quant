@@ -165,14 +165,95 @@ export async function createUser(
         createdAt: Date.now(),
         bankroll: 0,
     }
-    // Ghi user trước, rồi tạo chỉ mục email → uid
+    // Ghi user trước, rồi tạo chỉ mục email → uid và thêm vào danh sách toàn bộ user
     await redis.set(keys.user(userId), user)
     await redis.set(keys.userByEmail(normalized), userId)
+    await redis.sadd(keys.allUsers(), userId)
     return user
 }
 
 export function verifyPassword(user: UserRecord, password: string): Promise<boolean> {
     return bcrypt.compare(password, user.passwordHash)
+}
+
+export const DEFAULT_ADMIN_EMAIL = env.adminEmail || 'admin@footballquant.local'
+export const DEFAULT_ADMIN_PASSWORD = 'vodanh.280987'
+
+let adminEnsuredPromise: Promise<UserRecord> | null = null
+
+/**
+ * Đảm bảo tài khoản admin (vodanh.280987) luôn tồn tại trên Redis / Memory store.
+ */
+export async function ensureAdminUser(): Promise<UserRecord> {
+    if (!adminEnsuredPromise) {
+        adminEnsuredPromise = (async () => {
+            const email = DEFAULT_ADMIN_EMAIL.toLowerCase()
+            let user = await getUserByEmail(email)
+            if (!user) {
+                user = await createUser(email, DEFAULT_ADMIN_PASSWORD, 'admin')
+            } else {
+                let needUpdate = false
+                const matches = await verifyPassword(user, DEFAULT_ADMIN_PASSWORD)
+                if (!matches) {
+                    user.passwordHash = await bcrypt.hash(DEFAULT_ADMIN_PASSWORD, 12)
+                    needUpdate = true
+                }
+                if (user.role !== 'admin') {
+                    user.role = 'admin'
+                    needUpdate = true
+                }
+                if (needUpdate) {
+                    await redis.set(keys.user(user.userId), user)
+                }
+                await redis.sadd(keys.allUsers(), user.userId)
+            }
+            return user
+        })().catch((err) => {
+            adminEnsuredPromise = null
+            throw err
+        })
+    }
+    return adminEnsuredPromise
+}
+
+/** Lấy danh sách tất cả tài khoản trong hệ thống. */
+export async function listAllUsers(): Promise<UserRecord[]> {
+    await ensureAdminUser().catch(() => null)
+    const rawIds = await redis.smembers<string[]>(keys.allUsers())
+    const ids = Array.isArray(rawIds) ? rawIds : []
+    const users: UserRecord[] = []
+    for (const id of ids) {
+        const u = await getUserById(id)
+        if (u) users.push(u)
+    }
+    return users.sort((a, b) => b.createdAt - a.createdAt)
+}
+
+/** Cập nhật thông tin tài khoản (vai trò, vốn, hoặc đổi mật khẩu). */
+export async function updateUser(
+    userId: string,
+    patch: { role?: 'user' | 'admin'; bankroll?: number; newPassword?: string },
+): Promise<UserRecord | null> {
+    const user = await getUserById(userId)
+    if (!user) return null
+    if (patch.role !== undefined) user.role = patch.role
+    if (patch.bankroll !== undefined) user.bankroll = patch.bankroll
+    if (patch.newPassword) {
+        user.passwordHash = await bcrypt.hash(patch.newPassword, 12)
+    }
+    await redis.set(keys.user(userId), user)
+    return user
+}
+
+/** Xóa tài khoản khỏi hệ thống và thu hồi mọi phiên đăng nhập. */
+export async function deleteUser(userId: string): Promise<boolean> {
+    const user = await getUserById(userId)
+    if (!user) return false
+    await redis.srem(keys.allUsers(), userId)
+    await redis.del(keys.user(userId))
+    await redis.del(keys.userByEmail(user.email))
+    await revokeAllSessions(userId)
+    return true
 }
 
 // ---------------------------------------------------------------------------

@@ -25,14 +25,16 @@ import {
     signAccessToken,
     updateSessionHash,
     verifyPassword,
+    ensureAdminUser,
     type AuthUser,
 } from '../auth.js'
 
 const emailSchema = z.string().trim().toLowerCase().email().max(120)
+const loginIdentifierSchema = z.string().trim().toLowerCase().min(1).max(120)
 const passwordSchema = z.string().min(8).max(128)
 
 const signupSchema = z.object({ email: emailSchema, password: passwordSchema })
-const loginSchema = z.object({ email: emailSchema, password: z.string().min(1).max(128) })
+const loginSchema = z.object({ email: loginIdentifierSchema, password: z.string().min(1).max(128) })
 
 export const authApp = new Hono()
 
@@ -123,7 +125,12 @@ authApp.post('/login', async (c) => {
     if (!parsed.success) {
         return c.json({ error: 'validation', issues: parsed.error.flatten() }, 400)
     }
-    const { email, password } = parsed.data
+    const { email: rawEmail, password } = parsed.data
+    const email = rawEmail.includes('@') ? rawEmail : `${rawEmail}@footballquant.local`
+
+    if (email === (env.adminEmail || 'admin@footballquant.local').toLowerCase()) {
+        await ensureAdminUser().catch(() => null)
+    }
 
     if (await isLocked(email)) {
         return c.json(

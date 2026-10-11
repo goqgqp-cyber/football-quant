@@ -4,9 +4,14 @@ import { env, missingRequired } from './env.js'
 import { csrfProtect } from './middleware.js'
 import { pingRedis, redisDiag } from './redis.js'
 import { authApp, handleSignup } from './routes/auth.js'
+import { adminApp } from './routes/admin.js'
 import { dataApp } from './routes/data.js'
 import { extractApp } from './routes/extract.js'
 import { streamApp } from './routes/stream.js'
+import { ensureAdminUser } from './auth.js'
+
+// Khởi tạo đảm bảo tài khoản admin luôn sẵn sàng
+void ensureAdminUser().catch((e) => console.error('[admin] seed error', e))
 
 /**
  * App API chính.
@@ -118,6 +123,8 @@ app.post('/api/register', handleSignup)
 app.route('/api', dataApp)
 app.route('/api', extractApp)
 app.route('/api', streamApp)
+app.route('/api/admin', adminApp)
+app.route('/admin', adminApp)
 
 app.notFound((c) => c.json({ error: 'not_found' }, 404))
 app.onError((err, c) => {

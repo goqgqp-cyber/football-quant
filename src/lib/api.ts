@@ -427,4 +427,59 @@ export const api = {
         if (hint.league) fd.append('league', hint.league)
         return apiFetch<ExtractResponse>('/extract', { method: 'POST', body: fd })
     },
+
+    // --- Quản trị viên (Admin) ---
+    adminOverview: () => apiFetch<AdminOverview>('/admin/overview'),
+
+    adminListUsers: () => apiFetch<{ users: AdminUserItem[] }>('/admin/users'),
+
+    adminCreateUser: (body: {
+        email: string
+        password: string
+        role?: 'user' | 'admin'
+        bankroll?: number
+    }) => apiFetch<{ user: AdminUserItem }>('/admin/users', { method: 'POST', body }),
+
+    adminUpdateUser: (
+        userId: string,
+        body: { role?: 'user' | 'admin'; bankroll?: number; newPassword?: string },
+    ) => apiFetch<{ user: AdminUserItem }>(`/admin/users/${userId}`, { method: 'PATCH', body }),
+
+    adminDeleteUser: (userId: string) =>
+        apiFetch<{ ok: true; message: string }>(`/admin/users/${userId}`, { method: 'DELETE' }),
+
+    adminToggleSignup: (allowed?: boolean) =>
+        apiFetch<{ allowPublicSignup: boolean }>('/admin/toggle-signup', {
+            method: 'POST',
+            body: { allowed },
+        }),
+
+    adminUnlockEmail: (email: string) =>
+        apiFetch<{ ok: true; message: string }>('/admin/unlock-email', {
+            method: 'POST',
+            body: { email },
+        }),
 }
+
+export interface AdminOverview {
+    usersCount: number
+    adminsCount: number
+    usingMemoryStore: boolean
+    redisConnected: boolean
+    redisMode: string
+    allowPublicSignup: boolean
+    geminiConfigured: boolean
+    geminiModel: string
+    nodeEnv: string
+    uptime: number
+    serverTime: string
+}
+
+export interface AdminUserItem {
+    userId: string
+    email: string
+    role: 'user' | 'admin'
+    bankroll: number
+    createdAt: number
+}
+

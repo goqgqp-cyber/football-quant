@@ -28,6 +28,19 @@ export const requireAuth: MiddlewareHandler<{ Variables: Vars }> = async (c, nex
     await next()
 }
 
+/** Bắt buộc quyền quản trị viên (admin). Trả 401 nếu chưa đăng nhập, 403 nếu không phải admin. */
+export const requireAdmin: MiddlewareHandler<{ Variables: Vars }> = async (c, next) => {
+    const user = await readUser(c)
+    if (!user) {
+        return c.json({ error: 'unauthenticated', message: 'Chưa đăng nhập.' }, 401)
+    }
+    if (user.role !== 'admin') {
+        return c.json({ error: 'forbidden', message: 'Yêu cầu quyền quản trị viên (admin).' }, 403)
+    }
+    c.set('user', user)
+    await next()
+}
+
 /**
  * Bảo vệ CSRF (double-submit cookie):
  * - Áp dụng cho các method thay đổi trạng thái (POST/PUT/PATCH/DELETE).

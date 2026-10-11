@@ -41,6 +41,8 @@ function int(name: string, fallback: number): number {
     return Number.isFinite(n) ? n : fallback
 }
 
+let runtimeAllowPublicSignup = bool('ALLOW_PUBLIC_SIGNUP', false)
+
 export const env = {
     nodeEnv: optional('NODE_ENV', 'development'),
     port: int('PORT', 8787),
@@ -72,8 +74,13 @@ export const env = {
         '',
     ),
 
-    adminEmail: optional('ADMIN_EMAIL', '').toLowerCase(),
-    allowPublicSignup: bool('ALLOW_PUBLIC_SIGNUP', false),
+    adminEmail: optional('ADMIN_EMAIL', 'admin@footballquant.local').toLowerCase(),
+    get allowPublicSignup() {
+        return runtimeAllowPublicSignup
+    },
+    setAllowPublicSignup(val: boolean) {
+        runtimeAllowPublicSignup = val
+    },
 
     /** Nhận cả tên Google/Generative AI để linh hoạt khi deploy. */
     geminiApiKey: firstOf(

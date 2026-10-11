@@ -67,6 +67,28 @@ async function main() {
             headers: { 'content-type': 'application/json' },
             body: JSON.stringify({ email: 'new4@example.com', password: 'matkhau123' }),
         })
+
+        // Test admin login & admin endpoints
+        const adminLogin = await call('login admin (bằng email)', '/api/auth/login', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: 'admin@footballquant.local', password: 'vodanh.280987' }),
+        })
+        await call('login admin (bằng username)', '/api/auth/login', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ email: 'admin', password: 'vodanh.280987' }),
+        })
+
+        if (adminLogin.setCookie) {
+            await call('admin overview', '/api/admin/overview', {
+                headers: { cookie: adminLogin.setCookie },
+            })
+            await call('admin users list', '/api/admin/users', {
+                headers: { cookie: adminLogin.setCookie },
+            })
+        }
+
         await call('route không tồn tại', '/api/khong-ton-tai')
     } finally {
         server.close()

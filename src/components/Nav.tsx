@@ -1,5 +1,6 @@
 import { motion } from 'framer-motion'
 import type { Route } from '../hooks/useHashRoute'
+import { useAuth } from '../hooks/useAuth'
 
 /** Icon nét mảnh (monochrome, dùng currentColor) — không dùng emoji màu. */
 function Icon({ id, className = '' }: { id: Route; className?: string }) {
@@ -43,10 +44,17 @@ function Icon({ id, className = '' }: { id: Route; className?: string }) {
                     <path d="M5 20c0-3.6 3.1-6 7-6s7 2.4 7 6" />
                 </svg>
             )
+        case 'admin':
+            return (
+                <svg {...common}>
+                    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+                    <circle cx="12" cy="11" r="3" />
+                </svg>
+            )
     }
 }
 
-const ITEMS: { id: Route; label: string }[] = [
+const BASE_ITEMS: { id: Route; label: string }[] = [
     { id: 'analyze', label: 'Phân tích' },
     { id: 'history', label: 'Lịch sử' },
     { id: 'performance', label: 'Hiệu suất' },
@@ -59,19 +67,25 @@ function hrefOf(r: Route) {
 
 /** Thanh nav dưới trên mobile. */
 export function Nav({ route }: { route: Route }) {
+    const { user } = useAuth()
+    const isAdmin = user?.role === 'admin'
+    const items = isAdmin
+        ? [...BASE_ITEMS, { id: 'admin' as Route, label: 'Quản trị' }]
+        : BASE_ITEMS
+
     return (
         <nav
             aria-label="Điều hướng chính"
             className="glass glass--specular fixed bottom-3 left-3 right-3 z-40 md:hidden"
         >
-            <ul className="grid grid-cols-4 gap-1 p-2">
-                {ITEMS.map((it) => {
+            <ul className={`grid ${isAdmin ? 'grid-cols-5' : 'grid-cols-4'} gap-1 p-2`}>
+                {items.map((it) => {
                     const active = route === it.id
                     return (
                         <li key={it.id}>
                             <a
                                 href={hrefOf(it.id)}
-                                className={`relative flex flex-col items-center gap-1 rounded-xl px-2 py-2 text-[11px] font-semibold transition-colors ${active ? 'text-white' : 'text-ink-500'
+                                className={`relative flex flex-col items-center gap-1 rounded-xl px-1.5 py-2 text-[10px] font-semibold transition-colors ${active ? 'text-white' : 'text-ink-500'
                                     }`}
                                 aria-current={active ? 'page' : undefined}
                             >
@@ -95,6 +109,12 @@ export function Nav({ route }: { route: Route }) {
 
 /** Thanh bên fixed trên desktop. */
 export function Sidebar({ route }: { route: Route }) {
+    const { user } = useAuth()
+    const isAdmin = user?.role === 'admin'
+    const items = isAdmin
+        ? [...BASE_ITEMS, { id: 'admin' as Route, label: 'Quản trị' }]
+        : BASE_ITEMS
+
     return (
         <aside className="sticky top-0 hidden h-dvh w-56 shrink-0 flex-col p-5 md:flex">
             <div className="glass glass--specular glass--sheen p-4">
@@ -107,13 +127,13 @@ export function Sidebar({ route }: { route: Route }) {
             </div>
             <nav aria-label="Điều hướng chính" className="mt-4">
                 <ul className="flex flex-col gap-1.5">
-                    {ITEMS.map((it) => {
+                    {items.map((it) => {
                         const active = route === it.id
                         return (
                             <li key={it.id}>
                                 <a
                                     href={hrefOf(it.id)}
-                                    className={`relative flex items-center gap-3 rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors ${active ? 'text-white' : 'text-ink-500 hover:text-ink-300'
+                                    className={`relative flex items-center justify-between rounded-xl px-4 py-2.5 text-sm font-semibold transition-colors ${active ? 'text-white' : 'text-ink-500 hover:text-ink-300'
                                         }`}
                                     aria-current={active ? 'page' : undefined}
                                 >
@@ -124,8 +144,15 @@ export function Sidebar({ route }: { route: Route }) {
                                             transition={{ type: 'spring', stiffness: 420, damping: 34 }}
                                         />
                                     )}
-                                    <Icon id={it.id} className="relative h-5 w-5" />
-                                    <span className="relative tracking-wide">{it.label}</span>
+                                    <div className="relative flex items-center gap-3">
+                                        <Icon id={it.id} className="h-5 w-5" />
+                                        <span className="tracking-wide">{it.label}</span>
+                                    </div>
+                                    {it.id === 'admin' && (
+                                        <span className="relative rounded-full border border-violet-400/30 bg-violet-500/20 px-1.5 py-0.5 text-[9px] font-bold text-violet-300">
+                                            ADM
+                                        </span>
+                                    )}
                                 </a>
                             </li>
                         )

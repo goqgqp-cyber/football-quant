@@ -39,6 +39,7 @@ export const keys = {
     // ---- Toàn cục ----
     userByEmail: (email: string) => `email2uid:${email.toLowerCase()}`,
     user: (userId: string) => `user:${userId}`,
+    allUsers: () => 'users:all',
     loginFails: (email: string) => `loginfail:${email.toLowerCase()}`,
 
     // ---- Phiên đăng nhập ----

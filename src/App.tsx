@@ -10,6 +10,7 @@ import { AnalyzePage } from './pages/AnalyzePage'
 import { HistoryPage } from './pages/HistoryPage'
 import { PerformancePage } from './pages/PerformancePage'
 import { AccountPage } from './pages/AccountPage'
+import { AdminPage } from './pages/AdminPage'
 import { LoginPage } from './pages/LoginPage'
 
 const TITLES: Record<Route, string> = {
@@ -17,6 +18,7 @@ const TITLES: Record<Route, string> = {
     history: 'Lịch sử',
     performance: 'Hiệu suất',
     account: 'Tài khoản',
+    admin: 'Quản trị hệ thống',
 }
 
 /** Nền vũ trụ dùng chung: bầu trời sao + sao băng (canvas 2D, rất nhẹ). */
@@ -82,6 +84,11 @@ export default function App() {
                             </h1>
                         </div>
                         <div className="hidden items-center gap-2 md:flex">
+                            {user.role === 'admin' && (
+                                <span className="rounded-full border border-violet-400/40 bg-violet-500/20 px-2 py-0.5 text-[10px] font-bold text-violet-300">
+                                    Admin
+                                </span>
+                            )}
                             <span
                                 className="max-w-[16rem] truncate rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs text-ink-300 backdrop-blur-md"
                                 title={user.email}
@@ -112,6 +119,7 @@ export default function App() {
                                 {route === 'history' && <HistoryPage />}
                                 {route === 'performance' && <PerformancePage />}
                                 {route === 'account' && <AccountPage />}
+                                {route === 'admin' && (user.role === 'admin' ? <AdminPage /> : <AnalyzePage />)}
                             </motion.div>
                         </AnimatePresence>
                     </div>

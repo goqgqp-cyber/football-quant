@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
 
-export type Route = 'analyze' | 'history' | 'performance' | 'account'
+export type Route = 'analyze' | 'history' | 'performance' | 'account' | 'admin'
 
-const ROUTES: Route[] = ['analyze', 'history', 'performance', 'account']
+const ROUTES: Route[] = ['analyze', 'history', 'performance', 'account', 'admin']
 
 function parseRoute(): Route {
     if (typeof window === 'undefined') return 'analyze'

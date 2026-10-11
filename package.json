@@ -17,6 +17,7 @@
         "smoke": "tsx scripts/smoke-vercel.ts",
         "smoke:auth": "tsx scripts/smoke-auth.ts",
         "smoke:vercel": "tsx scripts/smoke-vercel.ts",
+        "seed:admin": "tsx scripts/seed-admin.ts",
         "start:api": "tsx server/index.ts"
     },
     "dependencies": {

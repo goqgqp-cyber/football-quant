@@ -57,11 +57,12 @@ export function LoginPage() {
                             void submit()
                         }}
                     >
-                        <Field label="Email">
+                        <Field label="Email hoặc Tên đăng nhập">
                             <TextInput
-                                type="email"
+                                type="text"
                                 autoComplete="username"
                                 inputMode="email"
+                                placeholder="vd: admin hoặc email@domain.com"
                                 value={email}
                                 onChange={(e) => setEmail(e.target.value)}
                                 required
@@ -99,9 +100,25 @@ export function LoginPage() {
                         </button>
                     </form>
 
+                    {mode === 'login' && (
+                        <div className="mt-3 flex justify-center">
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    setEmail('admin@footballquant.local')
+                                    setPassword('vodanh.280987')
+                                    setError(null)
+                                }}
+                                className="text-xs text-ink-500 underline underline-offset-4 transition hover:text-ink-200"
+                            >
+                                Điền nhanh tài khoản Admin (vodanh.280987)
+                            </button>
+                        </div>
+                    )}
+
                     <button
                         type="button"
-                        className="mt-4 w-full text-center text-sm text-violet-400 hover:text-violet-300"
+                        className="mt-3 w-full text-center text-sm text-violet-400 hover:text-violet-300"
                         onClick={() => {
                             setMode((m) => (m === 'login' ? 'signup' : 'login'))
                             setError(null)
