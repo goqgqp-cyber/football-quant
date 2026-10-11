@@ -1,5 +1,6 @@
 /**
  * SVG filter tạo hiệu ứng khúc xạ cong ở rìa kính (feTurbulence + feDisplacementMap).
+ * Đơn sắc: chỉ bẻ cong hình học, KHÔNG thêm màu (không có quầng sắc).
  * Dùng cho các thành phần nổi bật (thẻ kết quả chính, nút chính).
  * Trình duyệt không hỗ trợ sẽ bỏ qua filter (CSS fallback đã có trong .glass).
  */
@@ -16,16 +17,16 @@ export function RefractionFilter() {
                 <filter id="refraction" x="-20%" y="-20%" width="140%" height="140%">
                     <feTurbulence
                         type="fractalNoise"
-                        baseFrequency="0.008 0.014"
+                        baseFrequency="0.006 0.012"
                         numOctaves="2"
                         seed="7"
                         result="noise"
                     />
-                    <feGaussianBlur in="noise" stdDeviation="2" result="blurredNoise" />
+                    <feGaussianBlur in="noise" stdDeviation="2.4" result="blurredNoise" />
                     <feDisplacementMap
                         in="SourceGraphic"
                         in2="blurredNoise"
-                        scale="14"
+                        scale="16"
                         xChannelSelector="R"
                         yChannelSelector="B"
                     />

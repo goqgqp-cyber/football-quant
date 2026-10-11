@@ -10,7 +10,7 @@ interface FieldProps {
 export function Field({ label, children, hint }: FieldProps) {
     return (
         <label className="block">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-ink-300">
+            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-[0.14em] text-ink-300">
                 {label}
             </span>
             {children}
@@ -21,7 +21,7 @@ export function Field({ label, children, hint }: FieldProps) {
 
 const baseInput =
     'w-full rounded-xl border border-white/12 bg-white/6 px-3 py-2.5 text-sm text-ink-100 placeholder-ink-500 ' +
-    'backdrop-blur-md transition-colors focus:border-violet-400/70 focus:bg-white/8'
+    'backdrop-blur-md transition-colors focus:border-white/70 focus:bg-white/10'
 
 export function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
     return <input {...props} className={`${baseInput} ${props.className ?? ''}`} />
@@ -35,7 +35,7 @@ export function Select(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
     )
 }
 
-/** Badge trạng thái kèo: value / trap / rejected. */
+/** Badge trạng thái kèo: value / trap / rejected (đơn sắc). */
 export function StatusBadge({
     status,
     confidence,
@@ -44,8 +44,8 @@ export function StatusBadge({
     confidence?: string
 }) {
     const map: Record<string, string> = {
-        value: 'bg-value-500/18 text-value-400 border-value-400/40',
-        trap: 'bg-warn-500/18 text-warn-400 border-warn-400/40',
+        value: 'bg-white text-black border-white/40',
+        trap: 'bg-white/12 text-ink-100 border-white/30',
         rejected: 'bg-white/6 text-ink-500 border-white/12',
         no_bet: 'bg-white/6 text-ink-300 border-white/15',
     }
@@ -60,7 +60,7 @@ export function StatusBadge({
             <motion.span
                 initial={{ scale: 0.85, opacity: 0 }}
                 animate={{ scale: 1, opacity: 1 }}
-                className={`rounded-full border px-2 py-0.5 text-[11px] font-bold tracking-wider ${map[status] ?? map.rejected}`}
+                className={`rounded-full border px-2 py-0.5 text-[11px] font-bold tracking-[0.14em] ${map[status] ?? map.rejected}`}
             >
                 {label[status] ?? status}
             </motion.span>

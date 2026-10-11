@@ -2,43 +2,49 @@
 
 /* ==========================================================================
    FOOTBALL QUANT — Design tokens
-   Tông tối huyền ảo, chủ đạo TÍM. Kiểm tra tương phản WCAG AA cho chữ/nền.
+   Tông "Noir Cosmos" ĐƠN SẮC: đen hư không, trắng nguyệt, bạc kim loại.
+   KHÔNG dùng màu bão hoà. Chỉ có các bậc sáng-tối đơn sắc + quầng lạnh.
+   Tên token được giữ nguyên (void/ink/violet/value/warn/danger) để toàn bộ
+   utility Tailwind hiện có vẫn biên dịch — nhưng giá trị đã đổi sang đơn sắc.
    ========================================================================== */
 @theme {
-    /* Nền sâu */
-    --color-void-900: #07040f;
-    --color-void-800: #0c0818;
-    --color-void-700: #120a24;
-    --color-void-600: #1a1033;
+    /* Nền sâu — hư không tuyệt đối → obsidian */
+    --color-void-900: #000000;
+    --color-void-800: #050505;
+    --color-void-700: #0a0a0a;
+    --color-void-600: #101012;
 
-    /* Tím chính */
-    --color-violet-400: #a78bfa;
-    --color-violet-500: #7c3aed;
-    --color-violet-600: #6d28d9;
+    /* "violet" → trắng nguyệt / bạch kim (tương phản cực đại) */
+    --color-violet-300: #e4e4e7;
+    --color-violet-400: #ffffff;
+    --color-violet-500: #f4f4f5;
+    --color-violet-600: #e4e4e7;
 
-    /* Điểm nhấn */
-    --color-magenta-500: #d946ef;
-    --color-indigo-500: #6366f1;
+    /* Điểm nhấn phụ — bạc lạnh */
+    --color-magenta-500: #a1a1aa;
+    --color-indigo-500: #71717a;
 
     /* Chữ */
-    --color-ink-100: #f5f3ff;
+    --color-ink-100: #f4f4f5;
     /* chữ chính gần trắng */
-    --color-ink-300: #cbc2e6;
-    /* chữ phụ tím nhạt */
-    --color-ink-500: #9a8fc0;
+    --color-ink-300: #a1a1aa;
+    /* chữ phụ — bạc */
+    --color-ink-500: #71717a;
+    /* chữ mờ — xám kim loại */
 
-    /* Ngữ nghĩa */
-    --color-value-400: #2dd4bf;
-    /* Value = xanh ngọc */
-    --color-value-500: #14b8a6;
-    --color-warn-400: #fbbf24;
-    /* TRAP / cảnh báo = hổ phách */
-    --color-warn-500: #f59e0b;
-    --color-danger-400: #fb7185;
-    /* lỗi = đỏ hồng */
-    --color-danger-500: #f43f5e;
+    /* Ngữ nghĩa (đơn sắc): "value" = trắng phát sáng, "warn" = bạc, "danger" = xám lạnh */
+    --color-value-400: #ffffff;
+    --color-value-500: #e4e4e7;
+    --color-warn-400: #d4d4d8;
+    --color-warn-500: #a1a1aa;
+    --color-danger-400: #a1a1aa;
+    --color-danger-500: #71717a;
 
-    /* Font */
+    /* Bạch kim (dùng cho viền/ánh sáng đặc biệt) */
+    --color-platinum-300: #d4d4d8;
+    --color-platinum-500: #a1a1aa;
+
+    /* Font — biên tập, sạch, tracking rộng */
     --font-sans: 'Inter', 'Be Vietnam Pro', system-ui, -apple-system, 'Segoe UI', sans-serif;
     --font-display: 'Space Grotesk', 'Inter', system-ui, sans-serif;
 
@@ -54,17 +60,20 @@
    ========================================================================== */
 :root {
     color-scheme: dark;
-    --glass-blur: 24px;
-    --glass-saturate: 170%;
-    --glass-bg: 0.08;
-    --glass-border: 0.18;
+    /* Liquid glass */
+    --glass-blur: 20px;
+    --glass-saturate: 140%;
+    --glass-bg: 0.06;
+    --glass-border: 0.12;
+    /* Ánh sáng lạnh trung tâm (bạch kim) */
+    --glow: 255, 255, 255;
 }
 
 @media (max-width: 640px) {
     :root {
         /* Mobile: giảm blur để đỡ tốn GPU */
-        --glass-blur: 16px;
-        --glass-saturate: 150%;
+        --glass-blur: 14px;
+        --glass-saturate: 130%;
     }
 }
 
@@ -85,75 +94,124 @@ html {
 body {
     margin: 0;
     font-family: var(--font-sans);
+    letter-spacing: 0.01em;
     color: var(--color-ink-100);
-    background:
-        radial-gradient(1200px 800px at 15% -10%, rgba(124, 58, 237, 0.22), transparent 60%),
-        radial-gradient(1000px 700px at 100% 0%, rgba(217, 70, 239, 0.14), transparent 55%),
-        linear-gradient(160deg, var(--color-void-900) 0%, var(--color-void-700) 55%, #150b2b 100%);
-    background-attachment: fixed;
+    background: #000000;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
     overflow-x: hidden;
 }
 
-/* Scrollbar tối */
+/* Vùng chứa hố đen — đặt sau mọi nội dung (z thấp), không bắt sự kiện */
+.bh-root {
+    position: fixed;
+    inset: 0;
+    z-index: 0;
+    pointer-events: none;
+    overflow: hidden;
+    background: #000000;
+}
+
+.bh-canvas {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    display: block;
+}
+
+/* Tối viền (vignette) để hố đen chìm vào hư không */
+.bh-vignette {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: radial-gradient(120% 90% at 50% 42%,
+            transparent 38%,
+            rgba(0, 0, 0, 0.55) 78%,
+            rgba(0, 0, 0, 0.92) 100%);
+}
+
+/* Lớp phủ hạt bụi sao (canvas 2D) nằm trên hố đen, dưới nội dung */
+.dust-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 1;
+    pointer-events: none;
+}
+
+/* Nội dung UI nằm trên cùng */
+.ui-layer {
+    position: relative;
+    z-index: 2;
+}
+
+/* Scrollbar tối, đơn sắc */
 ::-webkit-scrollbar {
     width: 10px;
     height: 10px;
 }
 
 ::-webkit-scrollbar-track {
-    background: rgba(255, 255, 255, 0.03);
+    background: rgba(255, 255, 255, 0.02);
 }
 
 ::-webkit-scrollbar-thumb {
-    background: linear-gradient(180deg, var(--color-violet-500), var(--color-magenta-500));
+    background: linear-gradient(180deg, #3f3f46, #18181b);
     border-radius: 999px;
     border: 2px solid transparent;
     background-clip: padding-box;
 }
 
-/* Focus ring rõ ràng (a11y) */
+::-webkit-scrollbar-thumb:hover {
+    background: linear-gradient(180deg, #52525b, #27272a);
+    background-clip: padding-box;
+}
+
+/* Focus ring rõ ràng (a11y) — trắng, độ tương phản cao */
 :where(a, button, input, select, textarea, [tabindex]):focus-visible {
-    outline: 2px solid var(--color-violet-400);
+    outline: 2px solid rgba(255, 255, 255, 0.85);
     outline-offset: 2px;
     border-radius: 8px;
 }
 
 /* ==========================================================================
-   Liquid glass
+   Liquid Glass (kính lỏng bạch kim)
    ========================================================================== */
 .glass {
     position: relative;
-    background: linear-gradient(135deg,
-            rgba(255, 255, 255, calc(var(--glass-bg) + 0.03)),
-            rgba(124, 58, 237, calc(var(--glass-bg) * 0.7)));
+    background: linear-gradient(150deg,
+            rgba(255, 255, 255, calc(var(--glass-bg) + 0.03)) 0%,
+            rgba(255, 255, 255, var(--glass-bg)) 45%,
+            rgba(0, 0, 0, 0.18) 100%);
     backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(var(--glass-saturate));
     border: 1px solid rgba(255, 255, 255, var(--glass-border));
     border-radius: 18px;
     box-shadow:
-        0 10px 30px -12px rgba(0, 0, 0, 0.6),
-        inset 0 1px 0 rgba(255, 255, 255, 0.12);
+        0 18px 50px -24px rgba(0, 0, 0, 0.9),
+        0 1px 0 rgba(255, 255, 255, 0.06),
+        inset 0 1px 1px rgba(255, 255, 255, 0.2),
+        inset 0 -1px 1px rgba(0, 0, 0, 0.35);
 }
 
 /* Fallback khi trình duyệt không hỗ trợ backdrop-filter */
 @supports not ((backdrop-filter: blur(2px)) or (-webkit-backdrop-filter: blur(2px))) {
     .glass {
-        background: linear-gradient(135deg, rgba(26, 16, 51, 0.92), rgba(18, 10, 36, 0.92));
+        background: linear-gradient(150deg, rgba(18, 18, 20, 0.94), rgba(5, 5, 5, 0.94));
     }
 }
 
-/* Specular highlight chạy ở góc trên, phản ứng theo con trỏ (CSS var do JS đặt) */
+/* Specular highlight theo con trỏ (CSS var --mx/--my do JS đặt) */
 .glass--specular::before {
     content: '';
     position: absolute;
     inset: 0;
     border-radius: inherit;
     pointer-events: none;
-    background: radial-gradient(240px 120px at var(--mx, 20%) var(--my, 0%),
-            rgba(255, 255, 255, 0.18),
-            transparent 60%);
+    background: radial-gradient(260px 140px at var(--mx, 22%) var(--my, 0%),
+            rgba(255, 255, 255, 0.16),
+            transparent 62%);
     opacity: 0;
     transition: opacity var(--dur-base) var(--ease-out-quint);
 }
@@ -163,7 +221,26 @@ body {
     opacity: 1;
 }
 
-/* Viền sáng gradient mảnh */
+/* Vệt sheen lỏng chạy theo con trỏ (tương tác từ tính quang học) */
+.glass--sheen::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    pointer-events: none;
+    background: radial-gradient(180px 180px at var(--sx, 50%) var(--sy, 50%),
+            rgba(255, 255, 255, 0.1),
+            transparent 60%);
+    opacity: 0;
+    transition: opacity var(--dur-base) var(--ease-out-quint);
+    mix-blend-mode: screen;
+}
+
+.glass--sheen:hover::after {
+    opacity: 1;
+}
+
+/* Viền sáng gradient bạch kim mảnh */
 .glass--edge {
     background-clip: padding-box;
 }
@@ -175,7 +252,7 @@ body {
     border-radius: inherit;
     padding: 1px;
     pointer-events: none;
-    background: linear-gradient(135deg, rgba(167, 139, 250, 0.7), rgba(217, 70, 239, 0.25), transparent 70%);
+    background: linear-gradient(150deg, rgba(255, 255, 255, 0.55), rgba(161, 161, 170, 0.18) 45%, transparent 72%);
     -webkit-mask:
         linear-gradient(#000 0 0) content-box,
         linear-gradient(#000 0 0);
@@ -183,18 +260,37 @@ body {
     mask-composite: exclude;
 }
 
+/* Ghi đè: khi bật cả specular + sheen thì ::after là sheen, viền dùng box-shadow */
+.glass--sheen.glass--edge::after {
+    background: radial-gradient(180px 180px at var(--sx, 50%) var(--sy, 50%),
+            rgba(255, 255, 255, 0.1),
+            transparent 60%);
+    -webkit-mask: none;
+    mask-composite: add;
+    padding: 0;
+}
+
 /* ==========================================================================
    Text helpers
    ========================================================================== */
 .font-display {
     font-family: var(--font-display);
+    letter-spacing: -0.01em;
 }
 
 .text-gradient {
-    background: linear-gradient(100deg, var(--color-violet-400), var(--color-magenta-500) 60%, var(--color-indigo-500));
+    background: linear-gradient(100deg, #ffffff 0%, #d4d4d8 45%, #71717a 100%);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
+}
+
+/* Chữ dạng nhãn biên tập */
+.eyebrow {
+    text-transform: uppercase;
+    letter-spacing: 0.28em;
+    font-size: 11px;
+    color: var(--color-ink-500);
 }
 
 /* ==========================================================================
@@ -216,9 +312,9 @@ body {
 
 .skeleton {
     background: linear-gradient(100deg,
-            rgba(255, 255, 255, 0.04) 30%,
-            rgba(167, 139, 250, 0.14) 50%,
-            rgba(255, 255, 255, 0.04) 70%);
+            rgba(255, 255, 255, 0.03) 30%,
+            rgba(255, 255, 255, 0.12) 50%,
+            rgba(255, 255, 255, 0.03) 70%);
     background-size: 200% 100%;
     animation: shimmer 1.6s infinite linear;
     border-radius: 12px;
@@ -240,7 +336,7 @@ body {
     position: absolute;
     inset: 0;
     width: 30%;
-    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.6), transparent);
     animation: sweep 1.4s infinite var(--ease-out-quint);
 }
 

@@ -436,7 +436,7 @@ export function AnalyzePage() {
                         </p>
                     )}
                     <label
-                        className={`mt-3 inline-flex cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-white ${extracting ? 'cursor-not-allowed bg-violet-500/40' : 'bg-violet-500 hover:bg-violet-600'
+                        className={`mt-3 inline-flex cursor-pointer rounded-xl px-4 py-2 text-sm font-semibold text-black ${extracting ? 'cursor-not-allowed bg-white/35 text-ink-500' : 'bg-white hover:bg-platinum-300'
                             }`}
                     >
                         {extracting ? 'Đang xử lý…' : 'Chọn ảnh'}
