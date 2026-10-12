@@ -20,7 +20,7 @@
  */
 
 import { env } from '../env.js'
-import type { Source } from '../../src/lib/types.js'
+import type { Source, ExternalCallLog } from '../../src/lib/types.js'
 
 export type SearchProvider = 'serper' | 'tavily' | 'brave' | 'duckduckgo'
 
@@ -500,6 +500,8 @@ export interface MultiTierSearchOptions {
     forceRefresh?: boolean
     league?: string
     kickoff?: string
+    purpose?: string
+    auditLogger?: (log: ExternalCallLog) => void
 }
 
 /**
@@ -512,10 +514,21 @@ export async function performMultiTierSearch(
 ): Promise<SearchGroundingResponse> {
     const cleanQuery = query.trim()
     const cacheKey = cleanQuery.toLowerCase()
+    const purpose = options.purpose || 'web_grounding'
 
     if (!options.forceRefresh) {
         const cached = searchCache.get(cacheKey)
         if (cached && cached.expiresAt > Date.now()) {
+            options.auditLogger?.({
+                provider: cached.data.providerUsed,
+                purpose,
+                requestSummary: cleanQuery,
+                startTime: Date.now(),
+                durationMs: 0,
+                httpStatus: 200,
+                resultCount: cached.data.results.length,
+                servedFromCache: true,
+            })
             return cached.data
         }
     }
@@ -587,6 +600,18 @@ export async function performMultiTierSearch(
                     snippets: results.map((r) => r.snippet),
                 }
 
+                // Ghi nhận audit log cho tầng thành công
+                options.auditLogger?.({
+                    provider: tier.provider,
+                    purpose,
+                    requestSummary: cleanQuery,
+                    startTime: tierStart,
+                    durationMs: latencyMs,
+                    httpStatus: 200,
+                    resultCount: results.length,
+                    servedFromCache: false,
+                })
+
                 // Lưu cache
                 searchCache.set(cacheKey, {
                     data: response,
@@ -604,6 +629,19 @@ export async function performMultiTierSearch(
             console.warn(
                 `[Search-Failover] Tier ${tier.tierNumber} (${tier.provider}) thất bại (${tierLatency}ms, code: ${statusCode ?? 'N/A'}): ${reason}. Đang chuyển tiếp sang Tier tiếp theo...`,
             )
+
+            // Ghi nhận audit log cho tầng thất bại
+            options.auditLogger?.({
+                provider: tier.provider,
+                purpose,
+                requestSummary: cleanQuery,
+                startTime: tierStart,
+                durationMs: tierLatency,
+                httpStatus: statusCode,
+                resultCount: 0,
+                errorMessage: reason,
+                servedFromCache: false,
+            })
 
             fallbacksAttempted.push({
                 provider: tier.provider,
@@ -638,12 +676,52 @@ export async function performMultiTierSearch(
 }
 
 /**
+ * Kiểm tra kết nối độc lập cho từng nhà cung cấp tìm kiếm (dùng cho nút Self-Test).
+ */
+export async function testSearchProviderConnection(provider: SearchProvider): Promise<{
+    provider: SearchProvider
+    success: boolean
+    latencyMs: number
+    resultCount: number
+    error?: string
+}> {
+    const startTime = Date.now()
+    const query = 'Arsenal vs Chelsea lineup'
+    try {
+        let results: SearchResultItem[] = []
+        if (provider === 'serper') {
+            results = await searchSerper(query, env.serperApiKey)
+        } else if (provider === 'tavily') {
+            results = await searchTavily(query, env.tavilyApiKey)
+        } else if (provider === 'brave') {
+            results = await searchBrave(query, env.braveApiKey)
+        } else if (provider === 'duckduckgo') {
+            results = await searchDuckDuckGo(query)
+        }
+        return {
+            provider,
+            success: results.length > 0,
+            latencyMs: Date.now() - startTime,
+            resultCount: results.length,
+        }
+    } catch (e) {
+        return {
+            provider,
+            success: false,
+            latencyMs: Date.now() - startTime,
+            resultCount: 0,
+            error: e instanceof Error ? e.message : String(e),
+        }
+    }
+}
+
+/**
  * API chuyên dụng cho phân tích bóng đá: Tạo câu truy vấn tối ưu và lấy dữ liệu grounding đối soát.
  */
 export async function getMatchGrounding(
     home: string,
     away: string,
-    options: { league?: string; kickoff?: string; forceRefresh?: boolean } = {},
+    options: MultiTierSearchOptions = {},
 ): Promise<SearchGroundingResponse> {
     const query = [
         home,
@@ -666,8 +744,9 @@ export async function fetchLiveMatchGrounding(
     homeTeam: string,
     awayTeam: string,
     league?: string,
+    options: MultiTierSearchOptions = {},
 ): Promise<SearchGroundingResponse & { providerUsed: SearchProvider; snippets: string[] }> {
-    const res = await getMatchGrounding(homeTeam, awayTeam, { league })
+    const res = await getMatchGrounding(homeTeam, awayTeam, { ...options, league })
     return {
         ...res,
         providerUsed: res.provider,

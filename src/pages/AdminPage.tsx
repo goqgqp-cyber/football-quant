@@ -5,6 +5,7 @@ import { Button } from '../components/ui/Button'
 import { Field, TextInput } from '../components/ui/Field'
 import { useAuth } from '../hooks/useAuth'
 import { api, type AdminOverview, type AdminUserItem, ApiError } from '../lib/api'
+import { ConnectionSelfTest } from '../components/ConnectionSelfTest'
 
 export function AdminPage() {
     const { user: currentUser } = useAuth()
@@ -410,6 +411,9 @@ export function AdminPage() {
                     ) : null}
                 </GlassCard>
             </div>
+
+            {/* Provider Connection Self-Test */}
+            <ConnectionSelfTest />
 
             {/* User Management Section */}
             <GlassCard className="!p-5">

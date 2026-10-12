@@ -109,6 +109,7 @@ export type CollectEvent =
     | { type: 'data'; matchData: MatchData }
     | { type: 'explanation'; explanation: Explanation }
     | { type: 'result'; result: AnalysisResult; recordId: string }
+    | { type: 'warning'; provider: string; message: string; group?: string }
     | { type: 'error'; message: string }
 
 /**
@@ -217,6 +218,14 @@ export function collectStream(
                                 type: 'result',
                                 result: o.result as AnalysisResult,
                                 recordId: String(o.recordId ?? ''),
+                            })
+                            break
+                        case 'warning':
+                            onEvent({
+                                type: 'warning',
+                                provider: String(o.provider ?? ''),
+                                message: String(o.message ?? ''),
+                                group: o.group ? String(o.group) : undefined,
                             })
                             break
                         case 'error':
@@ -434,6 +443,7 @@ export interface AnalyzePayload {
     matchData?: MatchData
     withExplanation?: boolean
     inPlay?: InPlayPayload | null
+    forceRefresh?: boolean
 }
 
 /** Một dòng kèo AI (Qwen) đọc được từ ảnh, kèm mức tin cậy của model. */
@@ -746,6 +756,40 @@ export const api = {
             method: 'POST',
             body: { email },
         }),
+
+    // --- Tự kiểm tra kết nối hệ thống (Self-Test) ---
+    systemSelfTest: () => apiFetch<SystemSelfTestReport>('/self-test', { method: 'POST' }),
+}
+
+export interface SystemSelfTestReport {
+    timestamp: string
+    apiFootball: {
+        status: 'OK' | 'ERROR'
+        latencyMs: number
+        quota?: {
+            requestsLimitDay?: number
+            requestsRemainingDay?: number
+            rateLimitRemainingMinute?: number
+        }
+        error?: string
+    }
+    brave: {
+        status: 'OK' | 'ERROR'
+        latencyMs: number
+        resultCount?: number
+        error?: string
+    }
+    tavily: {
+        status: 'OK' | 'ERROR'
+        latencyMs: number
+        resultCount?: number
+        error?: string
+    }
+    qwen: {
+        status: 'OK' | 'ERROR'
+        latencyMs: number
+        error?: string
+    }
 }
 
 export interface AdminOverview {

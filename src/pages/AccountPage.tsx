@@ -5,6 +5,7 @@ import { Field, TextInput } from '../components/ui/Field'
 import { useSettings } from '../hooks/useSettings'
 import { useAuth } from '../hooks/useAuth'
 import { ApiError, api } from '../lib/api'
+import { ConnectionSelfTest } from '../components/ConnectionSelfTest'
 
 /**
  * Trang Tài khoản: tổng vốn (đồng bộ server) + tham số theo giải (cục bộ)
@@ -94,6 +95,8 @@ export function AccountPage() {
                     <p className={`mt-2 text-xs ${msg.ok ? 'text-value-400' : 'text-danger-400'}`}>{msg.text}</p>
                 )}
             </GlassCard>
+
+            <ConnectionSelfTest />
 
             <GlassCard>
                 <p className="font-display text-sm font-bold text-ink-100">Tham số theo giải</p>

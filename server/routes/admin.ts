@@ -12,6 +12,9 @@ import {
 } from '../auth.js'
 import { env } from '../env.js'
 import { redisDiag, usingMemoryStore } from '../redis.js'
+import { testApiFootballConnection } from '../services/apiFootball.js'
+import { testSearchProviderConnection } from '../services/search.js'
+import { testXkiroConnection } from '../services/xkiro.js'
 
 export const adminApp = new Hono<{ Variables: Vars }>()
 
@@ -192,4 +195,61 @@ adminApp.post('/unlock-email', async (c) => {
     await clearFails(email)
 
     return c.json({ ok: true, message: `Đã mở khóa các lần đăng nhập sai của '${email}'.` })
+})
+
+/**
+ * Hàm chạy kiểm tra kết nối đồng thời tới tất cả 4 nhà cung cấp:
+ * 1. API-Football
+ * 2. Brave Search
+ * 3. Tavily Search
+ * 4. xKiro AI (Qwen)
+ */
+export async function runSystemSelfTest() {
+    const [apiFootRes, braveRes, tavilyRes, qwenRes] = await Promise.all([
+        testApiFootballConnection(),
+        testSearchProviderConnection('brave'),
+        testSearchProviderConnection('tavily'),
+        testXkiroConnection(),
+    ])
+
+    return {
+        timestamp: new Date().toISOString(),
+        apiFootball: {
+            status: apiFootRes.success ? 'OK' : 'ERROR',
+            latencyMs: apiFootRes.latencyMs,
+            quota: apiFootRes.quota,
+            error: apiFootRes.error,
+        },
+        brave: {
+            status: braveRes.success ? 'OK' : 'ERROR',
+            latencyMs: braveRes.latencyMs,
+            resultCount: braveRes.resultCount,
+            error: braveRes.error,
+        },
+        tavily: {
+            status: tavilyRes.success ? 'OK' : 'ERROR',
+            latencyMs: tavilyRes.latencyMs,
+            resultCount: tavilyRes.resultCount,
+            error: tavilyRes.error,
+        },
+        qwen: {
+            status: qwenRes.success ? 'OK' : 'ERROR',
+            latencyMs: qwenRes.latencyMs,
+            error: qwenRes.error,
+        },
+    }
+}
+
+/**
+ * POST /api/admin/self-test & GET /api/admin/self-test
+ * Nút "Kiểm tra kết nối" cho trang Quản trị / Tài khoản
+ */
+adminApp.post('/self-test', async (c) => {
+    const report = await runSystemSelfTest()
+    return c.json(report)
+})
+
+adminApp.get('/self-test', async (c) => {
+    const report = await runSystemSelfTest()
+    return c.json(report)
 })
