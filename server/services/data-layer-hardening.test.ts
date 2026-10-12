@@ -10,9 +10,10 @@ import {
     deduplicateMatchRecords,
     getLeagueStandings,
     getTeamRecentFixtures,
+    apiFootballLimiter,
     type ApiFootballFixtureItem,
 } from './apiFootball.js'
-import { testSearchProviderConnection } from './search.js'
+import { testSearchProviderConnection, extractMatchesFromSearchSnippets } from './search.js'
 import { buildProviderSummaries } from './xkiro.js'
 import {
     checkDataGate,
@@ -599,5 +600,99 @@ describe('Antigravity Fix Prompt 2: Data Layer Hardening Tests (Section 6)', () 
         expect(analysis.fixtureIdentity).toEqual(fixtureIdentity)
         expect(analysis.callLogs).toEqual(callLogs)
         expect(analysis.providerSummaries?.length).toBe(1)
+    })
+
+    // -------------------------------------------------------------------------
+    // TEST 12: apiFootballLimiter enforces strict 10 requests / minute rate limit
+    // -------------------------------------------------------------------------
+    it('12. apiFootballLimiter enforces strict 10 requests / minute rate limit and serializes concurrency', async () => {
+        apiFootballLimiter.reset()
+
+        // 10 acquisitions should succeed
+        for (let i = 0; i < 10; i++) {
+            const ok = await apiFootballLimiter.acquire()
+            expect(ok).toBe(true)
+            apiFootballLimiter.release()
+        }
+
+        const timestamps = apiFootballLimiter.getTimestampsInWindow()
+        expect(timestamps.length).toBe(10)
+
+        // 11th acquisition should be throttled (wait > maxQueueWaitMs returns false when window is full)
+        const eleventh = await apiFootballLimiter.acquire()
+        expect(eleventh).toBe(false)
+
+        apiFootballLimiter.reset()
+    })
+
+    // -------------------------------------------------------------------------
+    // TEST 13: extractMatchesFromSearchSnippets extracts match records with provenance
+    // -------------------------------------------------------------------------
+    it('13. extractMatchesFromSearchSnippets extracts match records with verified provenance', () => {
+        const mockSnippets = [
+            {
+                title: 'Arsenal vs Chelsea result: Arsenal 2-1 Chelsea',
+                url: 'https://example.com/match/1',
+                snippet: 'Arsenal secured a 2-1 victory over Chelsea at Emirates Stadium on 2026-04-12.',
+                provider: 'serper' as const,
+            },
+            {
+                title: 'Premier League: Everton 0 - 2 Arsenal',
+                url: 'https://example.com/match/2',
+                snippet: 'Everton suffered a 0 - 2 defeat against Arsenal with goals in both halves.',
+                provider: 'serper' as const,
+            },
+        ]
+
+        const matches = extractMatchesFromSearchSnippets('Arsenal', mockSnippets, 'serper')
+        expect(matches.length).toBe(2)
+        expect(matches[0].homeTeam).toBe('Arsenal')
+        expect(matches[0].awayTeam).toBe('Chelsea')
+        expect(matches[0].ftScore).toEqual({ home: 2, away: 1 })
+        expect(matches[0].provenance.source).toBe('serper:https://example.com/match/1')
+        expect(matches[0].provenance.verified).toBe(true)
+        expect(matches[0].source).toBe('web')
+
+        expect(matches[1].homeTeam).toBe('Everton')
+        expect(matches[1].awayTeam).toBe('Arsenal')
+        expect(matches[1].ftScore).toEqual({ home: 0, away: 2 })
+
+        // Validate provenance using the engine's strict validator
+        expect(() => validateSampleStreamsProvenance(matches)).not.toThrow()
+    })
+
+    // -------------------------------------------------------------------------
+    // TEST 14: testApiFootballConnection with mock successful status returns green OK and active quota
+    // -------------------------------------------------------------------------
+    it('14. testApiFootballConnection with mock successful status returns green OK and active quota', async () => {
+        global.fetch = vi.fn().mockResolvedValue(
+            new Response(
+                JSON.stringify({
+                    get: 'status',
+                    errors: [],
+                    results: 0,
+                    response: {
+                        account: { email: 'goqgqp@gmail.com' },
+                        subscription: { plan: 'Free', active: true },
+                        requests: { current: 1, limit_day: 100 },
+                    },
+                }),
+                {
+                    status: 200,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-ratelimit-requests-remaining': '99',
+                        'x-ratelimit-requests-limit': '100',
+                        'x-ratelimit-remaining-minute': '9',
+                    },
+                },
+            ),
+        )
+
+        const result = await testApiFootballConnection()
+        expect(result.success).toBe(true)
+        expect(result.quota?.remaining).toBe(99)
+        expect(result.quota?.limit).toBe(100)
+        expect(result.quota?.perMinute).toBe(9)
     })
 })

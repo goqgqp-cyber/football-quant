@@ -7,7 +7,7 @@ export async function fetchTeamRecentForm(teamId: number): Promise<string[]> {
         const apiKey =
             typeof process !== 'undefined' && process.env?.API_FOOTBALL_KEY
                 ? process.env.API_FOOTBALL_KEY
-                : '32ef4117471d08b60402e551a089faff'
+                : ''
 
         const res = await fetch(`https://v3.football.api-sports.io/fixtures?team=${teamId}&last=5&status=FT`, {
             headers: { 'x-apisports-key': apiKey },

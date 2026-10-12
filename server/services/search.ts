@@ -20,7 +20,7 @@
  */
 
 import { env } from '../env.js'
-import type { Source, ExternalCallLog } from '../../src/lib/types.js'
+import type { Source, ExternalCallLog, MatchRecord } from '../../src/lib/types.js'
 
 export type SearchProvider = 'serper' | 'tavily' | 'brave' | 'duckduckgo'
 
@@ -753,3 +753,103 @@ export async function fetchLiveMatchGrounding(
         snippets: res.snippets || res.results.map((r) => r.snippet),
     }
 }
+
+/**
+ * Trích xuất các trận đấu đã kết thúc từ trích đoạn kết quả tìm kiếm web
+ * với đầy đủ thông tin nguồn gốc (Provenance: source & fetchedAt).
+ */
+export function extractMatchesFromSearchSnippets(
+    targetTeam: string,
+    items: SearchResultItem[],
+    provider: SearchProvider = 'duckduckgo',
+): MatchRecord[] {
+    const records: MatchRecord[] = []
+    const cleanTarget = targetTeam.trim().toLowerCase()
+    const seen = new Set<string>()
+
+    // Regex bóc tách tỉ số bóng đá: "TeamA 2-1 TeamB" hoặc "TeamA 1 - 0 TeamB"
+    const scorePattern = /([A-Za-zÀ-ỹ0-9]{2,20}(?:\s+[A-Za-zÀ-ỹ0-9]{2,20}){0,2})\s+(\d+)\s*[-–:]\s*(\d+)\s+([A-Za-zÀ-ỹ0-9]{2,20}(?:\s+[A-Za-zÀ-ỹ0-9]{2,20}){0,2})/g
+    const now = new Date().toISOString()
+
+    for (const item of items) {
+        for (const text of [item.title, item.snippet]) {
+            let match: RegExpExecArray | null
+            scorePattern.lastIndex = 0
+            while ((match = scorePattern.exec(text)) !== null) {
+                let hTeam = match[1].replace(/^(?:vs|result|v|at|on|for|against)\s+/i, '').replace(/[.,:;]+$/, '').trim()
+                const hGoals = parseInt(match[2], 10)
+                const aGoals = parseInt(match[3], 10)
+                let aTeam = match[4].replace(/^(?:vs|result|v|at|on|for|against)\s+/i, '').replace(/[.,:;]+$/, '').trim()
+
+                // Phải có ít nhất 1 đội khớp với targetTeam
+                const hMatch = hTeam.toLowerCase().includes(cleanTarget) || cleanTarget.includes(hTeam.toLowerCase())
+                const aMatch = aTeam.toLowerCase().includes(cleanTarget) || cleanTarget.includes(aTeam.toLowerCase())
+                if (!hMatch && !aMatch) continue
+                if (isNaN(hGoals) || isNaN(aGoals) || hGoals > 15 || aGoals > 15) continue
+
+                const sig = `${hTeam.toLowerCase()}_vs_${aTeam.toLowerCase()}_${hGoals}_${aGoals}`
+                if (seen.has(sig)) continue
+                seen.add(sig)
+
+                records.push({
+                    id: `web-${records.length + 1}-${Date.now()}`,
+                    date: item.publishedDate || now.slice(0, 10),
+                    competition: 'Web Match Grounding',
+                    homeTeam: hTeam,
+                    awayTeam: aTeam,
+                    ftScore: { home: hGoals, away: aGoals },
+                    status: 'FT',
+                    source: 'web',
+                    fetchedAt: now,
+                    provenance: {
+                        source: `${provider}:${item.url || 'snippet'}`,
+                        fetchedAt: now,
+                        verified: true,
+                    },
+                })
+                if (records.length >= 8) break
+            }
+        }
+    }
+    return records
+}
+
+/**
+ * Tìm kiếm phong độ gần đây của một đội bóng (dùng cho Automatic Search Fallback Mode).
+ */
+export async function fetchTeamFormSearch(
+    teamName: string,
+    options: MultiTierSearchOptions = {},
+): Promise<SearchGroundingResponse & { matches: MatchRecord[] }> {
+    const query = `${teamName} recent matches results form`
+    const res = await performMultiTierSearch(query, {
+        ...options,
+        purpose: options.purpose || `form_search_${teamName}`,
+    })
+    const matches = extractMatchesFromSearchSnippets(teamName, res.results, res.providerUsed)
+    return {
+        ...res,
+        matches,
+    }
+}
+
+/**
+ * Tìm kiếm lịch sử đối đầu H2H qua Web (dùng cho Automatic Search Fallback Mode).
+ */
+export async function fetchH2HSearch(
+    homeTeam: string,
+    awayTeam: string,
+    options: MultiTierSearchOptions = {},
+): Promise<SearchGroundingResponse & { matches: MatchRecord[] }> {
+    const query = `${homeTeam} vs ${awayTeam} head to head results`
+    const res = await performMultiTierSearch(query, {
+        ...options,
+        purpose: options.purpose || `h2h_search_${homeTeam}_vs_${awayTeam}`,
+    })
+    const matches = extractMatchesFromSearchSnippets(homeTeam, res.results, res.providerUsed)
+    return {
+        ...res,
+        matches,
+    }
+}
+

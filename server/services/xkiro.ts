@@ -38,6 +38,8 @@ import {
 } from './apiFootball.js'
 import {
     fetchLiveMatchGrounding,
+    fetchTeamFormSearch,
+    fetchH2HSearch,
     type SearchGroundingResponse,
 } from './search.js'
 
@@ -1105,7 +1107,81 @@ export async function streamCollectMatchData(
         console.error('[SEARCH] Grounding collection error:', err)
     }
 
-    // 3. HARD ENFORCEMENT: Kiểm tra trường hợp tất cả provider đều thất bại hoặc trả về rỗng
+    // 3. AUTOMATIC SEARCH FALLBACK MODE:
+    // Nếu API-Football không đủ dữ liệu, hết quota hoặc gặp sự cố, tự động kích hoạt truy vấn bổ sung từ Web Search
+    const afQuota = getApiFootballQuota()
+    const needsSearchFallback =
+        homeMatches.length < 5 ||
+        awayMatches.length < 5 ||
+        afQuota.isSuspended ||
+        (afQuota.remaining !== null && afQuota.remaining <= 0)
+
+    if (needsSearchFallback) {
+        onDelta(`🔍 [Search Fallback Mode] Bổ sung phong độ & đối đầu qua Web Search đa tầng (Serper -> Tavily -> Brave -> DuckDuckGo)...\n`)
+
+        // Bổ sung phong độ đội nhà nếu thiếu
+        if (homeMatches.length < 5) {
+            try {
+                const homeFormRes = await fetchTeamFormSearch(cleanHome, {
+                    forceRefresh: hint.forceRefresh,
+                    kickoff: cleanKickoff,
+                    auditLogger: addLog,
+                    purpose: 'search_fallback_home_form',
+                })
+                if (homeFormRes.matches.length > 0) {
+                    homeMatches = deduplicateMatchRecords([...homeMatches, ...homeFormRes.matches])
+                    fetchedAtTimes.homeForm = new Date().toISOString()
+                    onDelta(`  ✓ Bổ sung ${homeFormRes.matches.length} trận của ${cleanHome} từ Web (${homeFormRes.providerUsed.toUpperCase()}).\n`)
+                }
+            } catch (formErr) {
+                console.warn('[Search Fallback] Lỗi lấy phong độ đội nhà:', formErr)
+            }
+        }
+
+        // Bổ sung phong độ đội khách nếu thiếu
+        if (awayMatches.length < 5) {
+            try {
+                const awayFormRes = await fetchTeamFormSearch(cleanAway, {
+                    forceRefresh: hint.forceRefresh,
+                    kickoff: cleanKickoff,
+                    auditLogger: addLog,
+                    purpose: 'search_fallback_away_form',
+                })
+                if (awayFormRes.matches.length > 0) {
+                    awayMatches = deduplicateMatchRecords([...awayMatches, ...awayFormRes.matches])
+                    fetchedAtTimes.awayForm = new Date().toISOString()
+                    onDelta(`  ✓ Bổ sung ${awayFormRes.matches.length} trận của ${cleanAway} từ Web (${awayFormRes.providerUsed.toUpperCase()}).\n`)
+                }
+            } catch (formErr) {
+                console.warn('[Search Fallback] Lỗi lấy phong độ đội khách:', formErr)
+            }
+        }
+
+        // Bổ sung đối đầu nếu thiếu
+        if (h2hMatches.length === 0) {
+            try {
+                const h2hSearchRes = await fetchH2HSearch(cleanHome, cleanAway, {
+                    forceRefresh: hint.forceRefresh,
+                    kickoff: cleanKickoff,
+                    auditLogger: addLog,
+                    purpose: 'search_fallback_h2h',
+                })
+                if (h2hSearchRes.matches.length > 0) {
+                    h2hMatches = deduplicateMatchRecords([...h2hMatches, ...h2hSearchRes.matches])
+                    fetchedAtTimes.h2h = new Date().toISOString()
+                    if (!h2hText) {
+                        h2hText = `LỊCH SỬ ĐỐI ĐẦU TỪ WEB (${h2hSearchRes.providerUsed.toUpperCase()}):\n` +
+                            h2hSearchRes.matches.map(m => `- ${m.date}: ${m.homeTeam} ${m.ftScore.home}-${m.ftScore.away} ${m.awayTeam}`).join('\n')
+                    }
+                    onDelta(`  ✓ Bổ sung ${h2hSearchRes.matches.length} trận đối đầu từ Web (${h2hSearchRes.providerUsed.toUpperCase()}).\n`)
+                }
+            } catch (h2hErr) {
+                console.warn('[Search Fallback] Lỗi lấy đối đầu:', h2hErr)
+            }
+        }
+    }
+
+    // 4. HARD ENFORCEMENT: Kiểm tra trường hợp tất cả provider đều thất bại hoặc trả về rỗng
     const hasSearchSnippets = Boolean(searchGrounding && searchGrounding.snippets && searchGrounding.snippets.length > 0)
     const isAllProvidersFailed =
         homeMatches.length === 0 &&

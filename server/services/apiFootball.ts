@@ -178,7 +178,104 @@ export function resetApiFootballQuota(): void {
         lastUpdated: 0,
         isSuspended: false,
     }
+    apiFootballLimiter.reset()
 }
+
+/**
+ * Concurrency Throttle & Rate Limiter cho API-Football
+ * Tuân thủ nghiêm ngặt giới hạn Free Plan: 10 requests / phút.
+ */
+export interface RateLimiterOptions {
+    maxPerMinute?: number
+    maxConcurrency?: number
+    minDelayMs?: number
+    maxQueueWaitMs?: number
+}
+
+export class ApiFootballRateLimiter {
+    private requestTimestamps: number[] = []
+    private maxPerMinute: number
+    private maxConcurrency: number
+    private minDelayMs: number
+    private maxQueueWaitMs: number
+    private activeCount = 0
+    private lastRequestTime = 0
+    private queue: Array<() => void> = []
+
+    constructor(options: RateLimiterOptions = {}) {
+        this.maxPerMinute = options.maxPerMinute ?? 10
+        this.maxConcurrency = options.maxConcurrency ?? 1
+        this.minDelayMs = options.minDelayMs ?? 200
+        this.maxQueueWaitMs = options.maxQueueWaitMs ?? 8000
+    }
+
+    public getTimestampsInWindow(windowMs = 60000): number[] {
+        const now = Date.now()
+        this.requestTimestamps = this.requestTimestamps.filter((t) => now - t < windowMs)
+        return [...this.requestTimestamps]
+    }
+
+    public async acquire(): Promise<boolean> {
+        // Kiểm tra quota trước khi xếp hàng
+        if (currentQuota.isSuspended) return false
+        if (currentQuota.remaining !== null && currentQuota.remaining <= 0) return false
+        if (currentQuota.perMinute !== null && currentQuota.perMinute <= 0) return false
+
+        const now = Date.now()
+        this.getTimestampsInWindow()
+
+        // 1. Nếu đã đạt 10 requests / phút: tính thời gian chờ
+        if (this.requestTimestamps.length >= this.maxPerMinute) {
+            const oldest = this.requestTimestamps[0]
+            const waitMs = oldest + 60000 - now + 50
+            if (waitMs > this.maxQueueWaitMs) {
+                console.warn(
+                    `[api-football] Rate limit window full (${this.requestTimestamps.length}/${this.maxPerMinute} reqs/min). Wait time ${waitMs}ms exceeds max wait (${this.maxQueueWaitMs}ms). Falling back to search.`,
+                )
+                return false
+            }
+            if (waitMs > 0) {
+                await new Promise((resolve) => setTimeout(resolve, waitMs))
+            }
+        }
+
+        // 2. Concurrency Throttle: chỉ cho phép maxConcurrency (mặc định 1) request đồng thời
+        if (this.activeCount >= this.maxConcurrency) {
+            await new Promise<void>((resolve) => {
+                this.queue.push(resolve)
+            })
+        }
+
+        // 3. Giãn cách tối thiểu giữa 2 request mạng (chống burst spike)
+        const timeSinceLast = Date.now() - this.lastRequestTime
+        if (timeSinceLast < this.minDelayMs) {
+            await new Promise((resolve) => setTimeout(resolve, this.minDelayMs - timeSinceLast))
+        }
+
+        this.activeCount++
+        const reqTime = Date.now()
+        this.lastRequestTime = reqTime
+        this.requestTimestamps.push(reqTime)
+        return true
+    }
+
+    public release(): void {
+        this.activeCount = Math.max(0, this.activeCount - 1)
+        if (this.queue.length > 0) {
+            const next = this.queue.shift()
+            next?.()
+        }
+    }
+
+    public reset(): void {
+        this.requestTimestamps = []
+        this.activeCount = 0
+        this.lastRequestTime = 0
+        this.queue = []
+    }
+}
+
+export const apiFootballLimiter = new ApiFootballRateLimiter()
 
 /** Kiểm tra xem trận đấu có trong vòng 3 giờ trước/sau giờ thi đấu hay không */
 export function isWithin3HoursOfKickoff(kickoff?: string | null): boolean {
@@ -230,9 +327,11 @@ export async function fetchApiFootballDetailed<T = unknown>(
     const fetchedAt = new Date().toISOString()
     const ttlSec = options.ttlSec ?? 60
 
-    // 0. Quota Guard: Nếu quota bằng 0, dừng gọi ngay lập tức
-    if (currentQuota.remaining !== null && currentQuota.remaining <= 0) {
-        const errorMsg = 'Hết quota API-Football (0 requests remaining)'
+    // 0. Quota Guard: Nếu quota bằng 0 hoặc tài khoản bị khóa, dừng gọi ngay lập tức
+    if (currentQuota.isSuspended || (currentQuota.remaining !== null && currentQuota.remaining <= 0)) {
+        const errorMsg = currentQuota.isSuspended
+            ? (currentQuota.suspendedMessage || currentQuota.message || 'Tài khoản API-Football bị tạm khóa')
+            : 'Hết quota API-Football (0 requests remaining)'
         const res: ApiFootballCallResult<T> = {
             data: null,
             success: false,
@@ -287,61 +386,92 @@ export async function fetchApiFootballDetailed<T = unknown>(
         }
     }
 
-    // 2. Chuẩn bị gọi API-Football
-    const apiKey = (env.apiFootballKey || '32ef4117471d08b60402e551a089faff').trim()
-    const url = `${API_FOOTBALL_BASE_URL}/${pathWithQuery}`
-
-    let httpStatus: number | undefined
-    let rawResponse: Response | null = null
-    let retryAttempts = 0
-    const maxRetries = 1
-
-    while (retryAttempts <= maxRetries) {
-        try {
-            rawResponse = await fetch(url, {
-                headers: {
-                    'x-apisports-key': apiKey,
-                    Accept: 'application/json',
-                },
-            })
-            httpStatus = rawResponse.status
-
-            // Retry CHỈ khi gặp 429 hoặc 5xx
-            if ((httpStatus === 429 || httpStatus >= 500) && retryAttempts < maxRetries) {
-                retryAttempts++
-                await new Promise((r) => setTimeout(r, 600 * retryAttempts))
-                continue
-            }
-            break
-        } catch (netErr) {
-            if (retryAttempts < maxRetries) {
-                retryAttempts++
-                await new Promise((r) => setTimeout(r, 600 * retryAttempts))
-                continue
-            }
-            const errMsg = netErr instanceof Error ? netErr.message : String(netErr)
-            const failResult: ApiFootballCallResult<T> = {
-                data: null,
-                success: false,
-                status: 'ERROR',
-                errorMessage: `Lỗi kết nối API-Football: ${errMsg}`,
-                resultsCount: 0,
-                servedFromCache: false,
-                fetchedAt,
-            }
-            options.auditLogger?.({
-                provider: 'api-football',
-                purpose: options.purpose || cleanEndpoint,
-                requestSummary: pathWithQuery,
-                startTime,
-                durationMs: Date.now() - startTime,
-                resultCount: 0,
-                errorMessage: failResult.errorMessage,
-                servedFromCache: false,
-            })
-            return failResult
+    // 2. Concurrency Throttle & Rate Limiter: Tối đa 10 requests / phút (Free Plan)
+    const acquired = await apiFootballLimiter.acquire()
+    if (!acquired) {
+        const errorMsg = currentQuota.isSuspended
+            ? (currentQuota.suspendedMessage || currentQuota.message || 'Tài khoản API-Football bị tạm khóa')
+            : (currentQuota.remaining !== null && currentQuota.remaining <= 0
+                ? 'Hết quota API-Football (0 requests remaining)'
+                : 'Đã chạm giới hạn tần suất API-Football (10 requests/phút). Đang kích hoạt Web Search Fallback.')
+        const failResult: ApiFootballCallResult<T> = {
+            data: null,
+            success: false,
+            status: 'ERROR',
+            errorMessage: errorMsg,
+            resultsCount: 0,
+            servedFromCache: false,
+            fetchedAt,
         }
+        options.auditLogger?.({
+            provider: 'api-football',
+            purpose: options.purpose || cleanEndpoint,
+            requestSummary: pathWithQuery,
+            startTime,
+            durationMs: Date.now() - startTime,
+            resultCount: 0,
+            errorMessage: errorMsg,
+            servedFromCache: false,
+        })
+        return failResult
     }
+
+    try {
+        // 3. Chuẩn bị gọi API-Football
+        const apiKey = (env.apiFootballKey || '').trim()
+        const url = `${API_FOOTBALL_BASE_URL}/${pathWithQuery}`
+
+        let httpStatus: number | undefined
+        let rawResponse: Response | null = null
+        let retryAttempts = 0
+        const maxRetries = 1
+
+        while (retryAttempts <= maxRetries) {
+            try {
+                rawResponse = await fetch(url, {
+                    headers: {
+                        'x-apisports-key': apiKey,
+                        Accept: 'application/json',
+                    },
+                })
+                httpStatus = rawResponse.status
+
+                // Retry CHỈ khi gặp 429 hoặc 5xx
+                if ((httpStatus === 429 || httpStatus >= 500) && retryAttempts < maxRetries) {
+                    retryAttempts++
+                    await new Promise((r) => setTimeout(r, 600 * retryAttempts))
+                    continue
+                }
+                break
+            } catch (netErr) {
+                if (retryAttempts < maxRetries) {
+                    retryAttempts++
+                    await new Promise((r) => setTimeout(r, 600 * retryAttempts))
+                    continue
+                }
+                const errMsg = netErr instanceof Error ? netErr.message : String(netErr)
+                const failResult: ApiFootballCallResult<T> = {
+                    data: null,
+                    success: false,
+                    status: 'ERROR',
+                    errorMessage: `Lỗi kết nối API-Football: ${errMsg}`,
+                    resultsCount: 0,
+                    servedFromCache: false,
+                    fetchedAt,
+                }
+                options.auditLogger?.({
+                    provider: 'api-football',
+                    purpose: options.purpose || cleanEndpoint,
+                    requestSummary: pathWithQuery,
+                    startTime,
+                    durationMs: Date.now() - startTime,
+                    resultCount: 0,
+                    errorMessage: failResult.errorMessage,
+                    servedFromCache: false,
+                })
+                return failResult
+            }
+        }
 
     if (!rawResponse) {
         return {
@@ -463,9 +593,19 @@ export async function fetchApiFootballDetailed<T = unknown>(
         }
     }
 
-    // 5. Kiểm tra kết quả rỗng (results == 0)
-    const resultsCount = parsedBody.results ?? (Array.isArray(parsedBody.response) ? parsedBody.response.length : 0)
-    if (resultsCount === 0) {
+    // 5. Kiểm tra kết quả rỗng (results == 0 hoặc response là mảng rỗng)
+    const isResponseArray = Array.isArray(parsedBody.response)
+    const hasObjectResponse =
+        !isResponseArray &&
+        parsedBody.response !== null &&
+        typeof parsedBody.response === 'object' &&
+        Object.keys(parsedBody.response as object).length > 0
+    const resultsCount =
+        parsedBody.results !== undefined && parsedBody.results > 0
+            ? parsedBody.results
+            : (isResponseArray ? (parsedBody.response as unknown as unknown[]).length : (hasObjectResponse ? 1 : 0))
+
+    if (resultsCount === 0 && !hasObjectResponse) {
         // TUYỆT ĐỐI KHÔNG cache kết quả rỗng
         options.auditLogger?.({
             provider: 'api-football',
@@ -509,13 +649,16 @@ export async function fetchApiFootballDetailed<T = unknown>(
         servedFromCache: false,
     })
 
-    return {
-        data: payload,
-        success: true,
-        status: 'OK',
-        resultsCount,
-        servedFromCache: false,
-        fetchedAt,
+        return {
+            data: payload,
+            success: true,
+            status: 'OK',
+            resultsCount,
+            servedFromCache: false,
+            fetchedAt,
+        }
+    } finally {
+        apiFootballLimiter.release()
     }
 }
 

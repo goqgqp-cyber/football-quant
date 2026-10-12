@@ -67,6 +67,7 @@ export interface MatchRecord {
     htScore?: { home: number; away: number }
     status: 'FT' | 'AET' | 'PEN' | string
     source: 'api-football' | 'web' | 'manual'
+    fetchedAt?: string
     provenance: {
         source: string
         fetchedAt: string
