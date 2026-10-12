@@ -11,8 +11,10 @@ import {
     getLeagueStandings,
     getTeamRecentFixtures,
     apiFootballLimiter,
+    sanitizeApiFootballKey,
     type ApiFootballFixtureItem,
 } from './apiFootball.js'
+import { parseDotenv } from '../dotenv.js'
 import { testSearchProviderConnection, extractMatchesFromSearchSnippets } from './search.js'
 import { buildProviderSummaries } from './xkiro.js'
 import {
@@ -695,4 +697,38 @@ describe('Antigravity Fix Prompt 2: Data Layer Hardening Tests (Section 6)', () 
         expect(result.quota?.limit).toBe(100)
         expect(result.quota?.perMinute).toBe(9)
     })
+
+    // -------------------------------------------------------------------------
+    // TEST 15: sanitizeApiFootballKey strips leading dash artifacts, bullets, quotes, and whitespace
+    // -------------------------------------------------------------------------
+    it('15. sanitizeApiFootballKey strips leading dash artifacts, bullets, quotes, and whitespace', () => {
+        const expected = 'fcbc53a3d31e0c893167b8da80e7f846'
+        expect(sanitizeApiFootballKey('fcbc53a3d31e0c893167b8da80e7f846')).toBe(expected)
+        expect(sanitizeApiFootballKey('- fcbc53a3d31e0c893167b8da80e7f846')).toBe(expected)
+        expect(sanitizeApiFootballKey('-fcbc53a3d31e0c893167b8da80e7f846')).toBe(expected)
+        expect(sanitizeApiFootballKey('* fcbc53a3d31e0c893167b8da80e7f846')).toBe(expected)
+        expect(sanitizeApiFootballKey('• fcbc53a3d31e0c893167b8da80e7f846')).toBe(expected)
+        expect(sanitizeApiFootballKey('  "fcbc53a3d31e0c893167b8da80e7f846"  ')).toBe(expected)
+        expect(sanitizeApiFootballKey("'- fcbc53a3d31e0c893167b8da80e7f846'")).toBe(expected)
+        expect(sanitizeApiFootballKey(undefined)).toBe('')
+        expect(sanitizeApiFootballKey(null)).toBe('')
+        expect(sanitizeApiFootballKey('')).toBe('')
+    })
+
+    // -------------------------------------------------------------------------
+    // TEST 16: parseDotenv and sanitizeEnvValue properly strip markdown list artifacts from .env
+    // -------------------------------------------------------------------------
+    it('16. parseDotenv and sanitizeEnvValue properly strip markdown list artifacts from .env', () => {
+        const envContent = `
+# Sample env with markdown bullet artifacts
+- API_FOOTBALL_KEY=- fcbc53a3d31e0c893167b8da80e7f846
+* SERPER_API_KEY = "42d9837058349ec9886c385e717ee13b49a33610"
+NORMAL_KEY=clean_value
+`
+        const parsed = parseDotenv(envContent)
+        expect(parsed.API_FOOTBALL_KEY).toBe('fcbc53a3d31e0c893167b8da80e7f846')
+        expect(parsed.SERPER_API_KEY).toBe('42d9837058349ec9886c385e717ee13b49a33610')
+        expect(parsed.NORMAL_KEY).toBe('clean_value')
+    })
 })
+

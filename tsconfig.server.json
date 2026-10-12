@@ -28,5 +28,8 @@
     },
     "include": [
         "server"
+    ],
+    "exclude": [
+        "server/**/*.test.ts"
     ]
 }

@@ -7,17 +7,28 @@ function optional(name: string, fallback: string): string {
     return (process.env[name] || fallback).trim()
 }
 
+function cleanKey(val: string): string {
+    return val
+        .trim()
+        .replace(/^['"]+|['"]+$/g, '')
+        .replace(/^[-*•\s]+/, '')
+        .trim()
+}
+
 /**
  * Tra ve gia tri dau tien khong rong trong danh sach ten bien (nhan nhieu alias).
- * Luon .trim() de tranh trailing whitespace/newline gay HTTP 401 Invalid ClientApiKey
- * khi gui Authorization header len xKiro / cac API ben ngoai.
+ * Luon cleanKey de tranh trailing whitespace/newline hoac dau gach noi markdown "- "
+ * gay HTTP 401/403 khi gui request len cac API ben ngoai.
  */
 function firstOf(names: string[], fallback = ''): string {
     for (const n of names) {
-        const v = process.env[n]?.trim()
-        if (v) return v
+        const v = process.env[n]
+        if (v !== undefined) {
+            const cleaned = cleanKey(v)
+            if (cleaned) return cleaned
+        }
     }
-    return fallback
+    return cleanKey(fallback)
 }
 
 /**
@@ -102,11 +113,11 @@ export const env = {
     ),
 
     /**
-     * API-Football (v3.football.api-sports.io)
+     * API-Football (v3.football.api-sports.io / api-football.com)
      * Header: x-apisports-key
      */
     apiFootballKey: firstOf(
-        ['API_FOOTBALL_KEY', 'API_SPORTS_KEY'],
+        ['API_FOOTBALL_KEY', 'API_SPORTS_KEY', 'VITE_API_FOOTBALL_KEY', 'NEXT_PUBLIC_API_FOOTBALL_KEY'],
         '',
     ),
 

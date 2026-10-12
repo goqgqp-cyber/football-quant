@@ -20,6 +20,19 @@ import type {
 
 export const API_FOOTBALL_BASE_URL = 'https://v3.football.api-sports.io'
 
+/**
+ * Chuẩn hóa và làm sạch API key API-Football:
+ * Loại bỏ khoảng trắng, dấu ngoặc kép/đơn, và tiền tố markdown list (- , * , • )
+ * tránh triệt để lỗi HTTP 403 "Invalid API key".
+ */
+export function sanitizeApiFootballKey(key?: string | null): string {
+    if (!key) return ''
+    return String(key)
+        .trim()
+        .replace(/^['"]+|['"]+$/g, '')
+        .replace(/^[-*•\s]+/, '')
+        .trim()
+}
 export interface ApiFootballResponse<T> {
     get: string
     parameters: Record<string, string | number>
@@ -417,8 +430,31 @@ export async function fetchApiFootballDetailed<T = unknown>(
     }
 
     try {
-        // 3. Chuẩn bị gọi API-Football
-        const apiKey = (env.apiFootballKey || '').trim()
+        // 3. Chuẩn bị gọi API-Football (Direct Web api-football.com)
+        const apiKey = sanitizeApiFootballKey(env.apiFootballKey)
+        if (!apiKey) {
+            const errorMsg = 'API-Football key chưa được cấu hình hoặc rỗng (API_FOOTBALL_KEY missing)'
+            const failResult: ApiFootballCallResult<T> = {
+                data: null,
+                success: false,
+                status: 'ERROR',
+                errorMessage: errorMsg,
+                resultsCount: 0,
+                servedFromCache: false,
+                fetchedAt,
+            }
+            options.auditLogger?.({
+                provider: 'api-football',
+                purpose: options.purpose || cleanEndpoint,
+                requestSummary: pathWithQuery,
+                startTime,
+                durationMs: 0,
+                resultCount: 0,
+                errorMessage: errorMsg,
+                servedFromCache: false,
+            })
+            return failResult
+        }
         const url = `${API_FOOTBALL_BASE_URL}/${pathWithQuery}`
 
         let httpStatus: number | undefined
@@ -488,7 +524,9 @@ export async function fetchApiFootballDetailed<T = unknown>(
     // 3. Đọc quota headers từ response
     const remainingHdr = rawResponse.headers.get('x-ratelimit-requests-remaining')
     const limitHdr = rawResponse.headers.get('x-ratelimit-requests-limit')
-    const perMinuteHdr = rawResponse.headers.get('x-ratelimit-remaining-minute')
+    const perMinuteHdr =
+        rawResponse.headers.get('x-ratelimit-remaining-minute') ||
+        rawResponse.headers.get('x-ratelimit-remaining')
     if (remainingHdr !== null) {
         const rem = parseInt(remainingHdr, 10)
         const lim = limitHdr ? parseInt(limitHdr, 10) : null
@@ -590,6 +628,24 @@ export async function fetchApiFootballDetailed<T = unknown>(
             resultsCount: 0,
             servedFromCache: false,
             fetchedAt,
+        }
+    }
+
+    // Nếu gọi endpoint 'status', trích xuất chi tiết gói cước và request count để cập nhật quota chính xác
+    if (cleanEndpoint === 'status' && parsedBody.response && typeof parsedBody.response === 'object') {
+        const respObj = parsedBody.response as Record<string, unknown>
+        const reqs = respObj.requests as { current?: number; limit_day?: number } | undefined
+        const sub = respObj.subscription as { active?: boolean; plan?: string } | undefined
+        if (reqs && reqs.limit_day !== undefined && reqs.current !== undefined) {
+            const lim = Number(reqs.limit_day)
+            const cur = Number(reqs.current)
+            const rem = !isNaN(lim) && !isNaN(cur) ? Math.max(0, lim - cur) : null
+            setApiFootballQuota({
+                remaining: rem,
+                limit: isNaN(lim) ? null : lim,
+                isSuspended: sub?.active === false,
+                message: sub?.active === false ? 'Tài khoản API-Football đã bị khóa hoặc hết hạn' : undefined,
+            })
         }
     }
 

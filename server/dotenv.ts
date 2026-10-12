@@ -8,21 +8,30 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-function parseDotenv(src: string): Record<string, string> {
+export function sanitizeEnvValue(val: string): string {
+    let value = val.trim()
+    if (
+        (value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))
+    ) {
+        value = value.slice(1, -1).trim()
+    }
+    // Loại bỏ tiền tố rác dạng markdown/bullet point (vd: "- fcbc53...", "* key", "• key")
+    value = value.replace(/^[-*•\s]+/, '').trim()
+    return value
+}
+
+export function parseDotenv(src: string): Record<string, string> {
     const out: Record<string, string> = {}
     for (const raw of src.split('\n')) {
-        const line = raw.trim()
+        let line = raw.trim()
         if (!line || line.startsWith('#')) continue
+        // Bỏ dấu đầu dòng markdown nếu người dùng copy paste cả dòng dạng "- KEY=VALUE"
+        line = line.replace(/^[-*•\s]+/, '').trim()
         const eq = line.indexOf('=')
         if (eq === -1) continue
         const key = line.slice(0, eq).trim()
-        let value = line.slice(eq + 1).trim()
-        if (
-            (value.startsWith('"') && value.endsWith('"')) ||
-            (value.startsWith("'") && value.endsWith("'"))
-        ) {
-            value = value.slice(1, -1)
-        }
+        const value = sanitizeEnvValue(line.slice(eq + 1))
         if (key) out[key] = value
     }
     return out
