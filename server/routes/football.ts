@@ -20,8 +20,33 @@ import {
     searchFootballMatch,
     type ApiFootballFixtureItem,
 } from '../services/apiFootball.js'
+import { getMatchGrounding } from '../services/search.js'
 
 export const footballApp = new Hono()
+
+// GET /api/football/grounding?home=...&away=...&league=...
+footballApp.get('/grounding', async (c) => {
+    const home = c.req.query('home') || ''
+    const away = c.req.query('away') || ''
+    const league = c.req.query('league') || ''
+    const kickoff = c.req.query('kickoff') || ''
+    const force = c.req.query('force') === '1' || c.req.query('force') === 'true'
+
+    if (!home || !away) {
+        return c.json(
+            { error: 'missing_teams', message: 'Vui lòng cung cấp tên hai đội (home & away).' },
+            400,
+        )
+    }
+
+    const grounding = await getMatchGrounding(home, away, {
+        league: league || undefined,
+        kickoff: kickoff || undefined,
+        forceRefresh: force,
+    })
+    return c.json(grounding)
+})
+
 
 // GET /api/football/search?q=... or ?home=...&away=...
 footballApp.get('/search', async (c) => {
@@ -43,6 +68,12 @@ footballApp.get('/search', async (c) => {
     }
 
     const f = match.fixture
+    const kickoffTimestamp = f.fixture?.timestamp
+        ? f.fixture.timestamp * 1000
+        : f.fixture?.date
+            ? new Date(f.fixture.date).getTime()
+            : Date.now()
+
     return c.json({
         found: true,
         eventId: match.fixtureId,
@@ -51,6 +82,7 @@ footballApp.get('/search', async (c) => {
         awayTeam: f.teams?.away?.name,
         league: f.league?.name,
         kickoff: f.fixture?.date,
+        kickoffTimestamp,
         fixture: f,
     })
 })
@@ -142,6 +174,7 @@ footballApp.get('/fixtures/:id/live', async (c) => {
         awayForm: statusData.awayForm,
         league: statusData.league,
         kickoff: statusData.kickoff,
+        kickoffTimestamp: statusData.kickoffTimestamp,
         status: statusData.status,
         statusDescription: statusData.statusDescription,
         minute: statusData.minute,

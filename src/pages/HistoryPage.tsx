@@ -7,6 +7,7 @@ import { ExplanationPanel } from '../components/ExplanationPanel'
 import { settlePick } from '../lib/settle'
 import { ApiError, api, type HistoryItem } from '../lib/api'
 import type { LiveMatchData, SettledPick } from '../lib/types'
+import { getMarketBadge, formatCornerSplit } from '../lib/quant/settlement'
 import {
     getLocalHistory,
     saveLocalHistory,
@@ -34,20 +35,21 @@ const OUTCOME_CLASS: Record<SettledPick['outcome'], string> = {
 }
 
 /** Định dạng giờ thi đấu chuẩn xác (giờ:phút ngày/tháng/năm). */
-export function formatKickoff(isoStr?: string | null): string {
-    if (!isoStr) return 'Chưa có giờ đá'
-    try {
-        const d = new Date(isoStr)
-        if (isNaN(d.getTime())) return isoStr
-        const hours = String(d.getHours()).padStart(2, '0')
-        const mins = String(d.getMinutes()).padStart(2, '0')
-        const day = String(d.getDate()).padStart(2, '0')
-        const month = String(d.getMonth() + 1).padStart(2, '0')
-        const year = d.getFullYear()
-        return `${hours}:${mins} ${day}/${month}/${year}`
-    } catch {
-        return isoStr
+export function formatKickoff(isoStr?: string | null, timestamp?: number | null): string {
+    let d: Date | null = null
+    if (timestamp && !isNaN(timestamp) && timestamp > 0) {
+        d = new Date(timestamp)
+    } else if (isoStr) {
+        const parsed = new Date(isoStr)
+        if (!isNaN(parsed.getTime())) d = parsed
     }
+    if (!d || isNaN(d.getTime())) return 'Chưa có giờ đá'
+    const hours = String(d.getHours()).padStart(2, '0')
+    const mins = String(d.getMinutes()).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    const month = String(d.getMonth() + 1).padStart(2, '0')
+    const year = d.getFullYear()
+    return `${hours}:${mins} ${day}/${month}/${year}`
 }
 
 export function HistoryPage() {
@@ -71,9 +73,9 @@ export function HistoryPage() {
             const deduplicated: HistoryItem[] = []
             for (const item of merged) {
                 const fixId = item.fixtureId || item.meta?.eventId
-                const key = fixId
-                    ? `fix:${fixId}`
-                    : `${(item.meta?.home || '').trim().toLowerCase()}_vs_${(item.meta?.away || '').trim().toLowerCase()}_${item.id}`
+                const home = (item.homeTeam || item.meta?.home || '').trim().toLowerCase()
+                const away = (item.awayTeam || item.meta?.away || '').trim().toLowerCase()
+                const key = fixId ? `fix:${fixId}` : `${home}_vs_${away}`
                 if (!seen.has(key)) {
                     seen.add(key)
                     deduplicated.push(item)
@@ -205,28 +207,51 @@ function HistoryRow({
         return () => clearInterval(timer)
     }, [item.result])
 
-    // Tính toán mốc kết thúc dự kiến (~Phút 100) để bảo vệ quota
+    // Kickoff timestamp
+    const kickoffTimestamp = useMemo(() => {
+        if (item.kickoffTimestamp && !isNaN(item.kickoffTimestamp) && item.kickoffTimestamp > 0) {
+            return item.kickoffTimestamp
+        }
+        if (item.meta.kickoff) {
+            const parsed = new Date(item.meta.kickoff).getTime()
+            if (!isNaN(parsed)) return parsed
+        }
+        return item.createdAt
+    }, [item.kickoffTimestamp, item.meta.kickoff, item.createdAt])
+
+    // Snapshot metadata
     const capturedAt = item.capturedAt || item.createdAt
     const capturedMinute = item.capturedMinute ?? (item.meta.inPlay?.currentMinute ?? (item.meta.inPlay?.isLive ? 45 : 0))
-    const isLive = Boolean(item.isLive ?? item.meta.inPlay?.isLive)
+    const isLive = Boolean(item.isLive ?? (item.meta.inPlay?.isLive || liveData?.status === 'inprogress'))
 
+    // Mốc kết thúc dự kiến (~Phút 100)
     const estimatedFinishAt = useMemo(() => {
         if (isLive && capturedMinute > 0) {
             const remainingMinutes = Math.max(5, 100 - capturedMinute)
             return capturedAt + remainingMinutes * 60 * 1000
         }
-        if (item.meta.kickoff) {
-            const ko = new Date(item.meta.kickoff).getTime()
-            if (!isNaN(ko)) return ko + 115 * 60 * 1000
-        }
-        return capturedAt + 115 * 60 * 1000
-    }, [capturedAt, capturedMinute, isLive, item.meta.kickoff])
+        return kickoffTimestamp + 105 * 60 * 1000
+    }, [capturedAt, capturedMinute, isLive, kickoffTimestamp])
 
-    const isUnderTime = now < estimatedFinishAt
+    // Three-stage State Machine:
+    // 1. Pre-match: now < kickoffTimestamp và chưa đá
+    // 2. In-play: now >= kickoffTimestamp và now < estimatedFinishAt (hoặc đang live)
+    // 3. Post-match: now >= estimatedFinishAt hoặc isFinished
+    const isPreMatch = !isLive && now < kickoffTimestamp
+    const isInPlay = !isPreMatch && now < estimatedFinishAt
+    const isPostMatch = now >= estimatedFinishAt || liveData?.isFinished === true
+
     const isBackedOff = nextRetryAt ? now < nextRetryAt : false
-    const canSettle = !isUnderTime && !isBackedOff
+    const canSettle = isPostMatch && !isBackedOff
 
-    const targetTime = isBackedOff && nextRetryAt ? nextRetryAt : estimatedFinishAt
+    // Countdown target theo giai đoạn
+    let targetTime = estimatedFinishAt
+    if (isPreMatch) {
+        targetTime = kickoffTimestamp
+    } else if (isBackedOff && nextRetryAt) {
+        targetTime = nextRetryAt
+    }
+
     const remainingMs = Math.max(0, targetTime - now)
     const remMin = Math.floor(remainingMs / 60000)
     const remSec = Math.floor((remainingMs % 60000) / 1000)
@@ -286,7 +311,7 @@ function HistoryRow({
     }, [item])
 
     const totalProfit = settled ? settled.reduce((s, x) => s + x.profit, 0) : 0
-    const kickoffLabel = formatKickoff(item.meta.kickoff)
+    const kickoffLabel = formatKickoff(item.meta.kickoff, item.kickoffTimestamp)
 
     const submitManual = async () => {
         setBusy(true)
@@ -377,24 +402,28 @@ function HistoryRow({
 
             {!item.result ? (
                 <div className="mt-3 space-y-3">
-                    {/* Banner chờ kết quả hết trận với Minute-100 Quota Guard Timer */}
+                    {/* Banner ba giai đoạn với Timer Quota Guard */}
                     <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-3 text-xs">
                         <div className="flex flex-wrap items-center gap-2">
                             {isBackedOff ? (
                                 <span className="rounded-md border border-amber-500/40 bg-amber-500/20 px-2.5 py-1 font-semibold text-amber-300">
-                                    ⏳ Đang chờ hồi quota: {countdownStr} còn lại
+                                    ⏳ Đang chờ hồi quota API: {countdownStr} còn lại
                                 </span>
-                            ) : isUnderTime ? (
+                            ) : isPreMatch ? (
+                                <span className="rounded-md border border-indigo-400/40 bg-indigo-500/20 px-2.5 py-1 font-semibold text-indigo-300">
+                                    ⏳ [Stage 1: Pre-Match] Đếm ngược tới giờ bóng lăn: {countdownStr}
+                                </span>
+                            ) : isInPlay ? (
                                 <span className="rounded-md border border-sky-400/40 bg-sky-500/20 px-2.5 py-1 font-semibold text-sky-300">
-                                    ⏳ Chờ hết trận (Phút ~100): {countdownStr} còn lại
+                                    ⚡ [Stage 2: In-Play] Đang đá — Chờ hết trận (~Phút 100): {countdownStr}
                                 </span>
                             ) : (
                                 <span className="rounded-md border border-emerald-400/40 bg-emerald-500/20 px-2.5 py-1 font-semibold text-emerald-300">
-                                    🔔 Đã đủ thời gian thi đấu (Phút 100+)
+                                    🔔 [Stage 3: Post-Match] Đã đủ thời gian thi đấu — Mở khóa đối soát
                                 </span>
                             )}
                             <span className="text-neutral-400">
-                                (Minute-100 Quota Guard · 0 API Cost khi đếm ngược)
+                                (Timer Quota Guard · 0 API Cost khi đếm ngược)
                             </span>
                         </div>
                         <button
@@ -402,11 +431,13 @@ function HistoryRow({
                             onClick={() => void checkLiveAndAutoSettle()}
                             disabled={!canSettle || checkingLive}
                             title={
-                                isUnderTime
-                                    ? 'Trận đấu đang diễn ra. Mở đối soát khi hết giờ để tiết kiệm quota.'
-                                    : isBackedOff
-                                        ? 'Đang chờ hồi quota 10 phút sau khi kiểm tra trận chưa kết thúc.'
-                                        : 'Kiểm tra tỷ số FT chính thức từ API-Football và đối soát kết quả'
+                                isPreMatch
+                                    ? 'Trận đấu chưa bắt đầu (Pre-match). Khóa đối soát để bảo vệ quota.'
+                                    : isInPlay
+                                        ? 'Trận đấu đang diễn ra. Chờ hết trận (~Phút 100) để đối soát nhằm tiết kiệm quota.'
+                                        : isBackedOff
+                                            ? 'Đang chờ hồi quota 10 phút sau khi kiểm tra trận chưa kết thúc.'
+                                            : 'Kiểm tra tỷ số FT chính thức từ API-Football và đối soát kết quả'
                             }
                             className={`rounded-lg px-3 py-1.5 font-semibold transition flex items-center gap-1.5 ${
                                 canSettle && !checkingLive
@@ -414,7 +445,15 @@ function HistoryRow({
                                     : 'bg-white/5 text-neutral-500 border border-white/5 cursor-not-allowed'
                             }`}
                         >
-                            {checkingLive ? 'Đang đối soát…' : 'Đối soát kết quả'}
+                            {checkingLive
+                                ? 'Đang đối soát…'
+                                : isPreMatch
+                                    ? 'Chưa đá (Khóa)'
+                                    : isInPlay
+                                        ? 'Đang đá (Chờ FT)'
+                                        : isBackedOff
+                                            ? 'Đang hồi quota'
+                                            : 'Đối soát kết quả'}
                         </button>
                     </div>
 
@@ -434,6 +473,9 @@ function HistoryRow({
                                 {item.picks.map((p, idx) => (
                                     <tr key={idx} className="hover:bg-white/[0.02]">
                                         <td className="px-3 py-2 font-medium text-white">
+                                            <span className="inline-block mr-1.5 px-2 py-0.5 rounded text-[10px] font-bold bg-white/10 text-neutral-300 border border-white/10">
+                                                {getMarketBadge(p.kind, p.period)}
+                                            </span>
                                             <span className="font-bold text-sky-300">
                                                 {formatPickTitle(p, item.meta.home, item.meta.away)}
                                             </span>
@@ -504,7 +546,7 @@ function HistoryRow({
                             </strong>
                             {item.result.cornersHome !== undefined && (
                                 <span className="ml-2 text-amber-300 font-mono">
-                                    (Góc: {item.result.cornersHome + (item.result.cornersAway ?? 0)})
+                                    ({formatCornerSplit(item.result.cornersHome, item.result.cornersAway)})
                                 </span>
                             )}
                         </span>
@@ -530,6 +572,9 @@ function HistoryRow({
                                 {settled?.map((s, idx) => (
                                     <tr key={idx} className="hover:bg-white/[0.02]">
                                         <td className="px-3 py-2 font-medium text-white">
+                                            <span className="inline-block mr-1.5 px-2 py-0.5 rounded text-[10px] font-bold bg-white/10 text-neutral-300 border border-white/10">
+                                                {getMarketBadge(s.pick.kind, s.pick.period)}
+                                            </span>
                                             <span className="text-sky-300 font-bold">
                                                 {formatPickTitle(s.pick, item.meta.home, item.meta.away)}
                                             </span>

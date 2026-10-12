@@ -5,12 +5,30 @@ import { AnimatedNumber } from '../components/ui/AnimatedNumber'
 import { Button } from '../components/ui/Button'
 import { CALIBRATION_MIN_PICKS, brierScore, binLabel } from '../lib/settle'
 import { ApiError, api, type HistoryItem, type StatsResponse } from '../lib/api'
-import { formatKickoff } from './HistoryPage'
+
+/** Định dạng giờ thi đấu chuẩn xác: Đá lúc: HH:mm dd/MM/yyyy */
+export function formatKickoffDisplay(timestamp?: number | null, isoStr?: string | null): string {
+    let d: Date | null = null
+    if (timestamp && !isNaN(timestamp) && timestamp > 0) {
+        d = new Date(timestamp)
+    } else if (isoStr) {
+        const parsed = new Date(isoStr)
+        if (!isNaN(parsed.getTime())) d = parsed
+    }
+
+    if (!d || isNaN(d.getTime())) return 'Chưa có giờ đá'
+    const hours = String(d.getHours()).padStart(2, '0')
+    const mins = String(d.getMinutes()).padStart(2, '0')
+    const day = String(d.getDate()).padStart(2, '0')
+    const month = String(d.getMonth() + 1).padStart(2, '0')
+    const year = d.getFullYear()
+    return `Đá lúc: ${hours}:${mins} ${day}/${month}/${year}`
+}
 
 /**
  * Trang Hiệu suất (Performance) — nạp danh sách các trận đã settle từ Upstash Redis
- * để tính tỷ lệ Win Rate (%), ROI, và tổng số trận đoán đúng/sai.
- * Chỉ tính vào Win Rate và ROI đối với các trận ĐÃ KẾT THÚC và đã có kết quả đối soát.
+ * để tính tỷ lệ Win Rate (%), và tổng số trận đoán đúng/sai.
+ * Chỉ tính vào Win Rate đối với các trận ĐÃ KẾT THÚC và đã có kết quả đối soát.
  */
 export function PerformancePage() {
     const [stats, setStats] = useState<StatsResponse | null>(null)
@@ -41,23 +59,27 @@ export function PerformancePage() {
 
     const settled = stats?.settled ?? []
     const staked = useMemo(() => settled.filter((s) => s.pick.stakePct > 0), [settled])
-    const nPicks = staked.length
+    const totalSettled = staked.length
 
-    const winsCount = stats?.winsCount ?? staked.filter((s) => s.outcome === 'win' || s.outcome === 'win_half').length
-    const lossesCount = stats?.lossesCount ?? staked.filter((s) => s.outcome === 'lose' || s.outcome === 'lose_half').length
-    const pushesCount = stats?.pushesCount ?? staked.filter((s) => s.outcome === 'push').length
+    const winFull = staked.filter((s) => s.outcome === 'win').length
+    const winHalf = staked.filter((s) => s.outcome === 'win_half').length
+    const winsCount = winFull + winHalf
+    const lossesFull = staked.filter((s) => s.outcome === 'lose').length
+    const lossesHalf = staked.filter((s) => s.outcome === 'lose_half').length
+    const lossesCount = lossesFull + lossesHalf
+    const pushesCount = staked.filter((s) => s.outcome === 'push').length
 
-    const winRate = stats?.winRate ?? (nPicks ? (winsCount / nPicks) * 100 : 0)
+    // TỶ LỆ THẮNG (WIN RATE): (Total Wins + 0.5 * WinHalf) / Total Settled * 100%
+    const winRate = totalSettled > 0 ? ((winFull + 0.5 * winHalf) / totalSettled) * 100 : 0
     const profit = stats?.profit ?? 0
-    const stakedTotal = staked.reduce((sum, s) => sum + s.pick.stakePct, 0)
-    const roi = stats?.roi ?? (stakedTotal ? (profit / stakedTotal) * 100 : 0)
+    const nPicks = totalSettled
 
     const settledMatches = useMemo(() => {
         const list = stats?.settledMatches ?? []
         const seen = new Set<string>()
         const out: typeof list = []
         for (const m of list) {
-            const key = m.eventId ? `fix:${m.eventId}` : m.recordId ? `rec:${m.recordId}` : `${m.home.trim().toLowerCase()}_${m.away.trim().toLowerCase()}`
+            const key = m.fixtureId ? `fix:${m.fixtureId}` : m.eventId ? `fix:${m.eventId}` : m.recordId ? `rec:${m.recordId}` : `${(m.home || m.homeTeam || '').trim().toLowerCase()}_${(m.away || m.awayTeam || '').trim().toLowerCase()}`
             if (!seen.has(key)) {
                 seen.add(key)
                 out.push(m)
@@ -65,7 +87,17 @@ export function PerformancePage() {
         }
         return out
     }, [stats?.settledMatches])
-    const pendingMatches = useMemo(() => historyItems.filter((h) => h.result == null), [historyItems])
+
+    // Lọc bỏ hoàn toàn các trận đã kết thúc (FT, AET, PEN), đã có kết quả hoặc settled
+    const pendingMatches = useMemo(() => {
+        return historyItems.filter((h) => {
+            if (h.result != null) return false
+            if (h.settled === true) return false
+            const statusUpper = (h.status || '').toUpperCase()
+            if (['FT', 'AET', 'PEN', 'FINISHED'].includes(statusUpper)) return false
+            return true
+        })
+    }, [historyItems])
 
     const bins = useMemo(() => stats?.calibration ?? [], [stats])
     const brier = useMemo(
@@ -73,7 +105,7 @@ export function PerformancePage() {
         [staked],
     )
 
-    const enough = nPicks >= CALIBRATION_MIN_PICKS
+    const enough = totalSettled >= CALIBRATION_MIN_PICKS
 
     return (
         <div className="flex flex-col gap-5">
@@ -95,40 +127,26 @@ export function PerformancePage() {
                 </GlassCard>
             )}
 
-            {/* 4 Chỉ số quan trọng: Win Rate, ROI, Lợi nhuận, Tỷ lệ Thắng/Hòa/Thua */}
-            <div className="grid gap-3 sm:grid-cols-4">
+            {/* 2 Chỉ số cốt lõi: TỶ LỆ THẮNG (WIN RATE) & KẾT QUẢ TỔNG THỂ */}
+            <div className="grid gap-4 sm:grid-cols-2">
                 <Stat
-                    label="Tỷ lệ thắng (Win Rate)"
+                    label="TỶ LỆ THẮNG (WIN RATE)"
                     value={winRate}
                     digits={1}
                     suffix="%"
                     tone={winRate >= 50 ? 'value' : 'default'}
                 />
-                <Stat
-                    label="ROI (Lợi suất vốn)"
-                    value={roi}
-                    digits={2}
-                    suffix="%"
-                    tone={roi >= 0 ? 'value' : 'danger'}
-                />
-                <Stat
-                    label="Lợi nhuận cộng dồn"
-                    value={profit}
-                    digits={2}
-                    suffix=" đv"
-                    tone={profit >= 0 ? 'value' : 'danger'}
-                />
                 <GlassCard>
-                    <p className="text-xs uppercase tracking-wider text-neutral-400">Kết quả tổng thể</p>
+                    <p className="text-xs uppercase tracking-wider text-neutral-400 font-bold">KẾT QUẢ TỔNG THỂ</p>
                     <div className="mt-2 flex items-baseline gap-2">
-                        <span className="font-mono text-2xl font-black text-emerald-400">{winsCount}W</span>
+                        <span className="font-mono text-2xl font-black text-emerald-400">[{winsCount}]W</span>
                         <span className="text-neutral-500 font-bold">·</span>
-                        <span className="font-mono text-2xl font-black text-neutral-400">{pushesCount}P</span>
+                        <span className="font-mono text-2xl font-black text-neutral-400">[{pushesCount}]P</span>
                         <span className="text-neutral-500 font-bold">·</span>
-                        <span className="font-mono text-2xl font-black text-rose-400">{lossesCount}L</span>
+                        <span className="font-mono text-2xl font-black text-rose-400">[{lossesCount}]L</span>
                     </div>
-                    <p className="mt-1 text-[11px] text-neutral-500">
-                        {winsCount} Thắng · {pushesCount} Hòa · {lossesCount} Thua (Đã xong)
+                    <p className="mt-1 text-[11px] text-neutral-400 font-medium">
+                        {winsCount} Thắng · {pushesCount} Hòa · {lossesCount} Thua (Đã đối soát)
                     </p>
                 </GlassCard>
             </div>
@@ -173,12 +191,12 @@ export function PerformancePage() {
                                                 {m.meta.league}
                                             </span>
                                         )}
-                                        <span className="text-xs text-neutral-500">
-                                            · 🕒 {formatKickoff(m.meta.kickoff)}
+                                        <span className="text-xs text-neutral-400 font-mono">
+                                            · 🕒 {formatKickoffDisplay(m.kickoffTimestamp, m.meta.kickoff)}
                                         </span>
                                     </div>
-                                    <span className="rounded-full border border-amber-400/40 bg-amber-500/15 px-2 py-0.5 text-[11px] font-semibold text-amber-300">
-                                        ⏳ Đang theo dõi (Chưa tính vào ROI)
+                                    <span className="rounded-full border border-amber-400/40 bg-amber-500/15 px-2.5 py-0.5 text-[11px] font-semibold text-amber-300">
+                                        ⏳ Đang theo dõi
                                     </span>
                                 </div>
                                 <div className="mt-2.5 flex flex-wrap items-center justify-between gap-2 text-xs">

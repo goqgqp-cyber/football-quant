@@ -403,6 +403,11 @@ export interface HistoryItem {
     fixtureId?: number | null
     estimatedFinishAt?: number
     nextRetryAt?: number
+    homeTeam?: string
+    awayTeam?: string
+    kickoffTimestamp?: number | null
+    status?: string
+    settled?: boolean
 }
 
 export interface StatsResponse {
@@ -563,6 +568,29 @@ export const api = {
             `/football/search?q=${encodeURIComponent(q)}&home=${encodeURIComponent(homeTeam)}&away=${encodeURIComponent(awayTeam)}`,
         )
     },
+
+    /** Đối soát dữ liệu thực tế (lineup, chấn thương) qua Multi-Tier Search Failover */
+    footballGrounding: (home: string, away: string, league?: string) =>
+        apiFetch<{
+            provider: 'serper' | 'tavily' | 'brave' | 'duckduckgo'
+            tier: 1 | 2 | 3 | 4
+            query: string
+            latencyMs: number
+            lineupConfirmedHint: boolean
+            injuriesHint: string[]
+            groundingText: string
+            sources: Array<{ url: string; title: string; fetched_at: string }>
+            fallbacksAttempted: Array<{
+                provider: string
+                reason: string
+                statusCode?: number
+                latencyMs: number
+            }>
+            error?: string
+        }>(
+            `/football/grounding?home=${encodeURIComponent(home)}&away=${encodeURIComponent(away)}${league ? `&league=${encodeURIComponent(league)}` : ''}`,
+        ),
+
 
     /** Lấy lịch sử đối đầu (H2H) từ API-Football */
     footballH2H: (fixtureId: number | string) =>

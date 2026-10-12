@@ -28,6 +28,12 @@ export interface HistoryRecord {
             currentScore?: { home: number; away: number } | null
         } | null
     }
+    fixtureId?: number | null
+    homeTeam?: string
+    awayTeam?: string
+    kickoffTimestamp?: number | null
+    status?: string
+    settled?: boolean
     /** Input thuần (dùng để tính lại khi cần). */
     analysis: AnalysisResult
     /** Các pick đã sinh ra (snapshot tại thời điểm phân tích). */
@@ -46,15 +52,51 @@ export async function saveHistory(
     userId: string,
     record: Omit<HistoryRecord, 'id' | 'createdAt'>,
 ): Promise<HistoryRecord> {
-    const id = `h_${randomUUID().slice(0, 8)}_${keyHash(String(Date.now()))}`
-    // LỌC BỎ các kèo tỷ lệ thấp, edge âm hoặc không đủ chuẩn.
-    // CHỈ LƯU các pick đạt chuẩn khuyến nghị: Edge >= 5%, EV > 0, Odds >= 1.50, độ tin cậy từ Trung bình trở lên (tối đa 2 pick chính).
     const qualifiedPicks = filterRecommendedPicks(record.picks || [])
+    const targetFixId = record.fixtureId || record.meta.eventId
+    const targetHome = (record.homeTeam || record.meta.home || '').trim().toLowerCase()
+    const targetAway = (record.awayTeam || record.meta.away || '').trim().toLowerCase()
+
+    // Kiểm tra bản ghi trùng lặp trong lịch sử hiện tại
+    const existingRows = await listHistory(userId, 100)
+    const existing = existingRows.find((x) => {
+        const xFixId = x.fixtureId || x.meta?.eventId
+        if (targetFixId && xFixId && Number(xFixId) === Number(targetFixId)) return true
+        const xHome = (x.homeTeam || x.meta?.home || '').trim().toLowerCase()
+        const xAway = (x.awayTeam || x.meta?.away || '').trim().toLowerCase()
+        if (targetHome && targetAway && xHome === targetHome && xAway === targetAway) return true
+        return false
+    })
+
+    if (existing) {
+        // Cập nhật đè lên bản ghi cũ (1 match = 1 unique record)
+        const updatedRow: HistoryRecord = {
+            ...record,
+            id: existing.id,
+            createdAt: existing.createdAt,
+            picks: qualifiedPicks,
+            fixtureId: targetFixId ? Number(targetFixId) : existing.fixtureId,
+            homeTeam: record.homeTeam || record.meta.home,
+            awayTeam: record.awayTeam || record.meta.away,
+            kickoffTimestamp: record.kickoffTimestamp || existing.kickoffTimestamp,
+            status: record.status || existing.status || (record.result ? 'finished' : 'notstarted'),
+            settled: record.settled ?? (record.result != null),
+        }
+        await redis.set(keys.historyItem(userId, existing.id), updatedRow)
+        return updatedRow
+    }
+
+    const id = `h_${randomUUID().slice(0, 8)}_${keyHash(String(Date.now()))}`
     const row: HistoryRecord = {
         ...record,
         id,
         createdAt: Date.now(),
         picks: qualifiedPicks,
+        fixtureId: targetFixId ? Number(targetFixId) : undefined,
+        homeTeam: record.homeTeam || record.meta.home,
+        awayTeam: record.awayTeam || record.meta.away,
+        status: record.status || (record.result ? 'finished' : 'notstarted'),
+        settled: record.settled ?? (record.result != null),
     }
     await redis.set(keys.historyItem(userId, id), row)
     await redis.lpush(keys.historyIds(userId), id)
@@ -62,13 +104,29 @@ export async function saveHistory(
 }
 
 export async function listHistory(userId: string, limit = 100): Promise<HistoryRecord[]> {
-    const raw: unknown = await redis.lrange(keys.historyIds(userId), 0, limit - 1)
+    const raw: unknown = await redis.lrange(keys.historyIds(userId), 0, Math.max(limit * 3, 200))
     const ids = (Array.isArray(raw) ? raw : []) as string[]
     if (ids.length === 0) return []
     const rows = await Promise.all(
         ids.map(async (id) => (await redis.get(keys.historyItem(userId, id))) as unknown as HistoryRecord | null),
     )
-    return rows.filter((r): r is HistoryRecord => r != null)
+
+    // Deduplicate triệt để: 1 fixture = 1 unique row
+    const seen = new Set<string>()
+    const deduplicated: HistoryRecord[] = []
+    for (const r of rows) {
+        if (!r) continue
+        const fixId = r.fixtureId || r.meta?.eventId
+        const h = (r.homeTeam || r.meta?.home || '').trim().toLowerCase()
+        const a = (r.awayTeam || r.meta?.away || '').trim().toLowerCase()
+        const key = fixId ? `fix:${fixId}` : h && a ? `${h}_vs_${a}` : `id:${r.id}`
+        if (!seen.has(key)) {
+            seen.add(key)
+            deduplicated.push(r)
+        }
+        if (deduplicated.length >= limit) break
+    }
+    return deduplicated
 }
 
 export async function getHistoryItem(
@@ -80,10 +138,11 @@ export async function getHistoryItem(
 
 /** Lưu bản ghi trận đấu đã settle vĩnh viễn vào Redis danh sách settled_matches (Zero Duplicate) */
 export async function saveSettledMatch(record: SettledMatchRecord): Promise<void> {
-    const fixId = record.eventId || (record.id && !isNaN(Number(record.id)) ? Number(record.id) : undefined)
+    const fixId = record.fixtureId || record.eventId || (record.id && !isNaN(Number(record.id)) ? Number(record.id) : undefined)
     const existing = await listSettledMatches(150)
     const isDup = existing.some((x) => {
-        if (fixId && x.eventId && x.eventId === fixId) return true
+        const xFixId = x.fixtureId || x.eventId
+        if (fixId && xFixId && xFixId === fixId) return true
         if (record.recordId && x.recordId && x.recordId === record.recordId) return true
         if (record.id && x.id && x.id === record.id) return true
         if (
@@ -118,15 +177,26 @@ export async function listSettledMatches(limit = 100): Promise<SettledMatchRecor
         if (!item) continue
         try {
             const obj = (typeof item === 'string' ? JSON.parse(item) : item) as SettledMatchRecord
-            if (obj && obj.home && obj.away) {
-                const uniqueKey = obj.eventId
-                    ? `fix:${obj.eventId}`
+            if (obj && (obj.home || obj.homeTeam) && (obj.away || obj.awayTeam)) {
+                const homeName = (obj.homeTeam || obj.home || '').trim().toLowerCase()
+                const awayName = (obj.awayTeam || obj.away || '').trim().toLowerCase()
+                const fixId = obj.fixtureId || obj.eventId
+                const uniqueKey = fixId
+                    ? `fix:${fixId}`
                     : obj.recordId
                         ? `rec:${obj.recordId}`
-                        : `${obj.home.trim().toLowerCase()}_vs_${obj.away.trim().toLowerCase()}`
+                        : `${homeName}_vs_${awayName}`
                 if (!seen.has(uniqueKey)) {
                     seen.add(uniqueKey)
-                    records.push(obj)
+                    records.push({
+                        ...obj,
+                        home: obj.home || obj.homeTeam || '',
+                        away: obj.away || obj.awayTeam || '',
+                        homeTeam: obj.homeTeam || obj.home,
+                        awayTeam: obj.awayTeam || obj.away,
+                        fixtureId: fixId ? Number(fixId) : undefined,
+                        settled: true,
+                    })
                 }
             }
         } catch {
@@ -169,6 +239,8 @@ export async function settleHistory(
         settledAt: Date.now(),
     }
     row.result = actual
+    row.status = 'finished'
+    row.settled = true
     await redis.set(keys.historyItem(userId, id), row)
 
     // Chấm điểm từng pick
@@ -199,14 +271,22 @@ export async function settleHistory(
     const summaryOutcome: 'win' | 'push' | 'lose' =
         winCount > loseCount ? 'win' : loseCount > winCount ? 'lose' : 'push'
 
+    const fixId = r.eventId || row.fixtureId || row.meta.eventId
     const settledMatch: SettledMatchRecord = {
         id: `sm_${id}_${Date.now()}`,
         userId,
         recordId: id,
-        eventId: r.eventId,
+        eventId: fixId ? Number(fixId) : undefined,
+        fixtureId: fixId ? Number(fixId) : undefined,
         home: row.meta.home,
         away: row.meta.away,
+        homeTeam: row.homeTeam || row.meta.home,
+        awayTeam: row.awayTeam || row.meta.away,
         league: row.meta.league,
+        kickoff: row.meta.kickoff || undefined,
+        kickoffTimestamp: row.kickoffTimestamp || undefined,
+        status: 'finished',
+        settled: true,
         settledAt: Date.now(),
         score: {
             htHome: actual.htHome,

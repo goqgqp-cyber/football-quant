@@ -260,6 +260,8 @@ export function AnalyzePage() {
                             // Lưu ngay vào LocalStorage và phát event để tab Lịch sử hiển thị lập tức
                             try {
                                 const recPicks = filterRecommendedPicks(e.result.picks)
+                                const parsedKo = kof ? new Date(kof).getTime() : NaN
+                                const kickoffTimestamp = !isNaN(parsedKo) ? parsedKo : Date.now()
                                 prependLocalHistoryItem({
                                     id: e.recordId,
                                     createdAt: Date.now(),
@@ -271,6 +273,11 @@ export function AnalyzePage() {
                                         eventId: evId,
                                         inPlay,
                                     },
+                                    homeTeam: h,
+                                    awayTeam: a,
+                                    kickoffTimestamp,
+                                    status: inPlay?.isLive ? 'inprogress' : 'notstarted',
+                                    settled: false,
                                     analysis: e.result,
                                     picks: recPicks,
                                     result: null,

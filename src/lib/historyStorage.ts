@@ -11,17 +11,37 @@ export function getLocalHistory(): HistoryItem[] {
         const parsed = JSON.parse(raw)
         if (!Array.isArray(parsed)) return []
 
-        // Deduplicate: 1 fixture = 1 unique entry
+        // Deduplicate: 1 fixture = 1 unique entry (loại bỏ triệt để các bản ghi trùng lặp)
         const seen = new Set<string>()
         const deduplicated: HistoryItem[] = []
-        for (const item of parsed) {
-            const fixId = item.fixtureId || item.meta?.eventId
-            const key = fixId
-                ? `fix:${fixId}`
-                : `${(item.meta?.home || '').trim().toLowerCase()}_vs_${(item.meta?.away || '').trim().toLowerCase()}_${item.id}`
+        for (const rawItem of parsed) {
+            if (!rawItem) continue
+            const fixId = rawItem.fixtureId || rawItem.meta?.eventId
+            const home = rawItem.homeTeam || rawItem.meta?.home || ''
+            const away = rawItem.awayTeam || rawItem.meta?.away || ''
+            const normHome = home.trim().toLowerCase()
+            const normAway = away.trim().toLowerCase()
+            const key = fixId ? `fix:${fixId}` : `${normHome}_vs_${normAway}`
+
             if (!seen.has(key)) {
                 seen.add(key)
-                deduplicated.push(item)
+                let kickoffTimestamp = rawItem.kickoffTimestamp
+                if (!kickoffTimestamp && rawItem.meta?.kickoff) {
+                    const parsedKo = new Date(rawItem.meta.kickoff).getTime()
+                    if (!isNaN(parsedKo)) kickoffTimestamp = parsedKo
+                }
+                const isSettled = rawItem.settled === true || rawItem.result != null
+                const status = rawItem.status || (isSettled ? 'finished' : (rawItem.isLive ? 'inprogress' : 'notstarted'))
+
+                deduplicated.push({
+                    ...rawItem,
+                    fixtureId: fixId ? Number(fixId) : undefined,
+                    homeTeam: home,
+                    awayTeam: away,
+                    kickoffTimestamp: kickoffTimestamp || rawItem.createdAt || Date.now(),
+                    status,
+                    settled: isSettled,
+                })
             }
         }
         return deduplicated
@@ -44,25 +64,39 @@ export function prependLocalHistoryItem(item: HistoryItem): void {
     try {
         const current = getLocalHistory()
         const targetFixId = item.fixtureId || item.meta?.eventId
+        const targetHome = (item.homeTeam || item.meta?.home || '').trim().toLowerCase()
+        const targetAway = (item.awayTeam || item.meta?.away || '').trim().toLowerCase()
+
+        let kickoffTimestamp = item.kickoffTimestamp
+        if (!kickoffTimestamp && item.meta?.kickoff) {
+            const parsedKo = new Date(item.meta.kickoff).getTime()
+            if (!isNaN(parsedKo)) kickoffTimestamp = parsedKo
+        }
+
+        const normalizedItem: HistoryItem = {
+            ...item,
+            fixtureId: targetFixId ? Number(targetFixId) : undefined,
+            homeTeam: item.homeTeam || item.meta?.home,
+            awayTeam: item.awayTeam || item.meta?.away,
+            kickoffTimestamp: kickoffTimestamp || item.createdAt || Date.now(),
+            status: item.status || (item.result ? 'finished' : item.isLive ? 'inprogress' : 'notstarted'),
+            settled: item.settled ?? (item.result != null),
+        }
+
         const filtered = current.filter((x) => {
-            if (x.id === item.id) return false
+            if (x.id === normalizedItem.id) return false
             const xFixId = x.fixtureId || x.meta?.eventId
-            if (targetFixId && xFixId && xFixId === targetFixId) return false
-            if (
-                x.meta?.home &&
-                item.meta?.home &&
-                x.meta?.away &&
-                item.meta?.away &&
-                x.meta.home.trim().toLowerCase() === item.meta.home.trim().toLowerCase() &&
-                x.meta.away.trim().toLowerCase() === item.meta.away.trim().toLowerCase()
-            ) {
+            if (targetFixId && xFixId && Number(xFixId) === Number(targetFixId)) return false
+            const xHome = (x.homeTeam || x.meta?.home || '').trim().toLowerCase()
+            const xAway = (x.awayTeam || x.meta?.away || '').trim().toLowerCase()
+            if (targetHome && targetAway && xHome === targetHome && xAway === targetAway) {
                 return false
             }
             return true
         })
-        const updated = [item, ...filtered].slice(0, 150)
+        const updated = [normalizedItem, ...filtered].slice(0, 150)
         saveLocalHistory(updated)
-        window.dispatchEvent(new CustomEvent(HISTORY_UPDATE_EVENT, { detail: item }))
+        window.dispatchEvent(new CustomEvent(HISTORY_UPDATE_EVENT, { detail: normalizedItem }))
     } catch {
         /* ignore */
     }

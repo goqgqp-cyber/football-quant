@@ -125,13 +125,28 @@ export function factLabels(facts: Fact[]): Record<string, string> {
     return (facts as FactBag).labels ?? {}
 }
 
-/** Thay mọi token `{{U..}}` trong văn bản bằng giá trị thật. */
+/** Thay mọi token `{{U..}}` và các token định danh `{LAMBDA_HOME}`, `{{LAMBDA_HOME}}` trong văn bản bằng giá trị thật. */
 export function substituteFacts(text: string, facts: Fact[]): string {
     let out = text
+    const bag = facts as FactBag
+    const labels = bag.labels ?? {}
+
+    // 1. Thay thế trực tiếp các nhãn có tên nếu AI viết dạng {TOKEN} hoặc {{TOKEN}}
+    for (const [key, val] of Object.entries(labels)) {
+        const matchingFact = facts.find((f) => f.token === val)
+        const displayValue = matchingFact ? matchingFact.value : val
+        out = out.split(`{{${key}}}`).join(displayValue)
+        out = out.split(`{${key}}`).join(displayValue)
+    }
+
+    // 2. Thay thế các token ẩn {{U1}}, {{U2}}...
     for (const f of facts) {
         out = out.split(f.token).join(f.value)
     }
-    // Dọn token lạ còn sót (model bịa token) — bỏ hẳn để không lộ {{U..}} ra UI
+
+    // 3. Dọn triệt để mọi token lạ/rò rỉ còn sót ({{LAMBDA_...}}, {TOP1_...}, {{U...}}) để không bao giờ lộ ra UI
+    out = out.replace(/\{\{+[A-Za-z0-9_]+\}\}+/g, '—')
+    out = out.replace(/\{[A-Za-z0-9_]{3,}\}/g, '—')
     out = out.replace(/\{\{U\d+\}\}/g, '—')
     return out
 }

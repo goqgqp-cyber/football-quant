@@ -63,6 +63,17 @@ describe('substituteFacts', () => {
     it('xoá token lạ do model bịa (không lộ {{U..}} ra UI)', () => {
         expect(substituteFacts('a {{U999}} b', facts)).toBe('a — b')
     })
+
+    it('thay thế trực tiếp các nhãn có tên {{LAMBDA_HOME}} và {LAMBDA_HOME}', () => {
+        const out = substituteFacts('λ: {{LAMBDA_HOME}} vs {LAMBDA_AWAY}', facts)
+        expect(out).toBe(`λ: ${valueOf(labels.LAMBDA_HOME)} vs ${valueOf(labels.LAMBDA_AWAY)}`)
+        expect(out).not.toContain('{{LAMBDA_HOME}}')
+        expect(out).not.toContain('{LAMBDA_AWAY}')
+    })
+
+    it('dọn triệt để token rò rỉ chưa được gán nhãn', () => {
+        expect(substituteFacts('test {{UNKNOWN_TOKEN}} leak {RANDOM_LEAK}', facts)).toBe('test — leak —')
+    })
 })
 
 describe('verifyNumbers', () => {

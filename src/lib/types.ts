@@ -92,6 +92,7 @@ export type Confidence = 'high' | 'medium' | 'low'
 export interface Pick {
     oddsLineId: string
     kind: MarketKind
+    period?: 'ft' | 'ht' | string
     side: string
     line: number
     odds: number
@@ -251,6 +252,7 @@ export interface LiveMatchData {
     events?: MatchEventItem[]
     isFinished: boolean
     kickoff?: string
+    kickoffTimestamp?: number
     lastUpdated: number
 }
 
@@ -261,9 +263,16 @@ export interface SettledMatchRecord {
     userId?: string
     recordId?: string
     eventId?: number
+    fixtureId?: number
     home: string
     away: string
+    homeTeam?: string
+    awayTeam?: string
     league?: string
+    kickoff?: string
+    kickoffTimestamp?: number
+    status?: string
+    settled?: boolean
     settledAt: number
     score: { htHome: number; htAway: number; ftHome: number; ftAway: number }
     corners?: { home: number; away: number; total: number }

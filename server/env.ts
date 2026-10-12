@@ -110,6 +110,23 @@ export const env = {
         '32ef4117471d08b60402e551a089faff',
     ),
 
+    /**
+     * Multi-Tier Search Failover Credentials (Serper -> Tavily -> Brave -> DuckDuckGo)
+     */
+    serperApiKey: firstOf(
+        ['SERPER_API_KEY'],
+        '42d9837058349ec9886c385e717ee13b49a33610',
+    ),
+    tavilyApiKey: firstOf(
+        ['TAVILY_API_KEY'],
+        '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',
+    ),
+    braveApiKey: firstOf(
+        ['BRAVE_SEARCH_API_KEY', 'BRAVE_API_KEY'],
+        'BSARDBF9RQ1mIP3PQN7X1LfQ5jzGG_x',
+    ),
+
+
     storeOriginalImages: bool('STORE_ORIGINAL_IMAGES', false),
 
     /** Origin frontend duoc phep goi API (dung cho CORS). */

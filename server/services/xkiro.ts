@@ -22,6 +22,8 @@ import type {
 import { buildFacts, factLabels, substituteFacts, verifyNumbers } from '../../src/lib/explain.js'
 import { extractValidJson } from '../../src/lib/json-cleaner.js'
 import { findFixture, getFixtureH2H } from './apiFootball.js'
+import { getMatchGrounding, type SearchGroundingResponse } from './search.js'
+
 
 
 export const XKIRO_BASE_URL = (env.xkiroBaseUrl || 'https://api.xkiro.com/v1').replace(/\/+$/, '')
@@ -673,24 +675,48 @@ export async function streamCollectMatchData(
     const cleanLeague = sanitizeCleanText(hint.league ?? '')
     const cleanKickoff = sanitizeCleanText(hint.kickoff ?? '')
 
-    // Tự động tìm kiếm API-Football H2H nếu có eventId hoặc tìm theo tên 2 đội
+    // Đối soát đa tầng thời gian thực: API-Football H2H + Multi-Tier Waterfall Search (Serper -> Tavily -> Brave -> DuckDuckGo)
     let h2hText = ''
     let fixtureId = hint.eventId ?? undefined
+    let searchGrounding: SearchGroundingResponse | null = null
+
     try {
-        const fixtureItem = await findFixture(cleanHome, cleanAway, fixtureId)
-        if (fixtureItem) {
-            fixtureId = fixtureItem.fixture.id
-            const homeId = fixtureItem.teams?.home?.id
-            const awayId = fixtureItem.teams?.away?.id
-            if (homeId && awayId) {
-                const h2hRes = await getFixtureH2H(homeId, awayId)
-                if (h2hRes?.h2hText) {
-                    h2hText = h2hRes.h2hText
+        const [fixtureRes, searchRes] = await Promise.allSettled([
+            (async () => {
+                const fixtureItem = await findFixture(cleanHome, cleanAway, fixtureId)
+                if (fixtureItem) {
+                    const fixId = fixtureItem.fixture.id
+                    const homeId = fixtureItem.teams?.home?.id
+                    const awayId = fixtureItem.teams?.away?.id
+                    if (homeId && awayId) {
+                        const h2hRes = await getFixtureH2H(homeId, awayId)
+                        return { fixtureId: fixId, h2hText: h2hRes?.h2hText || '' }
+                    }
+                    return { fixtureId: fixId, h2hText: '' }
                 }
-            }
+                return { fixtureId, h2hText: '' }
+            })(),
+            getMatchGrounding(cleanHome, cleanAway, {
+                league: cleanLeague,
+                kickoff: cleanKickoff,
+            }),
+        ])
+
+        if (fixtureRes.status === 'fulfilled' && fixtureRes.value) {
+            if (fixtureRes.value.fixtureId) fixtureId = fixtureRes.value.fixtureId
+            if (fixtureRes.value.h2hText) h2hText = fixtureRes.value.h2hText
+        }
+
+        if (searchRes.status === 'fulfilled' && searchRes.value) {
+            searchGrounding = searchRes.value
+            const pName = searchGrounding.provider.toUpperCase()
+            const tier = searchGrounding.tier
+            const ms = searchGrounding.latencyMs
+            const cnt = searchGrounding.sources.length
+            onDelta(`🔍 [Multi-Tier Search Grounding] Tier ${tier} (${pName}) hoàn tất trong ${ms}ms (${cnt} nguồn tin xác thực).\n`)
         }
     } catch {
-        /* ignore h2h fetch error */
+        /* ignore grounding collection failure */
     }
 
     const userPrompt = [
@@ -705,6 +731,19 @@ export async function streamCollectMatchData(
                   h2hText,
                   '',
                   'QUY TẮC BẮT BUỘC VỀ ĐỐI ĐẦU: Sử dụng CHÍNH XÁC số liệu từ THỰC TẾ LỊCH SỬ ĐỐI ĐẦU (H2H API-Football) ở trên để điền trường "h2h": { "n", "avg_goals", "btts_rate" }. TUYỆT ĐỐI CẤM bịa đặt hoặc đoán mò lịch sử đối đầu từ trí nhớ!',
+              ].join('\n')
+            : '',
+        searchGrounding && searchGrounding.results.length > 0
+            ? [
+                  '',
+                  '=== DỮ LIỆU TÌM KIẾM BỔ SUNG THỜI GIAN THỰC (REAL-TIME SEARCH GROUNDING) ===',
+                  `Nguồn tin: Tier ${searchGrounding.tier} [${searchGrounding.provider.toUpperCase()}] (Truy vấn: "${searchGrounding.query}")`,
+                  searchGrounding.groundingText,
+                  '',
+                  'QUY TẮC BẮT BUỘC VỀ ĐỘI HÌNH & CHẤN THƯƠNG:',
+                  '- Nếu tin tức cho thấy đội hình chính thức đã công bố: đặt "lineup_confirmed": true. Nếu chưa có hoặc chỉ là dự kiến: đặt "lineup_confirmed": false.',
+                  '- Trích xuất danh sách chấn thương/vắng mặt chính xác vào mảng "injuries" của đội tương ứng từ các trích đoạn tìm kiếm trên. TUYỆT ĐỐI KHÔNG bịa cầu thủ vắng mặt từ trí nhớ!',
+                  '=========================================================================',
               ].join('\n')
             : '',
         '',
@@ -749,7 +788,32 @@ export async function streamCollectMatchData(
         })
     }
 
-    return normalizeMatchData(parsed, sources)
+    if (searchGrounding && searchGrounding.sources.length > 0) {
+        for (const s of searchGrounding.sources) {
+            sources.push({
+                url: s.url,
+                title: `[${searchGrounding.provider.toUpperCase()}] ${s.title}`,
+                fetched_at: s.fetched_at,
+            })
+        }
+    }
+
+    const data = normalizeMatchData(parsed, sources)
+
+    // Nếu search grounding xác nhận chắc chắn đội hình ra sân, cập nhật lineup_confirmed
+    if (searchGrounding?.lineupConfirmedHint) {
+        data.home.lineup_confirmed = true
+        data.away.lineup_confirmed = true
+    }
+
+    // Nếu LLM chưa có chấn thương mà search trích xuất được manh mối vắng mặt
+    if (searchGrounding && searchGrounding.injuriesHint.length > 0) {
+        if (data.home.injuries.length === 0 && data.away.injuries.length === 0) {
+            data.home.injuries = searchGrounding.injuriesHint.slice(0, 4)
+        }
+    }
+
+    return data
 }
 
 

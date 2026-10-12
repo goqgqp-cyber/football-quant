@@ -685,6 +685,11 @@ export async function getMatchLiveStatus(
     }
 
     const kickoff = fix.date
+    const kickoffTimestamp = fix.timestamp
+        ? fix.timestamp * 1000
+        : fix.date
+            ? new Date(fix.date).getTime()
+            : Date.now()
     const homeId = item.teams?.home?.id
     const awayId = item.teams?.away?.id
 
@@ -709,6 +714,7 @@ export async function getMatchLiveStatus(
         awayForm: awayForm.length > 0 ? awayForm : ['D', 'L', 'W', 'D', 'L'],
         league: item.league?.name,
         kickoff,
+        kickoffTimestamp,
         status: isFinished ? 'finished' : isLive ? 'inprogress' : 'notstarted',
         statusDescription: statusLong || statusShort,
         minute,

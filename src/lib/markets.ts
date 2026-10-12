@@ -68,7 +68,8 @@ export function ahSingle(matrix: number[][], h: number, side: 'home' | 'away'): 
     let lose = 0
     for (let i = 0; i < matrix.length; i++) {
         for (let j = 0; j < matrix[i].length; j++) {
-            const adjusted = side === 'home' ? i - j + h : j - i - h
+            const goalDiff = side === 'home' ? i - j : j - i
+            const adjusted = goalDiff + h
             const p = matrix[i][j]
             if (Math.abs(adjusted) < 1e-9) push += p
             else if (adjusted > 0) win += p

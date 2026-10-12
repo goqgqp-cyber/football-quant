@@ -15,6 +15,23 @@ export const DC_RHO = -0.08
 /** Kích thước ma trận tỉ số: 0..10 */
 export const MAX_GOALS = 10
 
+/** Tỷ lệ bàn thắng trung bình Hiệp 1 so với cả trận (~44% tổng số bàn thắng). */
+export const FIRST_HALF_RATIO = 0.44
+
+/**
+ * Tính số bàn kỳ vọng λ cho Hiệp 1 dựa trên trọng số 44%.
+ */
+export function firstHalfLambdas(
+    lambdaHome: number,
+    lambdaAway: number,
+    ratio = FIRST_HALF_RATIO,
+): { lambdaHome: number; lambdaAway: number } {
+    return {
+        lambdaHome: Math.max(0.15 * ratio, Number((lambdaHome * ratio).toFixed(4))),
+        lambdaAway: Math.max(0.15 * ratio, Number((lambdaAway * ratio).toFixed(4))),
+    }
+}
+
 /**
  * Ước lượng λ (số bàn kỳ vọng) cho hai đội theo công thức trong spec:
  *   lg_avg = (lg_home + lg_away) / 2
@@ -23,6 +40,7 @@ export const MAX_GOALS = 10
  *
  * xgf/xga ưu tiên; nếu null thì dùng goals_for/goals_against; nếu cả hai null
  * thì shrink() sẽ trả về lg_avg (tức trung tính).
+ * Luôn clamp sàn tối thiểu lambda >= 0.15 để tránh triệt tiêu xác suất.
  */
 export function estimateLambdas(
     data: MatchData,
@@ -41,8 +59,11 @@ export function estimateLambdas(
     const sAwayAtt = shrink(awayAtt, data.away.n, lgAvg, SHRINK_K)
     const sAwayDef = shrink(awayDef, data.away.n, lgAvg, SHRINK_K)
 
-    const lambdaHome = lgHome * (sHomeAtt / lgAvg) * (sAwayDef / lgAvg)
-    const lambdaAway = lgAway * (sAwayAtt / lgAvg) * (sHomeDef / lgAvg)
+    const rawLambdaHome = lgHome * (sHomeAtt / lgAvg) * (sAwayDef / lgAvg)
+    const rawLambdaAway = lgAway * (sAwayAtt / lgAvg) * (sHomeDef / lgAvg)
+
+    const lambdaHome = Math.max(0.15, Number(rawLambdaHome.toFixed(4)))
+    const lambdaAway = Math.max(0.15, Number(rawLambdaAway.toFixed(4)))
 
     return { lambdaHome, lambdaAway, lgAvg }
 }
@@ -312,8 +333,8 @@ export function impliedLambdas(
                     high = mid
                 }
             }
-            lambdaHome = Number(((low + high) / 2).toFixed(4))
-            lambdaAway = Number(Math.max(0.05, lambdaTotal - lambdaHome).toFixed(4))
+            lambdaHome = Math.max(0.15, Number(((low + high) / 2).toFixed(4)))
+            lambdaAway = Math.max(0.15, Number(Math.max(0.15, lambdaTotal - lambdaHome).toFixed(4)))
             hasMarketAh = true
         }
     }
@@ -321,14 +342,14 @@ export function impliedLambdas(
     // Nếu chỉ có OU mà không có AH, chia theo tỷ lệ trung bình giải
     if (hasMarketOu && !hasMarketAh) {
         const lgRatio = lgHome / (lgHome + lgAway)
-        lambdaHome = Number((lambdaTotal * lgRatio).toFixed(4))
-        lambdaAway = Number(Math.max(0.05, lambdaTotal - lambdaHome).toFixed(4))
+        lambdaHome = Math.max(0.15, Number((lambdaTotal * lgRatio).toFixed(4)))
+        lambdaAway = Math.max(0.15, Number(Math.max(0.15, lambdaTotal - lambdaHome).toFixed(4)))
     }
 
     return {
-        lambdaHome,
-        lambdaAway,
-        lambdaTotal,
+        lambdaHome: Math.max(0.15, lambdaHome),
+        lambdaAway: Math.max(0.15, lambdaAway),
+        lambdaTotal: Math.max(0.30, lambdaTotal),
         hasMarketOu,
         hasMarketAh,
     }
@@ -340,6 +361,7 @@ export function impliedLambdas(
  * - w = 0.50 nếu: >= 8 trận, xG từ >= 2 nguồn, đội hình đã xác nhận.
  * - w = 0.30 nếu thiếu 1 điều kiện.
  * - w = 0.15 nếu thiếu từ 2 điều kiện trở lên.
+ * Clamp sàn λ >= 0.15 (không bao giờ bằng 0.00).
  */
 export function blendLambdas(
     lambdaModel: { home: number; away: number },
@@ -359,8 +381,8 @@ export function blendLambdas(
         !Number.isFinite(lambdaMarket.away)
     ) {
         return {
-            lambdaHome: lambdaModel.home,
-            lambdaAway: lambdaModel.away,
+            lambdaHome: Math.max(0.15, lambdaModel.home),
+            lambdaAway: Math.max(0.15, lambdaModel.away),
             w: 1.0,
             reason: 'Thị trường thiếu odds 2 đầu để giải λ_market; dùng 100% λ_model.',
         }
@@ -388,8 +410,8 @@ export function blendLambdas(
         reason = 'Thiếu từ 2 điều kiện dữ liệu trở lên: w = 0.15 ưu tiên mạnh thị trường (85%).'
     }
 
-    const lambdaHome = Number((w * lambdaModel.home + (1 - w) * lambdaMarket.home).toFixed(4))
-    const lambdaAway = Number((w * lambdaModel.away + (1 - w) * lambdaMarket.away).toFixed(4))
+    const lambdaHome = Math.max(0.15, Number((w * lambdaModel.home + (1 - w) * lambdaMarket.home).toFixed(4)))
+    const lambdaAway = Math.max(0.15, Number((w * lambdaModel.away + (1 - w) * lambdaMarket.away).toFixed(4)))
 
     return {
         lambdaHome,

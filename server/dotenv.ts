@@ -29,11 +29,13 @@ function parseDotenv(src: string): Record<string, string> {
 }
 
 try {
-    const envPath = join(process.cwd(), '.env')
-    if (existsSync(envPath)) {
-        const parsed = parseDotenv(readFileSync(envPath, 'utf8'))
-        for (const [k, v] of Object.entries(parsed)) {
-            if (process.env[k] === undefined) process.env[k] = v
+    for (const file of ['.env.local', '.env']) {
+        const envPath = join(process.cwd(), file)
+        if (existsSync(envPath)) {
+            const parsed = parseDotenv(readFileSync(envPath, 'utf8'))
+            for (const [k, v] of Object.entries(parsed)) {
+                if (process.env[k] === undefined) process.env[k] = v
+            }
         }
     }
 } catch {
