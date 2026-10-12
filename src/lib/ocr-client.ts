@@ -20,20 +20,19 @@ export const XKIRO_CLIENT_API_KEY = (
 /**
  * Client-Side Canvas Pre-Compression (OddsUpload / Image Upload)
  * - Load image vào HTML Image object
- * - Thu nhỏ tỉ lệ về max width 1280px:
- *     let width = img.naturalWidth || img.width;
- *     let height = img.naturalHeight || img.height;
- *     if (width > MAX_WIDTH) {
- *       height = Math.round((height * MAX_WIDTH) / width);
- *       width = MAX_WIDTH;
+ * - Nếu ảnh < 3.5MB: Giữ nguyên độ phân giải gốc để chữ và số nhỏ trên bảng kèo cực kỳ sắc nét.
+ * - Chỉ thu nhỏ tỉ lệ nếu ảnh vượt 3.5MB hoặc vượt quá maxWidth (2560px):
+ *     if (!isUnder3_5MB && width > maxWidth) {
+ *       height = Math.round((height * maxWidth) / width);
+ *       width = maxWidth;
  *     }
- * - Xuất image/jpeg chất lượng 0.80 (payload size ~150KB)
- * - Giảm thời gian inference xKiro xuống 3-5s, chống 504 trên Vercel.
+ * - Xuất image/jpeg chất lượng 0.95 sắc nét tối đa hoặc PNG trực tiếp nếu tệp nhỏ.
+ * - Đảm bảo các dòng chữ nhỏ ("Cược Tài/Xỉu hiệp 1") và tỉ lệ odds không bị vỡ/nhoè.
  */
 export async function compressImageToJpegBase64(
     file: File,
-    maxWidth = 1280,
-    quality = 0.8,
+    maxWidth = 2560,
+    quality = 0.95,
 ): Promise<{ mimeType: string; data: string; dataUrl: string }> {
     return new Promise((resolve, reject) => {
         if (!file.type.startsWith('image/')) {
@@ -49,9 +48,16 @@ export async function compressImageToJpegBase64(
             let width = img.naturalWidth || img.width
             let height = img.naturalHeight || img.height
 
-            if (width > maxWidth) {
+            // Nếu ảnh <= 3.5MB: KHÔNG giảm kích thước nếu width <= 2560px (giữ nguyên độ phân giải gốc)
+            const isUnder3_5MB = file.size <= 3.5 * 1024 * 1024
+
+            if (!isUnder3_5MB && width > maxWidth) {
                 height = Math.round((height * maxWidth) / width)
                 width = maxWidth
+            } else if (width > 2560) {
+                // Kẹp chặn 2560px cho ảnh 4K/siêu rộng tránh tràn bộ nhớ canvas
+                height = Math.round((height * 2560) / width)
+                width = 2560
             }
 
             const canvas = document.createElement('canvas')
@@ -71,6 +77,25 @@ export async function compressImageToJpegBase64(
             ctx.drawImage(img, 0, 0, width, height)
 
             try {
+                // Nếu ảnh gốc là PNG và dung lượng nhỏ, ưu tiên giữ PNG sắc nét không nén
+                if (file.type === 'image/png' && isUnder3_5MB) {
+                    try {
+                        const pngDataUrl = canvas.toDataURL('image/png')
+                        if (pngDataUrl.length < 5 * 1024 * 1024) {
+                            const base64Data = pngDataUrl.replace(/^data:image\/png;base64,/, '')
+                            resolve({
+                                mimeType: 'image/png',
+                                data: base64Data,
+                                dataUrl: pngDataUrl,
+                            })
+                            return
+                        }
+                    } catch {
+                        // Fallback to jpeg 0.95
+                    }
+                }
+
+                // Xuất JPEG với chất lượng 0.95 (giữ nguyên độ nét của số thập phân và tiêu đề nhỏ)
                 const dataUrl = canvas.toDataURL('image/jpeg', quality)
                 const base64Data = dataUrl.replace(/^data:image\/jpeg;base64,/, '')
                 resolve({
@@ -117,17 +142,25 @@ export async function extractOddsDirectClient(
         throw new Error('Vui lòng chọn ít nhất 1 ảnh bảng kèo.')
     }
 
-    // 1. Tiền xử lý tất cả ảnh qua Canvas (max width 1280px, JPEG 0.80)
-    const compressedList = await Promise.all(files.map((f) => compressImageToJpegBase64(f, 1280, 0.8)))
+    // 1. Tiền xử lý tất cả ảnh qua Canvas (tối đa 2560px, JPEG 0.95 sắc nét tối đa)
+    const compressedList = await Promise.all(files.map((f) => compressImageToJpegBase64(f, 2560, 0.95)))
 
     // 2. Chuẩn bị prompt bóc tách
-    const promptText = `Bạn là Chuyên gia Thị giác Máy tính và OCR Bảng Kèo Bóng Đá.
+    const promptText = `Bạn là Chuyên gia Thị giác Máy tính và OCR Bảng Kèo Bóng Đá (Sportsbook Vision Expert).
 Nhiệm vụ: Trích xuất chính xác toàn bộ bảng kèo cược, tên hai đội, giải đấu, phút thi đấu (nếu đang đá) và tỉ số từ ảnh bảng kèo nhà cái.
 ${hint.home || hint.away ? `Gợi ý đối chiếu: chủ "${hint.home || '?'}" - khách "${hint.away || '?'}"` : ''}
 
+QUY TẮC BỐ CỤC BẢNG KÈO (2 CỘT SONG SONG):
+BẢNG CƯỢC CÓ 2 CỘT SONG SONG:
+- Cột trái: Các mục Cược trực tiếp cả trận (1X2, Kèo chấp cả trận, Tài/xỉu cả trận). TẤT CẢ các dòng thuộc cụm này đều mang period: 'FT'.
+- Cột phải: Các mục Cược Hiệp 1 (1X2 Hiệp 1, Kèo chấp Hiệp 1, Cược Tài/Xỉu hiệp 1, Cược Tài/Xỉu tổng số bàn thắng hiệp 1). TẤT CẢ các dòng thuộc cụm này BẮT BUỘC mang period: 'HT'.
+
 QUY TẮC BẮT BUỘC:
-1. BẮT BUỘC trả về DUY NHẤT một chuỗi JSON thuần hợp lệ, TUYỆT ĐỐI KHÔNG dùng markdown block (\`\`\`json hoặc \`\`\`), không có văn bản hay lời chào nào ngoài JSON.
-2. Trích xuất đúng tên đội thật trong ảnh, không mặc định Arsenal hay Chelsea nếu ảnh không phải.
+1. Mọi kèo nằm dưới tiêu đề chứa "Hiệp 1", "H1", "1st Half" BẮT BUỘC gán period: "HT" và phân loại đối tượng rõ ràng [Tài/Xỉu Bàn H1] hoặc [Châu Á Bàn H1].
+2. TUYỆT ĐỐI KHÔNG BAO GIỜ dán nhãn kèo Hiệp 1 thành [Tài/Xỉu Bàn FT] hay FT!
+3. Phân biệt rõ ràng kèo Bàn Thắng (object: "goals") và Phạt Góc (object: "corners").
+4. BẮT BUỘC trả về DUY NHẤT một chuỗi JSON thuần hợp lệ, TUYỆT ĐỐI KHÔNG dùng markdown block (\`\`\`json hoặc \`\`\`), không có văn bản hay lời chào nào ngoài JSON.
+5. Trích xuất đúng tên đội thật trong ảnh, không mặc định Arsenal hay Chelsea nếu ảnh không phải.
 
 CẤU TRÚC JSON MẪU:
 {
@@ -137,18 +170,24 @@ CẤU TRÚC JSON MẪU:
   "isLive": false,
   "currentMinute": null,
   "currentScore": { "home": 0, "away": 0 },
+  "corners": null,
+  "shots": null,
   "period": "Pre-match",
   "odds": [
-    { "type": "hdp", "target": "home", "line": -0.5, "odds": 1.95 },
-    { "type": "hdp", "target": "away", "line": 0.5, "odds": 1.92 },
-    { "type": "ou", "target": "over", "line": 2.5, "odds": 1.88 },
-    { "type": "ou", "target": "under", "line": 2.5, "odds": 1.98 }
+    { "type": "hdp", "target": "home", "line": -0.5, "odds": 1.95, "period": "FT", "object": "goals" },
+    { "type": "hdp", "target": "away", "line": 0.5, "odds": 1.92, "period": "FT", "object": "goals" },
+    { "type": "ou", "target": "over", "line": 2.5, "odds": 1.88, "period": "FT", "object": "goals" },
+    { "type": "ou", "target": "under", "line": 2.5, "odds": 1.98, "period": "FT", "object": "goals" },
+    { "type": "ou", "target": "over", "line": 0.5, "odds": 1.85, "period": "HT", "object": "goals" },
+    { "type": "ou", "target": "under", "line": 0.5, "odds": 1.95, "period": "HT", "object": "goals" }
   ],
   "rows": [
-    { "kind": "ah", "side": "home", "line": -0.5, "odds": 1.95, "confidence": 0.95 },
-    { "kind": "ah", "side": "away", "line": 0.5, "odds": 1.92, "confidence": 0.95 },
-    { "kind": "totals", "side": "over", "line": 2.5, "odds": 1.88, "confidence": 0.95 },
-    { "kind": "totals", "side": "under", "line": 2.5, "odds": 1.98, "confidence": 0.95 }
+    { "kind": "ah", "side": "home", "line": -0.5, "odds": 1.95, "confidence": 0.95, "period": "FT", "object": "goals" },
+    { "kind": "ah", "side": "away", "line": 0.5, "odds": 1.92, "confidence": 0.95, "period": "FT", "object": "goals" },
+    { "kind": "totals", "side": "over", "line": 2.5, "odds": 1.88, "confidence": 0.95, "period": "FT", "object": "goals" },
+    { "kind": "totals", "side": "under", "line": 2.5, "odds": 1.98, "confidence": 0.95, "period": "FT", "object": "goals" },
+    { "kind": "totals", "side": "over", "line": 0.5, "odds": 1.85, "confidence": 0.95, "period": "HT", "object": "goals" },
+    { "kind": "totals", "side": "under", "line": 0.5, "odds": 1.95, "confidence": 0.95, "period": "HT", "object": "goals" }
   ],
   "note": "Bóc tách thành công"
 }`
@@ -248,7 +287,23 @@ CẤU TRÚC JSON MẪU:
         throw new Error('xKiro không trả về định dạng JSON hợp lệ cho bảng kèo.')
     }
 
-    // 4. Đồng bộ hóa giữa rows và odds
+    // 4. Đồng bộ hóa giữa rows và odds (Chuẩn hóa nghiêm ngặt HT vs FT, Goals vs Corners)
+    const normalizePeriod = (p?: unknown, note?: unknown): 'ft' | 'ht' => {
+        const s = `${String(p || '')} ${String(note || '')}`.toLowerCase()
+        if (s.includes('h1') || s.includes('ht') || s.includes('1st') || s.includes('hiệp 1') || s.includes('1h')) {
+            return 'ht'
+        }
+        return 'ft'
+    }
+
+    const normalizeObject = (o?: unknown, note?: unknown): 'goals' | 'corners' => {
+        const s = `${String(o || '')} ${String(note || '')}`.toLowerCase()
+        if (s.includes('corner') || s.includes('goc') || s.includes('phạt góc')) {
+            return 'corners'
+        }
+        return 'goals'
+    }
+
     const rows: ExtractedRow[] = []
     if (Array.isArray(parsed.rows) && parsed.rows.length > 0) {
         for (const r of parsed.rows) {
@@ -257,6 +312,8 @@ CẤU TRÚC JSON MẪU:
             if (side !== 'over' && side !== 'under' && side !== 'home' && side !== 'away') continue
             const line = typeof r.line === 'number' ? r.line : parseFloat(String(r.line || '0'))
             const oddsVal = typeof r.odds === 'number' ? r.odds : parseFloat(String(r.odds || '1.9'))
+            const period = normalizePeriod(r.period, r.note)
+            const object = normalizeObject(r.object, r.note)
             rows.push({
                 kind,
                 side,
@@ -264,6 +321,8 @@ CẤU TRÚC JSON MẪU:
                 odds: Number.isFinite(oddsVal) ? oddsVal : 1.9,
                 confidence: typeof r.confidence === 'number' ? r.confidence : 0.95,
                 note: r.note ? String(r.note) : undefined,
+                period,
+                object,
             })
         }
     } else if (Array.isArray(parsed.odds) && parsed.odds.length > 0) {
@@ -273,22 +332,34 @@ CẤU TRÚC JSON MẪU:
             if (side !== 'over' && side !== 'under' && side !== 'home' && side !== 'away') continue
             const line = typeof o.line === 'number' ? o.line : parseFloat(String(o.line || '0'))
             const oddsVal = typeof o.odds === 'number' ? o.odds : parseFloat(String(o.odds || '1.9'))
+            const period = normalizePeriod(o.period)
+            const object = normalizeObject(o.object)
             rows.push({
                 kind,
                 side,
                 line: Number.isFinite(line) ? line : 0,
                 odds: Number.isFinite(oddsVal) ? oddsVal : 1.9,
                 confidence: 0.95,
+                period,
+                object,
             })
         }
     }
 
-    const oddsList: ExtractedOddsItem[] = Array.isArray(parsed.odds) ? parsed.odds : rows.map((r) => ({
-        type: r.kind === 'ah' ? ('hdp' as const) : ('ou' as const),
-        target: r.side,
-        line: r.line,
-        odds: r.odds,
-    }))
+    const oddsList: ExtractedOddsItem[] = Array.isArray(parsed.odds)
+        ? parsed.odds.map((o) => ({
+              ...o,
+              period: normalizePeriod(o.period),
+              object: normalizeObject(o.object),
+          }))
+        : rows.map((r) => ({
+              type: r.kind === 'ah' ? ('hdp' as const) : ('ou' as const),
+              target: r.side,
+              line: r.line,
+              odds: r.odds,
+              period: r.period,
+              object: r.object,
+          }))
 
     const lowConfidence = rows.some((r) => r.confidence < 0.8)
 

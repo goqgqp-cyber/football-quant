@@ -261,7 +261,13 @@ async function readXKiroStream(
 }
 
 const OCR_PROMPT = `Bạn là Chuyên gia Thị giác Máy tính và OCR Bảng Kèo Bóng Đá (Sportsbook Odds Vision Analyst).
-Nhiệm vụ: Phân tích ảnh chụp màn hình bảng kèo nhà cái và bóc tách cấu trúc dữ liệu JSON chính xác:
+Nhiệm vụ: Phân tích ảnh chụp màn hình bảng kèo nhà cái và bóc tách cấu trúc dữ liệu JSON chính xác.
+
+BỐ CỤC BẢNG KÈO (2 CỘT SONG SONG):
+BẢNG CƯỢC CÓ 2 CỘT SONG SONG:
+- Cột trái: Các mục Cược trực tiếp cả trận (1X2, Kèo chấp cả trận, Tài/xỉu cả trận). TẤT CẢ các dòng thuộc cụm này đều mang period: 'FT'.
+- Cột phải: Các mục Cược Hiệp 1 (1X2 Hiệp 1, Kèo chấp Hiệp 1, Cược Tài/Xỉu hiệp 1, Cược Tài/Xỉu tổng số bàn thắng hiệp 1). TẤT CẢ các dòng thuộc cụm này BẮT BUỘC mang period: 'HT'.
+
 1. Thông tin hai đội:
    - homeTeam: string (tên chính xác Đội Nhà hiển thị trong ảnh).
    - awayTeam: string (tên chính xác Đội Khách hiển thị trong ảnh).
@@ -274,25 +280,27 @@ Nhiệm vụ: Phân tích ảnh chụp màn hình bảng kèo nhà cái và bóc
    - shots: object { "home": number, "away": number } hoặc null (số cú sút hiển thị trên ảnh nếu có, hoặc null).
    - period: string ("1st Half", "2nd Half", "Halftime", hoặc "Pre-match").
 3. Bảng kèo cá cược:
-   - odds: mảng các đối tượng { "type": "hdp" | "ou" | "1x2", "target": "home" | "away" | "over" | "under", "line": number, "odds": number, "period": "FT" | "H1", "object": "goals" | "corners" }.
+   - odds: mảng các đối tượng { "type": "hdp" | "ou" | "1x2", "target": "home" | "away" | "over" | "under", "line": number, "odds": number, "period": "FT" | "HT", "object": "goals" | "corners" }.
      * type="hdp": Kèo chấp Asian Handicap (target="home" hoặc "away", line là mốc chấp từ góc nhìn đội đó, ví dụ -0.5 hoặc +0.5 hoặc 0, odds là tỷ lệ ăn thập phân).
      * type="ou": Kèo Tài/Xỉu Over/Under (target="over" hoặc "under", line là mốc ví dụ 2.5 hoặc 0.5, odds là tỷ lệ ăn).
      * type="1x2": Kèo Châu Âu 1X2 (target="home" hoặc "away", line=0, odds là tỷ lệ ăn).
-     * period: "FT" (Toàn trận / Fulltime) hoặc "H1" (Hiệp 1 / First Half).
+     * period: "FT" (Toàn trận / Fulltime) hoặc "HT" (Hiệp 1 / First Half).
      * object: "goals" (Bàn thắng) hoặc "corners" (Phạt góc).
    - rows: mảng chuẩn hóa:
      * kind: "totals" | "ah"
      * side: "over" | "under" | "home" | "away"
      * line: number
      * odds: number
-     * period: "FT" | "H1"
+     * period: "FT" | "HT"
      * object: "goals" | "corners"
      * confidence: number
 
 QUY TẮC BẮT BUỘC:
-1. Phân biệt RÕ RÀNG kèo Bàn Thắng ("goals") và Phạt Góc ("corners"), cũng như Toàn Trận ("FT") và Hiệp 1 ("H1"). TUYỆT ĐỐI không để trống hoặc nhầm lẫn giữa phạt góc và bàn thắng!
-2. Chỉ trích xuất số liệu nhìn thấy thật trong ảnh. TUYỆT ĐỐI không mặc định Arsenal hay Chelsea nếu ảnh không phải trận đó.
-3. BẮT BUỘC trả về DUY NHẤT một chuỗi JSON thuần, KHÔNG bọc trong markdown code block (TUYỆT ĐỐI KHÔNG dùng \`\`\`json hoặc \`\`\`), KHÔNG có bất kỳ văn bản hay lời chào nào ngoài JSON.
+1. Mọi kèo nằm dưới tiêu đề chứa "Hiệp 1", "H1", "1st Half" BẮT BUỘC gán period: "HT" và phân loại đối tượng rõ ràng [Tài/Xỉu Bàn H1] hoặc [Châu Á Bàn H1].
+2. TUYỆT ĐỐI KHÔNG BAO GIỜ dán nhãn kèo Hiệp 1 thành [Tài/Xỉu Bàn FT] hay FT!
+3. Phân biệt RÕ RÀNG kèo Bàn Thắng ("goals") và Phạt Góc ("corners"), cũng như Toàn Trận ("FT") và Hiệp 1 ("HT").
+4. Chỉ trích xuất số liệu nhìn thấy thật trong ảnh. TUYỆT ĐỐI không mặc định Arsenal hay Chelsea nếu ảnh không phải trận đó.
+5. BẮT BUỘC trả về DUY NHẤT một chuỗi JSON thuần, KHÔNG bọc trong markdown code block (TUYỆT ĐỐI KHÔNG dùng \`\`\`json hoặc \`\`\`), KHÔNG có bất kỳ văn bản hay lời chào nào ngoài JSON.
 
 CẤU TRÚC JSON MẪU BẮT BUỘC:
 {
@@ -309,13 +317,17 @@ CẤU TRÚC JSON MẪU BẮT BUỘC:
     { "type": "ou", "target": "over", "line": 2.5, "odds": 1.95, "period": "FT", "object": "goals" },
     { "type": "ou", "target": "under", "line": 2.5, "odds": 1.90, "period": "FT", "object": "goals" },
     { "type": "hdp", "target": "home", "line": -0.25, "odds": 2.02, "period": "FT", "object": "goals" },
-    { "type": "hdp", "target": "away", "line": 0.25, "odds": 1.88, "period": "FT", "object": "goals" }
+    { "type": "hdp", "target": "away", "line": 0.25, "odds": 1.88, "period": "FT", "object": "goals" },
+    { "type": "ou", "target": "over", "line": 0.5, "odds": 1.85, "period": "HT", "object": "goals" },
+    { "type": "ou", "target": "under", "line": 0.5, "odds": 1.95, "period": "HT", "object": "goals" }
   ],
   "rows": [
     { "kind": "totals", "side": "over", "line": 2.5, "odds": 1.95, "confidence": 0.95, "period": "FT", "object": "goals" },
     { "kind": "totals", "side": "under", "line": 2.5, "odds": 1.90, "confidence": 0.95, "period": "FT", "object": "goals" },
     { "kind": "ah", "side": "home", "line": -0.25, "odds": 2.02, "confidence": 0.92, "period": "FT", "object": "goals" },
-    { "kind": "ah", "side": "away", "line": 0.25, "odds": 1.88, "confidence": 0.92, "period": "FT", "object": "goals" }
+    { "kind": "ah", "side": "away", "line": 0.25, "odds": 1.88, "confidence": 0.92, "period": "FT", "object": "goals" },
+    { "kind": "totals", "side": "over", "line": 0.5, "odds": 1.85, "confidence": 0.95, "period": "HT", "object": "goals" },
+    { "kind": "totals", "side": "under", "line": 0.5, "odds": 1.95, "confidence": 0.95, "period": "HT", "object": "goals" }
   ],
   "note": "Bóc tách thành công"
 }`
@@ -436,8 +448,23 @@ export async function extractOddsFromImages(
         const confidence = clamp01(num(r.confidence) ?? 0.85)
         if (confidence < 0.3) continue
 
-        const period = typeof r.period === 'string' ? r.period.toLowerCase() : undefined
-        const object = typeof r.object === 'string' ? r.object.toLowerCase() : undefined
+        let period = typeof r.period === 'string' ? r.period.toLowerCase() : undefined
+        if (!period && typeof r.note === 'string') {
+            const n = r.note.toLowerCase()
+            if (n.includes('h1') || n.includes('ht') || n.includes('hiệp 1') || n.includes('1st')) {
+                period = 'ht'
+            }
+        }
+        if (period === 'h1' || period === '1st half' || period === 'hiệp 1') {
+            period = 'ht'
+        }
+        let object = typeof r.object === 'string' ? r.object.toLowerCase() : undefined
+        if (!object && typeof r.note === 'string') {
+            const n = r.note.toLowerCase()
+            if (n.includes('corner') || n.includes('goc') || n.includes('phạt góc')) {
+                object = 'corners'
+            }
+        }
 
         rows.push({
             kind,

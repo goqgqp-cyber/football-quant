@@ -686,11 +686,11 @@ export const api = {
 
     suggestedLines: () => apiFetch<{ lines: OddsLine[] }>('/suggested-lines'),
 
-    /** Gửi ảnh bảng kèo qua Server Proxy /api/ocr-odds sau khi nén canvas client (loại bỏ hoàn toàn CORS & 504 timeout). */
+    /** Gửi ảnh bảng kèo qua Server Proxy /api/ocr-odds sau khi xử lý canvas client độ nét cao (loại bỏ hoàn toàn CORS & 504 timeout). */
     extract: async (files: File[], hint: { home?: string; away?: string; league?: string }) => {
-        // Nén ảnh trên Canvas client về max-width 1280px, jpeg 0.80 (~150KB/ảnh)
+        // Xử lý ảnh trên Canvas client sắc nét tối đa (max-width 2560px, JPEG 0.95 hoặc PNG)
         const compressed = await Promise.all(
-            files.map((file) => compressImageToJpegBase64(file, 1280, 0.8)),
+            files.map((file) => compressImageToJpegBase64(file, 2560, 0.95)),
         )
 
         const payload = {

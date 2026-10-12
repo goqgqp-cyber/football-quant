@@ -18,6 +18,9 @@ import {
     DEFAULT_LG_AWAY,
 } from './poisson'
 import { tripleFor } from './markets'
+import { solveRecommendedPicks, filterRecommendedPicks } from './quant/solver'
+export { filterRecommendedPicks }
+
 
 export interface InPlayOptions {
     isLive?: boolean
@@ -249,55 +252,10 @@ export function analyzeMatch(
         })
     }
 
-    // 1. Sắp xếp toàn bộ kèo theo Composite Score: (EV * 0.6) + (Edge * 0.4) giảm dần
-    picks.sort((a, b) => (b.compositeScore ?? 0) - (a.compositeScore ?? 0))
+    // 1 & 2: Giải toán xếp hạng đề xuất (Top 1 Value & Top 2 Dự phòng)
+    // Loại trừ triệt để kèo đối lập, áp trần chất lượng Edge >= 5% và EV > 0 cho Pick #2
+    solveRecommendedPicks(picks)
 
-    // 2. BẮT BUỘC ĐƯA RA KÈO TỐI ƯU (ELIMINATE NO BET) VỚI CÁC RÀO CẢN CHỐNG THIÊN LỆCH:
-    if (picks.length > 0) {
-        // Tìm pick tốt nhất không bị cờ suspicious_edge hoặc trap làm Top 1
-        let p1Idx = picks.findIndex((p) => !p.flags.includes('suspicious_edge') && p.status !== 'trap')
-        if (p1Idx === -1) p1Idx = 0
-
-        const p1 = picks[p1Idx]
-        p1.rankLabel = '[KÈO TỐI ƯU NHẤT - TOP 1 VALUE]'
-        if (p1.status !== 'trap') {
-            p1.status = 'value'
-        }
-        // Đề xuất vốn Kelly từ 2% đến 5% (nếu tin cậy thấp hoặc suspicious_edge thì hạ còn 1.5%)
-        if (p1.flags.includes('suspicious_edge') || p1.confidence === 'low') {
-            p1.stakePct = 0.015
-        } else {
-            p1.stakePct = p1.stakePct > 0 ? Math.min(0.05, Math.max(0.02, p1.stakePct)) : 0.03
-        }
-
-        // Top 2: Kèo dự phòng (nếu có từ 2 kèo trở lên)
-        const remainingPicks = picks.filter((_, idx) => idx !== p1Idx)
-        if (remainingPicks.length > 0) {
-            const p2 = remainingPicks[0]
-            p2.rankLabel = '[KÈO DỰ PHÒNG - TOP 2]'
-            if (p2.status !== 'trap') {
-                p2.status = 'value'
-            }
-            p2.stakePct = p2.stakePct > 0 ? Math.min(0.04, Math.max(0.02, p2.stakePct)) : 0.02
-
-            // Bước 7: Kèo tương quan (Correlated Picks Rule):
-            // Nếu 2 pick chung kịch bản (ví dụ đội cửa trên thắng + Tài), coi như một vị thế, tổng vốn <= 2.5%
-            const isCorrelated =
-                (p1.side === 'home' && p2.side === 'over') ||
-                (p1.side === 'over' && p2.side === 'home') ||
-                (p1.side === 'away' && p2.side === 'under') ||
-                (p1.side === 'under' && p2.side === 'away') ||
-                p1.side === p2.side
-
-            if (isCorrelated) {
-                if (p1.stakePct + p2.stakePct > 0.025) {
-                    p1.stakePct = Math.min(p1.stakePct, 0.015)
-                    p2.stakePct = Math.min(p2.stakePct, 0.010)
-                    p2.flags.push('correlated_scenario_capped_2.5%')
-                }
-            }
-        }
-    }
 
     const noBetReasons: string[] = []
     if (oddsLines.length === 0) {
@@ -334,17 +292,4 @@ export function suggestedLines(): OddsLine[] {
         { id: 'aha025', kind: 'ah', side: 'away', line: -0.25, odds: 2.05 },
     ]
 }
-
-/**
- * Lọc các pick đạt chuẩn khuyến nghị để lưu lịch sử & hiển thị:
- * - BẮT BUỘC trả về Top 1 và Top 2 (Top 1 Value & Top 2 Dự phòng)
- * - Sắp xếp theo compositeScore giảm dần
- */
-export function filterRecommendedPicks(picks: Pick[]): Pick[] {
-    if (picks.length === 0) return []
-    const topPicks = picks.filter((p) => p.rankLabel)
-    if (topPicks.length > 0) return topPicks.slice(0, 2)
-    const valuePicks = picks.filter((p) => p.status === 'value')
-    if (valuePicks.length > 0) return valuePicks.slice(0, 2)
-    return picks.slice(0, 2)
-}
+
