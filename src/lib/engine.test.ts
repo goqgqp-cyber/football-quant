@@ -146,4 +146,44 @@ describe('analyzeMatch - integration & filtering', () => {
         expect(lines.length).toBeGreaterThanOrEqual(8)
         expect(lines.every((l) => l.odds >= MIN_ODDS)).toBe(true)
     })
+
+    it('under low-data conditions (home.n < 5 or away.n < 5), engine does NOT halt with INSUFFICIENT_DATA and enforces market-anchored pipeline with low_data flag and w=0.15', () => {
+        const lowData: MatchData = {
+            ...sampleMatchData(),
+            home: {
+                ...sampleMatchData().home,
+                n: 2, // Low sample
+            },
+            away: {
+                ...sampleMatchData().away,
+                n: 3, // Low sample
+            },
+        }
+
+        const odds: OddsLine[] = [
+            { id: 't25', kind: 'totals', side: 'over', line: 2.5, odds: 1.95 },
+            { id: 't25u', kind: 'totals', side: 'under', line: 2.5, odds: 1.95 },
+            { id: 'ah0', kind: 'ah', side: 'home', line: 0, odds: 1.90 },
+            { id: 'ah0a', kind: 'ah', side: 'away', line: 0, odds: 1.90 },
+        ]
+
+        const res = analyzeMatch(lowData, odds)
+
+        // Engine must complete without halting
+        expect(res.status).toBe('SUCCESS')
+        expect(res.dataGatePassed).toBe(false)
+        expect(res.weightModel).toBe(0.15)
+        expect(res.picks.length).toBeGreaterThan(0)
+        expect(res.topScorelines).toHaveLength(5)
+
+        // All picks must carry low_data flag and low confidence
+        for (const p of res.picks) {
+            expect(p.flags).toContain('low_data')
+            expect(p.confidence).toBe('low')
+        }
+
+        // Top 1 Value recommendation is generated
+        expect(res.picks[0].rankLabel).toBe('[KÈO TỐI ƯU NHẤT - TOP 1 VALUE]')
+        expect(res.picks[0].stakePct).toBe(0.015) // Defensive stake for low data
+    })
 })

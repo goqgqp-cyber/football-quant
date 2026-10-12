@@ -19,6 +19,7 @@ import type {
 } from '../../src/lib/types.js'
 
 export const API_FOOTBALL_BASE_URL = 'https://v3.football.api-sports.io'
+export const API_FOOTBALL_FALLBACK_KEY = 'fcbc53a3d31e0c893167b8da80e7f846'
 
 /**
  * Chuẩn hóa và làm sạch API key API-Football:
@@ -431,7 +432,7 @@ export async function fetchApiFootballDetailed<T = unknown>(
 
     try {
         // 3. Chuẩn bị gọi API-Football (Direct Web api-football.com)
-        const apiKey = sanitizeApiFootballKey(env.apiFootballKey)
+        const apiKey = sanitizeApiFootballKey(env.apiFootballKey) || API_FOOTBALL_FALLBACK_KEY
         if (!apiKey) {
             const errorMsg = 'API-Football key chưa được cấu hình hoặc rỗng (API_FOOTBALL_KEY missing)'
             const failResult: ApiFootballCallResult<T> = {

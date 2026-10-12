@@ -12,31 +12,41 @@ export function sanitizeApiFootballKey(key?: string | null): string {
         .trim()
 }
 
+const metaEnv =
+    typeof import.meta !== 'undefined'
+        ? (import.meta as unknown as { env?: Record<string, string> }).env
+        : undefined
+
+const RAW_API_KEY =
+    (typeof process !== 'undefined' &&
+        (process.env?.API_FOOTBALL_KEY || process.env?.NEXT_PUBLIC_API_FOOTBALL_KEY)) ||
+    metaEnv?.VITE_API_FOOTBALL_KEY ||
+    metaEnv?.API_FOOTBALL_KEY ||
+    metaEnv?.NEXT_PUBLIC_API_FOOTBALL_KEY ||
+    'fcbc53a3d31e0c893167b8da80e7f846'
+
+export const CLEAN_API_KEY =
+    sanitizeApiFootballKey(RAW_API_KEY) || 'fcbc53a3d31e0c893167b8da80e7f846'
+
+export function getApiFootballHeaders() {
+    return {
+        'x-apisports-key': CLEAN_API_KEY,
+    }
+}
+
 export async function fetchTeamRecentForm(teamId: number): Promise<string[]> {
     if (!teamId || teamId <= 0) return []
     try {
-        const metaEnv =
-            typeof import.meta !== 'undefined'
-                ? (import.meta as unknown as { env?: Record<string, string> }).env
-                : undefined
-        const rawKey =
-            (typeof process !== 'undefined' &&
-                (process.env?.API_FOOTBALL_KEY || process.env?.NEXT_PUBLIC_API_FOOTBALL_KEY)) ||
-            metaEnv?.VITE_API_FOOTBALL_KEY ||
-            metaEnv?.API_FOOTBALL_KEY ||
-            metaEnv?.NEXT_PUBLIC_API_FOOTBALL_KEY ||
-            ''
+        const apiKey = CLEAN_API_KEY
 
-        const apiKey = sanitizeApiFootballKey(rawKey)
-
-        // 1. Nếu có API key hợp lệ, thử gọi trực tiếp v3.football.api-sports.io
+        // 1. Thử gọi trực tiếp v3.football.api-sports.io với headers chuẩn hóa
         if (apiKey) {
             try {
                 const res = await fetch(
                     `https://v3.football.api-sports.io/fixtures?team=${teamId}&last=5&status=FT`,
                     {
                         headers: {
-                            'x-apisports-key': apiKey,
+                            ...getApiFootballHeaders(),
                             Accept: 'application/json',
                         },
                     },

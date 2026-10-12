@@ -118,7 +118,7 @@ export const env = {
      */
     apiFootballKey: firstOf(
         ['API_FOOTBALL_KEY', 'API_SPORTS_KEY', 'VITE_API_FOOTBALL_KEY', 'NEXT_PUBLIC_API_FOOTBALL_KEY'],
-        '',
+        'fcbc53a3d31e0c893167b8da80e7f846',
     ),
 
     /**

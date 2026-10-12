@@ -1312,8 +1312,8 @@ export function AnalyzePage() {
                                 </Button>
                             </div>
                         </GlassCard>
-                    ) : result.status === 'INSUFFICIENT_DATA' ? (
-                        /* HARD ENFORCEMENT: Trường hợp INSUFFICIENT_DATA */
+                    ) : result.status === 'INSUFFICIENT_DATA' && (!result.picks || result.picks.length === 0) ? (
+                        /* Fallback cho bản ghi lịch sử cũ chưa có kèo */
                         <GlassCard className="border border-amber-500/30 bg-amber-950/20 p-5 text-center">
                             <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-amber-500/20 text-amber-400 text-2xl mb-3">
                                 ⛔
@@ -1322,22 +1322,31 @@ export function AnalyzePage() {
                                 DỮ LIỆU KHÔNG ĐỦ ĐIỀU KIỆN (INSUFFICIENT DATA)
                             </h3>
                             <p className="mt-2 text-xs text-neutral-300 max-w-lg mx-auto">
-                                {result.noBetReasons?.[0] || 'Mỗi đội cần ít nhất 5 trận hoàn thành hợp lệ trong vòng 12 tháng. Hệ thống từ chối tính toán xác suất hoặc gợi ý kèo.'}
+                                {result.noBetReasons?.[0] || 'Mỗi đội cần ít nhất 5 trận hoàn thành hợp lệ trong vòng 12 tháng.'}
                             </p>
                             <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 font-mono text-xs text-amber-300">
                                 📊 Dữ liệu: {result.dataCounts?.homeMatches ?? 0} trận / đội nhà, {result.dataCounts?.awayMatches ?? 0} trận / đội khách, {result.dataCounts?.h2hMatches ?? 0} lần đối đầu
                             </div>
                         </GlassCard>
                     ) : (
-                        /* Trường hợp SUCCESS (Data gate passed) */
+                        /* Trường hợp SUCCESS (Hoàn tất đầy đủ 4 bước) */
                         <>
-                            {/* Badge số lượng trận đấu */}
-                            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-500/20 bg-emerald-950/10 px-3 py-2 text-xs text-emerald-300">
-                                <span className="font-semibold">✓ Cổng dữ liệu: ĐỦ ĐIỀU KIỆN</span>
-                                <span className="font-mono font-medium">
-                                    Dữ liệu: {result.dataCounts?.homeMatches ?? 0} trận / đội nhà, {result.dataCounts?.awayMatches ?? 0} trận / đội khách, {result.dataCounts?.h2hMatches ?? 0} lần đối đầu
-                                </span>
-                            </div>
+                            {/* Badge số lượng trận đấu & Cổng dữ liệu */}
+                            {!result.dataGatePassed ? (
+                                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-xs text-amber-300">
+                                    <span className="font-semibold">⚠️ Cổng dữ liệu: Tin cậy Thấp (low_data) · Neo 85% Thị trường (w=0.15)</span>
+                                    <span className="font-mono font-medium">
+                                        Dữ liệu: {result.dataCounts?.homeMatches ?? 0} trận / đội nhà, {result.dataCounts?.awayMatches ?? 0} trận / đội khách, {result.dataCounts?.h2hMatches ?? 0} lần đối đầu
+                                    </span>
+                                </div>
+                            ) : (
+                                <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-500/20 bg-emerald-950/10 px-3 py-2 text-xs text-emerald-300">
+                                    <span className="font-semibold">✓ Cổng dữ liệu: ĐỦ ĐIỀU KIỆN</span>
+                                    <span className="font-mono font-medium">
+                                        Dữ liệu: {result.dataCounts?.homeMatches ?? 0} trận / đội nhà, {result.dataCounts?.awayMatches ?? 0} trận / đội khách, {result.dataCounts?.h2hMatches ?? 0} lần đối đầu
+                                    </span>
+                                </div>
+                            )}
 
                             {qualifyingPicks.length === 0 ? (
                                 <GlassCard className="border border-white/10 p-5">

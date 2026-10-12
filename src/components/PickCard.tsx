@@ -10,6 +10,10 @@ const FLAG_LABEL: Record<string, string> = {
     ev_non_positive: 'EV ≤ 0',
     model_disagreement: 'Mô hình lệch thị trường > 15 điểm %',
     trap_high_odds_negative_edge: 'Cảnh báo TRAP: odds cao nhưng Edge âm',
+    low_data: 'Tin cậy Thấp (low_data) · Neo 85% Thị trường',
+    suspicious_edge: 'Edge nghi vấn (> 15%)',
+    NEGATIVE_VALUE: 'Giá trị âm',
+    prob_below_50: 'Xác suất < 50%',
 }
 
 /**
@@ -199,10 +203,13 @@ export function PickCard({
                         {pick.flags.map((f) => (
                             <li
                                 key={f}
-                                className={`rounded-full border px-2 py-0.5 text-[11px] ${f === 'trap_high_odds_negative_edge'
+                                className={`rounded-full border px-2 py-0.5 text-[11px] ${
+                                    f === 'trap_high_odds_negative_edge'
                                         ? 'border-warn-400/40 bg-warn-500/15 text-warn-400'
+                                        : f === 'low_data'
+                                        ? 'border-amber-400/50 bg-amber-500/15 text-amber-300 font-semibold'
                                         : 'border-white/12 bg-white/5 text-ink-500'
-                                    }`}
+                                }`}
                             >
                                 {FLAG_LABEL[f] ?? f}
                             </li>

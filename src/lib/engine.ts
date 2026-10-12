@@ -174,33 +174,15 @@ export function analyzeMatch(
         }
     }
 
-    // HARD ENFORCEMENT 2: INSUFFICIENT_DATA
-    // Mỗi đội cần ít nhất 5 trận hoàn thành hợp lệ trong vòng 12 tháng
-    const isInsufficient = homeN < 5 || awayN < 5
-    if (isInsufficient) {
-        return {
-            status: 'INSUFFICIENT_DATA',
-            dataGatePassed: false,
-            dataCounts: {
-                homeMatches: homeN,
-                awayMatches: awayN,
-                h2hMatches: h2hN,
-            },
-            fixtureIdentity: data.fixtureIdentity,
-            providerSummaries: data.providerSummaries,
-            callLogs: data.callLogs,
-            webSearchSummary: data.webSearchSummary,
-            lambdaHome: 0,
-            lambdaAway: 0,
-            matrix: [],
-            topScorelines: [],
-            picks: [],
-            noBet: true,
-            noBetReasons: [
-                `Dữ liệu không đủ để dự đoán: Đội nhà có ${homeN} trận, Đội khách có ${awayN} trận (yêu cầu tối thiểu 5 trận).`,
-            ],
-        }
-    }
+    // CỔNG DỮ LIỆU (DATA GATE) & LOW-DATA PIPELINE:
+    // Đánh giá dữ liệu có đạt chuẩn tối thiểu 5 trận/đội hay không.
+    // NGUYÊN TẮC QUANT: Khi dữ liệu thấp (homeN < 5 hoặc awayN < 5), TUYỆT ĐỐI KHÔNG DỪNG PIPELINE.
+    // Chuyển sang chế độ Market-Anchored Low-Data Pipeline:
+    // - Neo 85% vào tỷ lệ thị trường (w = 0.15) và giá trị nền giải đấu (LG_HOME: 1.45, LG_AWAY: 1.15).
+    // - Gắn nhãn badge "Tin cậy Thấp (low_data)".
+    // - Hoàn tất đầy đủ 4 bước (Thu thập -> Trích xuất -> Tính toán -> Diễn giải).
+    const isLowData = homeN < 5 || awayN < 5
+    const dataGatePassed = !isLowData
 
     // Bước 1: λ theo dữ liệu đội
     const { lambdaHome: modelLambdaHome, lambdaAway: modelLambdaAway } = estimateLambdas(data, lgHome, lgAway)
@@ -217,12 +199,32 @@ export function analyzeMatch(
     const sourceCount = data.sources.length
     const n = Math.min(data.home.n, data.away.n)
     const lineupConfirmed = data.home.lineup_confirmed === true && data.away.lineup_confirmed === true
-    const blended = blendLambdas(
+    let blended = blendLambdas(
         lambdaModel,
         lambdaMarket,
         { n, sourceCount, lineupConfirmed },
         hasMarketOdds,
     )
+
+    // Dữ liệu thấp (< 5 trận/đội): Enforce neo 85% thị trường (w = 0.15)
+    if (isLowData) {
+        const wLow = 0.15
+        if (hasMarketOdds && lambdaMarket) {
+            blended = {
+                lambdaHome: Math.max(0.15, Number((wLow * lambdaModel.home + (1 - wLow) * lambdaMarket.home).toFixed(4))),
+                lambdaAway: Math.max(0.15, Number((wLow * lambdaModel.away + (1 - wLow) * lambdaMarket.away).toFixed(4))),
+                w: wLow,
+                reason: `Dữ liệu mẫu hạn chế (Nhà: ${homeN} trận, Khách: ${awayN} trận < 5): Neo 85% vào tỷ lệ thị trường & giải đấu (w = 0.15).`,
+            }
+        } else {
+            blended = {
+                lambdaHome: lambdaModel.home,
+                lambdaAway: lambdaModel.away,
+                w: wLow,
+                reason: `Dữ liệu mẫu hạn chế (Nhà: ${homeN} trận, Khách: ${awayN} trận < 5) & thiếu odds 2 đầu: Dùng baseline giải đấu (LG_HOME: ${lgHome}, LG_AWAY: ${lgAway}).`,
+            }
+        }
+    }
 
     let lambdaHome = blended.lambdaHome
     let lambdaAway = blended.lambdaAway
@@ -280,11 +282,11 @@ export function analyzeMatch(
         if (ev <= 0) flags.push('ev_non_positive')
         if (marketDelta > MAX_MARKET_DELTA) flags.push('model_disagreement')
         if (edge > 0.15) flags.push('suspicious_edge')
-        if (blended.w === 0.15) flags.push('low_data')
+        if (blended.w === 0.15 || isLowData) flags.push('low_data')
         if (breakEven !== null && headlineWinProb < breakEven) flags.push('NEGATIVE_VALUE')
         if (headlineWinProb < 0.50) flags.push('prob_below_50')
 
-        const confidence = confidenceScore(n, sourceCount, marketDelta)
+        const confidence = isLowData ? 'low' : confidenceScore(n, sourceCount, marketDelta)
         if (edge < 0 && line.odds >= 2.0) flags.push('trap_high_odds_negative_edge')
 
         let status: Pick['status'] = 'rejected'
@@ -345,7 +347,7 @@ export function analyzeMatch(
 
     return {
         status: 'SUCCESS',
-        dataGatePassed: true,
+        dataGatePassed,
         dataCounts: {
             homeMatches: homeN,
             awayMatches: awayN,
