@@ -106,10 +106,60 @@ const handleExtract = async (c: Context<{ Variables: Vars }>) => {
     const invalid = validateImages(images)
     if (invalid) return c.json({ error: 'invalid_images', message: invalid }, 400)
 
+    const RETRY_BACKOFF_MS = 2500
+    const ACTIONABLE_429_MESSAGE =
+        'Máy chủ OCR đang quá tải (HTTP 429). Đang thử lại hoặc bạn có thể mở khóa để nhập thông tin trực tiếp.'
+
+    const hint = { home, away, league }
+
     try {
-        const result = await extractOddsFromImages(images, { home, away, league })
+        let result
+        try {
+            result = await extractOddsFromImages(images, hint)
+        } catch (firstErr) {
+            const is429 =
+                (firstErr instanceof XKiroError && firstErr.status === 429) ||
+                (firstErr instanceof Error && firstErr.message.includes('429'))
+
+            if (is429) {
+                console.warn(`[extract] xKiro trả HTTP 429 (Rate Limit). Chờ ${RETRY_BACKOFF_MS}ms và tự động thử lại ONCE...`)
+                await new Promise((resolve) => setTimeout(resolve, RETRY_BACKOFF_MS))
+                try {
+                    result = await extractOddsFromImages(images, hint)
+                } catch (retryErr) {
+                    const isStill429 =
+                        (retryErr instanceof XKiroError && retryErr.status === 429) ||
+                        (retryErr instanceof Error && retryErr.message.includes('429'))
+
+                    if (isStill429) {
+                        return c.json(
+                            {
+                                error: 'rate_limit',
+                                message: ACTIONABLE_429_MESSAGE,
+                            },
+                            429,
+                        )
+                    }
+                    throw retryErr
+                }
+            } else {
+                throw firstErr
+            }
+        }
         return c.json(result)
     } catch (e) {
+        const is429 =
+            (e instanceof XKiroError && e.status === 429) ||
+            (e instanceof Error && e.message.includes('429'))
+        if (is429) {
+            return c.json(
+                {
+                    error: 'rate_limit',
+                    message: ACTIONABLE_429_MESSAGE,
+                },
+                429,
+            )
+        }
         if (e instanceof XKiroError) {
             return c.json({ error: 'xkiro', message: e.message }, e.status as 400)
         }

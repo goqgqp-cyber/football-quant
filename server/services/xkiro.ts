@@ -349,6 +349,114 @@ CẤU TRÚC JSON MẪU BẮT BUỘC:
 }`
 
 /**
+ * Thử trích xuất qua Secondary Vision Provider nếu xKiro quá tải hoặc gặp lỗi.
+ * Hỗ trợ Gemini API (Google AI Studio) và OpenRouter Vision API.
+ */
+async function callSecondaryVisionFallback(
+    images: ImageInput[],
+    contentParts: Array<{ type: 'text' | 'image_url'; text?: string; image_url?: { url: string } }>,
+): Promise<{ text: string; model: string } | null> {
+    const geminiKey = (
+        process.env.GEMINI_API_KEY ||
+        process.env.GOOGLE_API_KEY ||
+        ''
+    ).trim()
+    const openrouterKey = (process.env.OPENROUTER_API_KEY || '').trim()
+
+    // 1. Thử Gemini Vision nếu có key
+    if (geminiKey) {
+        const geminiModel = process.env.GEMINI_MODEL || 'gemini-1.5-flash'
+        try {
+            console.log(`[ocr-vision] Thử Secondary Vision qua Gemini (${geminiModel})...`)
+            const parts: unknown[] = [
+                {
+                    text:
+                        contentParts
+                            .filter((p) => p.type === 'text')
+                            .map((p) => p.text)
+                            .join('\n') || OCR_PROMPT,
+                },
+            ]
+            for (const img of images) {
+                parts.push({
+                    inline_data: {
+                        mime_type: img.mimeType,
+                        data: img.data,
+                    },
+                })
+            }
+            const res = await fetch(
+                `https://generativelanguage.googleapis.com/v1beta/models/${geminiModel}:generateContent?key=${geminiKey}`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        contents: [{ parts }],
+                        generationConfig: {
+                            temperature: 0.0,
+                            responseMimeType: 'application/json',
+                        },
+                    }),
+                },
+            )
+            if (res.ok) {
+                const data = (await res.json()) as {
+                    candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+                }
+                const gText = data.candidates?.[0]?.content?.parts?.[0]?.text ?? ''
+                if (gText) {
+                    console.log(`[ocr-vision] Thành công với Gemini Vision fallback (${geminiModel})`)
+                    return { text: gText, model: `gemini/${geminiModel}` }
+                }
+            } else {
+                const errText = await res.text().catch(() => '')
+                console.warn(`[gemini-vision] HTTP ${res.status}: ${errText.slice(0, 150)}`)
+            }
+        } catch (e) {
+            console.warn('[gemini-vision] Lỗi fallback:', e)
+        }
+    }
+
+    // 2. Thử OpenRouter nếu có key
+    if (openrouterKey) {
+        const orModel = process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-001'
+        try {
+            console.log(`[ocr-vision] Thử Secondary Vision qua OpenRouter (${orModel})...`)
+            const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${openrouterKey}`,
+                },
+                body: JSON.stringify({
+                    model: orModel,
+                    messages: [{ role: 'user', content: contentParts }],
+                    temperature: 0.0,
+                    max_tokens: 1500,
+                }),
+            })
+            if (res.ok) {
+                const data = (await res.json()) as {
+                    choices?: Array<{ message?: { content?: string } }>
+                }
+                const orText = data.choices?.[0]?.message?.content ?? ''
+                if (orText) {
+                    console.log(`[ocr-vision] Thành công với OpenRouter Vision fallback (${orModel})`)
+                    return { text: orText, model: `openrouter/${orModel}` }
+                }
+            } else {
+                const errText = await res.text().catch(() => '')
+                console.warn(`[openrouter-vision] HTTP ${res.status}: ${errText.slice(0, 150)}`)
+            }
+        } catch (e) {
+            console.warn('[openrouter-vision] Lỗi fallback:', e)
+        }
+    }
+
+    return null
+}
+
+/**
  * Đọc ảnh bảng kèo OCR sử dụng xKiro.
  */
 export async function extractOddsFromImages(
@@ -417,14 +525,60 @@ export async function extractOddsFromImages(
         }
     }
 
-    if (!res || !res.ok) {
-        throw lastError || new XKiroError('xKiro Vision API không phản hồi.', 502)
+    const is429Error = (e: Error | null) =>
+        (e instanceof XKiroError && e.status === 429) ||
+        (e?.message ? e.message.includes('429') : false)
+
+    // Nếu gặp 429: tự động chờ 2500ms (backoff) và thử lại xKiro ONCE
+    if ((!res || !res.ok) && is429Error(lastError)) {
+        console.warn('[ocr-vision] Gặp HTTP 429 (Rate Limit). Chờ 2500ms trước khi tự động thử lại xKiro...')
+        await sleep(2500)
+        for (const model of candidateVisionModels) {
+            try {
+                usedVisionModel = model
+                res = await callXKiroChat(
+                    [{ role: 'user', content: contentParts }],
+                    {
+                        model,
+                        temperature: 0.0,
+                        maxTokens: 1500,
+                    },
+                )
+                if (res && res.ok) {
+                    lastError = null
+                    break
+                }
+            } catch (err) {
+                lastError = err instanceof Error ? err : new Error(String(err))
+                res = null
+            }
+        }
     }
 
-    const json = (await res.json()) as {
-        choices?: Array<{ message?: { content?: string } }>
+    let text = ''
+
+    if (res && res.ok) {
+        const json = (await res.json()) as {
+            choices?: Array<{ message?: { content?: string } }>
+        }
+        text = json.choices?.[0]?.message?.content ?? ''
+    } else {
+        // Tự động cascade sang nhà cung cấp Vision thứ hai (Gemini hoặc OpenRouter) nếu có cấu hình
+        console.warn('[ocr-vision] xKiro không phản hồi hợp lệ, kiểm tra Secondary Vision Provider...')
+        const fallback = await callSecondaryVisionFallback(images, contentParts)
+        if (fallback) {
+            text = fallback.text
+            usedVisionModel = fallback.model
+        } else {
+            if (is429Error(lastError)) {
+                throw new XKiroError(
+                    'Máy chủ OCR đang quá tải (HTTP 429). Đang thử lại hoặc bạn có thể mở khóa để nhập thông tin trực tiếp.',
+                    429,
+                )
+            }
+            throw lastError || new XKiroError('xKiro Vision API không phản hồi.', 502)
+        }
     }
-    const text = json.choices?.[0]?.message?.content ?? ''
 
     let parsed: {
         rows?: unknown[]

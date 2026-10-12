@@ -11,7 +11,7 @@
  * - NEVER label a First-Half market as [Tài/Xiu Bàn FT].
  */
 
-import { extractOddsFromImages, type ImageInput } from '../../../../server/services/xkiro.js'
+import { extractOddsFromImages, type ImageInput, XKiroError, sleep } from '../../../../server/services/xkiro.js'
 
 export const VISION_SYSTEM_PROMPT = `Bạn là Chuyên gia Thị giác Máy tính và OCR Bảng Kèo Bóng Đá (Sportsbook Odds Vision Analyst).
 Nhiệm vụ: Phân tích ảnh chụp màn hình bảng kèo nhà cái và bóc tách cấu trúc dữ liệu JSON chính xác.
@@ -27,6 +27,10 @@ QUY TẮC BẮT BUỘC:
 3. Phân biệt RÕ RÀNG kèo Bàn Thắng ("goals") và Phạt Góc ("corners"), cũng như Toàn Trận ("FT") và Hiệp 1 ("HT").
 4. BẮT BUỘC trả về DUY NHẤT một chuỗi JSON thuần hợp lệ, TUYỆT ĐỐI KHÔNG dùng markdown block (\`\`\`json hoặc \`\`\`), không có văn bản hay lời chào nào ngoài JSON.
 `
+
+const RETRY_BACKOFF_MS = 2500
+const ACTIONABLE_429_MESSAGE =
+    'Máy chủ OCR đang quá tải (HTTP 429). Đang thử lại hoặc bạn có thể mở khóa để nhập thông tin trực tiếp.'
 
 export async function POST(req: Request) {
     try {
@@ -44,21 +48,72 @@ export async function POST(req: Request) {
             })
         }
 
-        const result = await extractOddsFromImages(body.images, {
+        const hint = {
             home: body.home,
             away: body.away,
             league: body.league,
-        })
+        }
+
+        let result
+        try {
+            result = await extractOddsFromImages(body.images, hint)
+        } catch (firstErr) {
+            const is429 =
+                (firstErr instanceof XKiroError && firstErr.status === 429) ||
+                (firstErr instanceof Error && firstErr.message.includes('429'))
+
+            if (is429) {
+                console.warn(`[ocr-odds] xKiro trả HTTP 429 (Rate Limit). Chờ ${RETRY_BACKOFF_MS}ms và tự động thử lại ONCE...`)
+                await sleep(RETRY_BACKOFF_MS)
+                try {
+                    result = await extractOddsFromImages(body.images, hint)
+                } catch (retryErr) {
+                    const isStill429 =
+                        (retryErr instanceof XKiroError && retryErr.status === 429) ||
+                        (retryErr instanceof Error && retryErr.message.includes('429'))
+
+                    if (isStill429) {
+                        return new Response(
+                            JSON.stringify({
+                                error: 'rate_limit',
+                                message: ACTIONABLE_429_MESSAGE,
+                            }),
+                            {
+                                status: 429,
+                                headers: { 'Content-Type': 'application/json' },
+                            },
+                        )
+                    }
+                    throw retryErr
+                }
+            } else {
+                throw firstErr
+            }
+        }
 
         return new Response(JSON.stringify(result), {
             status: 200,
             headers: { 'Content-Type': 'application/json' },
         })
     } catch (err) {
+        const is429 =
+            (err instanceof XKiroError && err.status === 429) ||
+            (err instanceof Error && err.message.includes('429'))
+
+        const status = is429 ? 429 : err instanceof XKiroError ? err.status : 500
+        const message = is429
+            ? ACTIONABLE_429_MESSAGE
+            : err instanceof Error
+              ? err.message
+              : 'Lỗi OCR bảng kèo.'
+
         return new Response(
-            JSON.stringify({ error: err instanceof Error ? err.message : 'Lỗi OCR bảng kèo.' }),
+            JSON.stringify({
+                error: is429 ? 'rate_limit' : 'ocr_error',
+                message,
+            }),
             {
-                status: 500,
+                status,
                 headers: { 'Content-Type': 'application/json' },
             },
         )

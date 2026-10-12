@@ -80,6 +80,7 @@ export function AnalyzePage() {
     const [data, setData] = useState<MatchData | null>(null)
     const [oddsLines, setOddsLines] = useState<OddsLine[]>([])
     const [bankroll] = useState(settings.bankroll)
+    const [isManualMode, setIsManualMode] = useState(false)
 
     // ---- In-Play Live temporal state ----
     const [isLive, setIsLive] = useState(false)
@@ -398,7 +399,20 @@ export function AnalyzePage() {
         [input, oddsLines, isLive, currentMinute, currentScore, fixtureId],
     )
 
-    const runAnalysis = (forceRefresh = false) => triggerAnalysis({ forceRefresh })
+    const runAnalysis = (forceRefresh = false) => {
+        const h = input.homeTeam.trim()
+        const a = input.awayTeam.trim()
+        if (!h || !a) {
+            setError('Vui lòng nhập tên Đội nhà và Đội khách (hoặc tải ảnh bảng kèo) để bắt đầu phân tích.')
+            return
+        }
+        if (oddsLines.length === 0) {
+            setError('Vui lòng nhập ít nhất 1 dòng kèo cá cược (bấm [+ Thêm kèo] ở bên dưới).')
+            return
+        }
+        setError(null)
+        triggerAnalysis({ forceRefresh })
+    }
 
     /** Dừng luồng đang chạy. */
     const cancelAnalysis = () => {
@@ -715,9 +729,18 @@ export function AnalyzePage() {
             <GlassCard>
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <p className="font-display text-sm font-bold tracking-wide text-ink-100">Thông tin trận đấu</p>
-                    <span className="rounded-full border border-sky-400/30 bg-sky-500/10 px-2.5 py-0.5 text-[11px] font-medium text-sky-300">
-                        🔒 Khóa chỉnh sửa tay · Dữ liệu tự động
-                    </span>
+                    <button
+                        type="button"
+                        onClick={() => setIsManualMode((prev) => !prev)}
+                        className={`rounded-full px-3 py-1 text-[11px] font-semibold transition cursor-pointer flex items-center gap-1.5 shadow-sm ${
+                            isManualMode
+                                ? 'border border-emerald-400/40 bg-emerald-500/20 text-emerald-300 hover:bg-emerald-500/30 hover:border-emerald-400/60 shadow-emerald-500/10'
+                                : 'border border-sky-400/30 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20 hover:border-sky-400/50'
+                        }`}
+                        title={isManualMode ? 'Bấm để chuyển về chế độ tự động' : 'Bấm để mở khóa chỉnh sửa tay'}
+                    >
+                        {isManualMode ? '🔓 Mở chỉnh sửa tay' : '🔒 Dữ liệu tự động'}
+                    </button>
                 </div>
 
 
@@ -775,40 +798,72 @@ export function AnalyzePage() {
                 )}
 
                 <div className="grid gap-3 sm:grid-cols-2">
-                    <Field label="Đội nhà" hint="Tự động trích xuất từ OCR / API-Football">
+                    <Field
+                        label="Đội nhà"
+                        hint={isManualMode ? 'Nhập tay tên đội nhà (VD: Arsenal)' : 'Tự động trích xuất từ OCR / API-Football'}
+                    >
                         <TextInput
-                            readOnly
-                            tabIndex={-1}
+                            readOnly={!isManualMode}
+                            tabIndex={isManualMode ? 0 : -1}
                             value={input.homeTeam}
-                            className="cursor-not-allowed opacity-80 bg-neutral-900/60 border-neutral-800 select-none text-white/90"
-                            placeholder="Chờ trích xuất OCR hoặc API-Football..."
+                            onChange={(e) => setHomeTeam(e.target.value)}
+                            className={
+                                isManualMode
+                                    ? 'border-emerald-500/40 focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/30 bg-black/40 text-white'
+                                    : 'cursor-not-allowed opacity-80 bg-neutral-900/60 border-neutral-800 select-none text-white/90'
+                            }
+                            placeholder={isManualMode ? 'Nhập tên đội nhà...' : 'Chờ trích xuất OCR hoặc API-Football...'}
                         />
                     </Field>
-                    <Field label="Đội khách" hint="Tự động trích xuất từ OCR / API-Football">
+                    <Field
+                        label="Đội khách"
+                        hint={isManualMode ? 'Nhập tay tên đội khách (VD: Chelsea)' : 'Tự động trích xuất từ OCR / API-Football'}
+                    >
                         <TextInput
-                            readOnly
-                            tabIndex={-1}
+                            readOnly={!isManualMode}
+                            tabIndex={isManualMode ? 0 : -1}
                             value={input.awayTeam}
-                            className="cursor-not-allowed opacity-80 bg-neutral-900/60 border-neutral-800 select-none text-white/90"
-                            placeholder="Chờ trích xuất OCR hoặc API-Football..."
+                            onChange={(e) => setAwayTeam(e.target.value)}
+                            className={
+                                isManualMode
+                                    ? 'border-emerald-500/40 focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/30 bg-black/40 text-white'
+                                    : 'cursor-not-allowed opacity-80 bg-neutral-900/60 border-neutral-800 select-none text-white/90'
+                            }
+                            placeholder={isManualMode ? 'Nhập tên đội khách...' : 'Chờ trích xuất OCR hoặc API-Football...'}
                         />
                     </Field>
-                    <Field label="Giải đấu" hint="Tự động trích xuất từ OCR / API-Football">
+                    <Field
+                        label="Giải đấu"
+                        hint={isManualMode ? 'Nhập tên giải đấu (tùy chọn)' : 'Tự động trích xuất từ OCR / API-Football'}
+                    >
                         <TextInput
-                            readOnly
-                            tabIndex={-1}
+                            readOnly={!isManualMode}
+                            tabIndex={isManualMode ? 0 : -1}
                             value={input.league}
-                            className="cursor-not-allowed opacity-80 bg-neutral-900/60 border-neutral-800 select-none text-white/90"
-                            placeholder="Chờ trích xuất OCR hoặc API-Football..."
+                            onChange={(e) => setInput((p) => ({ ...p, league: e.target.value }))}
+                            className={
+                                isManualMode
+                                    ? 'border-emerald-500/40 focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/30 bg-black/40 text-white'
+                                    : 'cursor-not-allowed opacity-80 bg-neutral-900/60 border-neutral-800 select-none text-white/90'
+                            }
+                            placeholder={isManualMode ? 'Nhập tên giải đấu (VD: Premier League)...' : 'Chờ trích xuất OCR hoặc API-Football...'}
                         />
                     </Field>
-                    <Field label="Giờ đá (ISO)" hint="Tự động trích xuất từ OCR / API-Football">
+                    <Field
+                        label="Giờ đá (ISO)"
+                        hint={isManualMode ? 'Chọn thời gian thi đấu (tùy chọn)' : 'Tự động trích xuất từ OCR / API-Football'}
+                    >
                         <TextInput
-                            readOnly
-                            tabIndex={-1}
+                            readOnly={!isManualMode}
+                            tabIndex={isManualMode ? 0 : -1}
                             type="datetime-local"
                             value={input.kickoff.slice(0, 16)}
-                            className="cursor-not-allowed opacity-80 bg-neutral-900/60 border-neutral-800 select-none text-white/90"
+                            onChange={(e) => setInput((p) => ({ ...p, kickoff: e.target.value }))}
+                            className={
+                                isManualMode
+                                    ? 'border-emerald-500/40 focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400/30 bg-black/40 text-white'
+                                    : 'cursor-not-allowed opacity-80 bg-neutral-900/60 border-neutral-800 select-none text-white/90'
+                            }
                         />
                     </Field>
                 </div>
@@ -957,7 +1012,25 @@ export function AnalyzePage() {
                             }}
                         />
                     </label>
-                    {parseHint && <p className="mt-2 text-xs text-danger-400">{parseHint}</p>}
+                    {parseHint && (
+                        <div className="mt-3 w-full rounded-xl border border-rose-500/30 bg-rose-950/30 p-3.5 text-xs text-rose-300">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex items-center gap-2">
+                                    <span className="text-base">⚠️</span>
+                                    <span>{parseHint}</span>
+                                </div>
+                                {!isManualMode && (
+                                    <button
+                                        type="button"
+                                        onClick={() => setIsManualMode(true)}
+                                        className="rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-400/40 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition flex items-center gap-1 cursor-pointer"
+                                    >
+                                        🔓 Mở khóa chỉnh sửa tay ngay
+                                    </button>
+                                )}
+                            </div>
+                        </div>
+                    )}
                 </div>
                 {imagePreviews.length > 0 && (
                     <div className="mt-3">
@@ -1146,17 +1219,20 @@ export function AnalyzePage() {
                 <div className="flex items-center justify-between gap-2">
                     <p className="font-display text-sm font-bold text-ink-100">Kèo đã nhập ({oddsLines.length})</p>
                     <div className="flex items-center gap-2">
-                        <Button
-                            variant="ghost"
-                            onClick={() => setShowEditOdds((prev) => !prev)}
-                        >
-                            {showEditOdds ? 'Đóng chỉnh sửa' : 'Chỉnh sửa tỷ lệ cược'}
-                        </Button>
+                        {oddsLines.length > 0 && (
+                            <Button
+                                variant="ghost"
+                                onClick={() => setShowEditOdds((prev) => !prev)}
+                            >
+                                {showEditOdds ? 'Đóng chỉnh sửa' : 'Chỉnh sửa tỷ lệ cược'}
+                            </Button>
+                        )}
                         <Button
                             variant="ghost"
                             onClick={() => {
                                 const id = `x-${Date.now()}`
                                 setOddsLines((prev) => [...prev, { id, kind: 'totals', side: 'over', line: 2.5, odds: 1.95 }])
+                                setShowEditOdds(true)
                             }}
                         >
                             + Thêm kèo
@@ -1164,7 +1240,24 @@ export function AnalyzePage() {
                     </div>
                 </div>
                 {oddsLines.length === 0 ? (
-                    <p className="mt-2 text-sm text-ink-500">Chưa có kèo nào.</p>
+                    <div className="mt-3 rounded-xl border border-dashed border-white/10 bg-white/5 p-4 text-center">
+                        <p className="text-sm text-ink-400">Chưa có kèo nào.</p>
+                        <p className="mt-1 text-xs text-ink-500">
+                            Tải ảnh bảng kèo để AI tự động trích xuất, hoặc bấm nút{' '}
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    const id = `x-${Date.now()}`
+                                    setOddsLines([{ id, kind: 'totals', side: 'over', line: 2.5, odds: 1.95 }])
+                                    setShowEditOdds(true)
+                                }}
+                                className="text-sky-400 hover:underline font-semibold cursor-pointer"
+                            >
+                                [+ Thêm kèo]
+                            </button>{' '}
+                            để nhập kèo bằng tay và tiếp tục phân tích.
+                        </p>
+                    </div>
                 ) : (
                     <div className="mt-3 overflow-x-auto rounded-xl border border-white/10">
                         <table className="min-w-full text-sm">
@@ -1207,11 +1300,18 @@ export function AnalyzePage() {
                     <button
                         type="button"
                         onClick={() => void runAnalysis()}
-                        disabled={running || oddsLines.length === 0}
-                        className="inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg bg-white text-black font-semibold hover:bg-neutral-100 transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                        disabled={running || oddsLines.length === 0 || !input.homeTeam.trim() || !input.awayTeam.trim()}
+                        className="inline-flex items-center justify-center gap-2 px-6 py-2.5 rounded-lg bg-white text-black font-semibold hover:bg-neutral-100 transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                     >
                         {running ? 'Đang phân tích…' : 'Phân tích ngay'}
                     </button>
+                    {!running && (!input.homeTeam.trim() || !input.awayTeam.trim() || oddsLines.length === 0) && (
+                        <p className="mt-2 text-xs text-ink-500">
+                            {!input.homeTeam.trim() || !input.awayTeam.trim()
+                                ? 'Cần nhập tên Đội nhà và Đội khách (hoặc bóc tách từ ảnh) để kích hoạt nút phân tích.'
+                                : 'Cần có ít nhất 1 kèo cá cược để bắt đầu phân tích.'}
+                        </p>
+                    )}
                 </div>
                 {error && <p className="mt-2 text-xs text-danger-400">{error}</p>}
                 {savedId && !error && (
