@@ -200,6 +200,10 @@ export function analyzeMatch(
         const impNoVig = pImpliedNoVig(line.odds, opposite)
         const marketDelta = Math.abs(triple.win - imp)
 
+        const nonPush = triple.win + triple.lose
+        const headlineWinProb = nonPush > 0 ? triple.win / nonPush : triple.win
+        const breakEven = line.odds > 1 ? 1 / line.odds : null
+
         const flags: string[] = []
         if (line.odds < MIN_ODDS) flags.push('odds_below_min')
         if (edge < MIN_EDGE) flags.push('edge_below_min')
@@ -207,6 +211,8 @@ export function analyzeMatch(
         if (marketDelta > MAX_MARKET_DELTA) flags.push('model_disagreement')
         if (edge > 0.15) flags.push('suspicious_edge')
         if (blended.w === 0.15) flags.push('low_data')
+        if (breakEven !== null && headlineWinProb < breakEven) flags.push('NEGATIVE_VALUE')
+        if (headlineWinProb < 0.50) flags.push('prob_below_50')
 
         const confidence = confidenceScore(n, sourceCount, marketDelta)
         if (edge < 0 && line.odds >= 2.0) flags.push('trap_high_odds_negative_edge')
@@ -249,6 +255,11 @@ export function analyzeMatch(
             status,
             flags,
             marketDelta,
+            headlineWinProb,
+            breakEven,
+            pData: triple,
+            pMarket: impNoVig != null ? { win: impNoVig, push: 0, lose: 1 - impNoVig } : null,
+            pFinal: triple,
         })
     }
 

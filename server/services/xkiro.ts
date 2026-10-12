@@ -19,7 +19,7 @@ import type {
     Source,
     TeamStats,
 } from '../../src/lib/types.js'
-import { buildFacts, factLabels, substituteFacts, verifyNumbers } from '../../src/lib/explain.js'
+import { buildFacts, factLabels, postCheckNarrative, substituteFacts } from '../../src/lib/explain.js'
 import { extractValidJson } from '../../src/lib/json-cleaner.js'
 import { findFixture, getFixtureH2H } from './apiFootball.js'
 import {
@@ -925,32 +925,36 @@ export async function streamCollectMatchData(
 // ===========================================================================
 
 const EXPLANATION_SYSTEM_PROMPT = `Bạn là Chuyên gia Định lượng & Phân tích Chiến thuật Bóng đá (Quantitative Football Analyst).
-Nhiệm vụ: Viết báo cáo giải thích 4 phần định lượng cho trận đấu dựa trên mô hình Poisson hiệu chỉnh Dixon-Coles (rho = -0.08), phối hợp trọng số Bayesian giữa mô hình đội (λ_model) và thị trường nhà cái (λ_market).
+Nhiệm vụ: Viết báo cáo giải thích 9 phần định lượng cho trận đấu dựa trên mô hình Poisson hiệu chỉnh Dixon-Coles (rho = -0.08) và thuật toán đếm xác suất từ dữ liệu thực tế (Count Engine).
 
 QUY TẮC SỐ — TUYỆT ĐỐI NGHIÊM:
-- Bạn KHÔNG BAO GIỜ được tự ý viết bất kỳ con số cụ thể nào (kể cả ước lượng như "khoảng 60%" hay "hơn 2 quả").
+- Bạn CHỈ ĐƯỢC PHÉP dùng các con số có trong bảng "SỐ LIỆU ĐÃ TÍNH SẴN" hoặc thay thế bằng TOKEN. Tuyệt đối không tự tính toán, ước lượng, thêm số mới hay bịa số (kể cả ước tính như "khoảng 60%" hay "hơn 2 quả").
 - Mọi số liệu PHẢI được thay thế chính xác bằng các TOKEN trong bảng "SỐ LIỆU ĐÃ TÍNH SẴN" (ví dụ: {LAMBDA_HOME}, {LAMBDA_AWAY}, {LAMBDA_MODEL_HOME}, {LAMBDA_MARKET_HOME}, {WEIGHT_MODEL}, {TOP1_SCORE}, {P1_ODDS}, v.v.).
 - Chỉ được dùng token có trong bảng. Không tự ý sáng tạo token mới.
 
 DANH SÁCH KIỂM TRA CHỐNG THIÊN LỆCH:
 - Không thiên về đội lớn mà không có số liệu; không thiên về kèo Tài vì cảm tính; không bỏ qua kịch bản hòa hoặc tỉ số thấp (0-0, 1-0, 1-1).
-- Luôn nêu rõ kịch bản thực tế khiến pick bị thua.
+- Luôn nêu bằng chứng đi ngược lại kết luận nếu có cờ cảnh báo (uncertainty / negative value).
 - Quản trị vốn: 1.0% - 2.5% tổng vốn, không all-in hay gấp thếp.
-- TUYỆT ĐỐI CẤM AI tự bịa ra các nguồn tin như Sofascore, Flashscore hay tin đồn chuyển nhượng nếu không có trong dữ liệu cung cấp.
-- QUY TẮC LAMBDA & XÁC SUẤT: λ_FINAL luôn là số dương phản ánh kỳ vọng bàn thắng (kể cả trong trận đấu). Tuyệt đối không nhận định λ bị kéo về 0 hoặc bằng 0, và không bao giờ khẳng định tỷ lệ thắng 100%.
+- TUYỆT ĐỐI CẤM AI tự bịa ra các nguồn tin không có trong dữ liệu cung cấp.
 
-BỐN PHẦN CẦN TRÌNH BÀY (mỗi phần 2–4 câu):
-(1) Đối soát chỉ số: xG/xGA (kèm nguồn), variance (vượt/hụt kỳ vọng), sân nhà - sân khách, H2H. Nêu rõ trường thiếu dữ liệu và mâu thuẫn nguồn.
-(2) Chiến thuật & nhân sự: Sơ đồ, phong cách, điểm nóng tranh chấp, danh sách vắng mặt (đã xác nhận hay chỉ tin đồn).
-(3) Thị trường kèo: λ_model, λ_market, trọng số w, λ_final. So sánh xác suất thực vs thị trường (P_real vs P_implied), Edge, EV. Nhận định Value/Trap và kịch bản khiến kèo thua.
-(4) Bảng tổng kết & quản trị vốn: Tỉ số khả dĩ nhất, kết luận chốt kèo tối ưu (Top 1 Value) và dự phòng (Top 2), phân bổ vốn kỷ luật (1.0% - 2.5%). Cảnh báo bắt buộc: "Phân tích xác suất, không bảo đảm kết quả."
+CHÍN PHẦN BẮT BUỘC TRÌNH BÀY DƯỚI DẠNG MẢNG "parts" (mỗi phần 1-3 câu súc tích):
+(1) Tóm tắt đối đầu (H2H summary)
+(2) Phong độ sân nhà của đội nhà (home form)
+(3) Phong độ sân khách của đội khách (away form)
+(4) Tin tức lực lượng và bối cảnh (team news and context)
+(5) Dữ liệu còn thiếu và mâu thuẫn nguồn (missing data and source conflicts)
+(6) Dữ liệu gợi ý điều gì (what the data suggests, mô tả khách quan)
+(7) Kết luận đúng theo tính toán của thuật toán (the verdict exactly as computed)
+(8) Rủi ro lớn nhất đối với kết luận (biggest risks to the conclusion)
+(9) Danh sách nguồn dữ liệu (source list)
 
 YÊU CẦU ĐỊNH DẠNG BẮT BUỘC:
-- Trả về DUY NHẤT một đối tượng JSON thuần, KHÔNG sử dụng markdown backticks (\`\`\`json hoặc \`\`\`), KHÔNG có văn bản nào ngoài JSON:
-{"parts":["nội dung câu 1 đến câu 4 của phần (1)","nội dung phần (2)","nội dung phần (3)","nội dung phần (4)"],"caveats":["cảnh báo dữ liệu hoặc rủi ro nếu có"]}`
+- Trả về DUY NHẤT một đối tượng JSON thuần, KHÔNG sử dụng markdown backticks (\`\`\`json hoặc \`\`\`):
+{"parts":["nội dung (1)","nội dung (2)","nội dung (3)","nội dung (4)","nội dung (5)","nội dung (6)","nội dung (7)","nội dung (8)","nội dung (9)"],"caveats":["cảnh báo dữ liệu hoặc rủi ro nếu có"]}`
 
 /**
- * Bước C: xKiro viết 4 phần giải thích định lượng dựa trên số liệu engine đã tính.
+ * Bước C: xKiro viết 9 phần giải thích định lượng dựa trên số liệu engine đã tính.
  */
 export async function generateExplanation(
     meta: { home: string; away: string; league?: string },
@@ -1000,7 +1004,7 @@ export async function generateExplanation(
         data.missing.length ? data.missing.join(', ') : 'không thiếu',
         data.conflicts.length ? data.conflicts.join(' · ') : 'không mâu thuẫn',
         '',
-        'Hãy viết 4 phần giải thích và caveats dưới định dạng JSON thuần.',
+        'Hãy viết 9 phần giải thích và caveats dưới định dạng JSON thuần.',
     ].filter(Boolean).join('\n')
 
     const res = await callXKiroChat(
@@ -1031,11 +1035,12 @@ export async function generateExplanation(
     }
 
     const rawParts = Array.isArray(parsed.parts) ? parsed.parts : []
-    const parts = [0, 1, 2, 3].map((i) =>
-        typeof rawParts[i] === 'string'
-            ? substituteFacts((rawParts[i] as string).slice(0, 1200), facts)
+    const mappedParts = rawParts.map((p) =>
+        typeof p === 'string'
+            ? substituteFacts(p.slice(0, 1200), facts)
             : '',
-    ) as [string, string, string, string]
+    )
+    const targetParts = mappedParts.length >= 4 ? mappedParts : [0, 1, 2, 3].map((i) => mappedParts[i] || '')
 
     const caveats = Array.isArray(parsed.caveats)
         ? (parsed.caveats as unknown[])
@@ -1044,14 +1049,15 @@ export async function generateExplanation(
             .slice(0, 8)
         : []
 
-    const allText = parts.join('\n') + '\n' + caveats.join('\n')
-    const unverifiedNumbers = verifyNumbers(allText, facts)
+    // Cơ chế hậu kiểm: Quét toàn bộ số và thay thế bằng mẫu chuẩn nếu có số bịa
+    const postChecked = postCheckNarrative(targetParts, facts, meta, data, result)
 
     return {
-        parts,
-        verified: unverifiedNumbers.length === 0,
-        unverifiedNumbers,
+        parts: postChecked.parts,
+        verified: postChecked.verified,
+        unverifiedNumbers: postChecked.unverifiedNumbers,
         caveats,
         model: XKIRO_MODEL,
+        isFallbackTemplate: postChecked.isFallbackTemplate,
     }
 }

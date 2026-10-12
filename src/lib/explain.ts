@@ -204,3 +204,102 @@ export function verifyNumbers(text: string, facts: Fact[]): string[] {
     }
     return bad.slice(0, 12)
 }
+
+/**
+ * Xây dựng báo cáo giải thích 9 phần mẫu chuẩn (Spec Section 8) thuần túy từ số liệu engine.
+ * Dùng làm fallback khi AI hallucinate ra con số không có trong kết quả tính toán.
+ */
+export function buildDeterministicNarrative(
+    meta: { home: string; away: string; league?: string },
+    data: MatchData,
+    result: AnalysisResult,
+): string[] {
+    const homeTeam = meta.home || 'Đội nhà'
+    const awayTeam = meta.away || 'Đội khách'
+
+    // (1) H2H summary
+    const part1 = data.h2h.n > 0
+        ? `Lịch sử đối đầu ghi nhận ${data.h2h.n} cuộc chạm trán gần nhất giữa hai đội. Trung bình có ${fmt(data.h2h.avg_goals ?? 0)} bàn thắng mỗi trận${data.h2h.btts_rate != null ? ` với tỷ lệ hai đội cùng ghi bàn đạt ${fmt(data.h2h.btts_rate * 100, 1)}%` : ''}.`
+        : `Hai đội chưa có cuộc đối đầu trực tiếp đáng kể trong cơ sở dữ liệu mẫu gần đây.`
+
+    // (2) Home form
+    const part2 = `${homeTeam} thi đấu ${data.home.n} trận gần nhất, đạt hiệu suất ghi bàn trung bình ${fmt(data.home.goals_for ?? 0)} bàn/trận và để thủng lưới ${fmt(data.home.goals_against ?? 0)} bàn/trận${data.home.xgf != null ? ` (xG: ${fmt(data.home.xgf)}, xGA: ${fmt(data.home.xga ?? 0)})` : ''}.`
+
+    // (3) Away form
+    const part3 = `${awayTeam} thi đấu ${data.away.n} trận gần nhất, đạt hiệu suất ghi bàn trung bình ${fmt(data.away.goals_for ?? 0)} bàn/trận và để thủng lưới ${fmt(data.away.goals_against ?? 0)} bàn/trận${data.away.xgf != null ? ` (xG: ${fmt(data.away.xgf)}, xGA: ${fmt(data.away.xga ?? 0)})` : ''}.`
+
+    // (4) Team news & context
+    const homeInj = data.home.injuries.length > 0 ? `vắng ${data.home.injuries.join(', ')}` : 'lực lượng đầy đủ'
+    const awayInj = data.away.injuries.length > 0 ? `vắng ${data.away.injuries.join(', ')}` : 'lực lượng đầy đủ'
+    const lineupStatus = data.home.lineup_confirmed && data.away.lineup_confirmed ? 'Đội hình chính thức đã xác nhận.' : 'Đội hình ra sân ở trạng thái dự kiến.'
+    const part4 = `Tình hình lực lượng: ${homeTeam} (${homeInj}); ${awayTeam} (${awayInj}). ${lineupStatus}`
+
+    // (5) Missing data & conflicts
+    const missingStr = data.missing.length > 0 ? `Thiếu dữ liệu: ${data.missing.join(', ')}.` : 'Dữ liệu thu thập đầy đủ.'
+    const conflictsStr = data.conflicts.length > 0 ? ` Mâu thuẫn nguồn: ${data.conflicts.join(' · ')}.` : ' Không ghi nhận mâu thuẫn số liệu giữa các nguồn đối soát.'
+    const part5 = `${missingStr}${conflictsStr}`
+
+    // (6) What the data suggests (descriptive only)
+    const topScores = result.topScorelines.slice(0, 3).map((s) => `${s.score} (${fmt(s.p * 100, 1)}%)`).join(', ')
+    const part6 = `Mô hình Poisson hiệu chỉnh Dixon-Coles xác định kỳ vọng bàn thắng λ: ${homeTeam} = ${fmt(result.lambdaHome)}, ${awayTeam} = ${fmt(result.lambdaAway)}. Ba kịch bản tỉ số khả dĩ nhất lần lượt là: ${topScores}.`
+
+    // (7) The verdict exactly as computed
+    const valuePicks = result.picks.filter((p) => p.status === 'value')
+    let part7 = ''
+    if (result.noBet || result.picks.length === 0) {
+        part7 = `Khuyến nghị: NO BET. ${result.noBetReasons.join(' ') || 'Không có lựa chọn nào đạt đủ điều kiện an toàn theo mô hình.'}`
+    } else if (valuePicks.length > 0) {
+        const pickDescs = valuePicks.slice(0, 2).map((p, i) => {
+            const kindText = p.kind === 'totals' ? (p.side === 'over' ? 'Tài' : 'Xỉu') : `Chấp ${p.side === 'home' ? homeTeam : awayTeam}`
+            return `${i === 0 ? '[Top 1 Value]' : '[Top 2]'} ${kindText} ${p.line} @ ${fmt(p.odds)} (Xác suất: ${fmt(p.pWin * 100, 1)}%, Edge: ${fmt(p.edge * 100, 1)}%, Vốn đề xuất: ${fmt(p.stakePct, 2)}%)`
+        }).join('; ')
+        part7 = `Kết luận thuật toán: ${pickDescs}.`
+    } else {
+        part7 = `Kết luận: Không có kèo nào vượt ngưỡng giá trị kỳ vọng dương (EV > 0). Khuyến nghị đứng ngoài hoặc chỉ theo dõi.`
+    }
+
+    // (8) Biggest risks to the conclusion
+    const part8 = `Rủi ro lớn nhất: Biến động đột ngột của tỷ lệ cược thị trường trước giờ bóng lăn, yếu tố thời tiết hoặc các sự cố thẻ đỏ/chấn thương sớm làm phá vỡ ma trận phân phối xác suất.`
+
+    // (9) Source list
+    const sourceList = data.sources.length > 0
+        ? data.sources.map((s) => s.title).join('; ')
+        : 'Cơ sở dữ liệu nội bộ và thống kê giải đấu chính thức'
+    const part9 = `Danh sách nguồn tham chiếu: ${sourceList}.`
+
+    return [part1, part2, part3, part4, part5, part6, part7, part8, part9]
+}
+
+/**
+ * Hàng rào kiểm soát hậu kiểm (Spec Section 8 & 15):
+ * Quét toàn bộ số trong narrative. Nếu có bất kỳ số nào chưa được engine cấp,
+ * lập tức kích hoạt cơ chế thay thế bằng mẫu chuẩn xác định từ JSON và gắn cờ cảnh báo.
+ */
+export function postCheckNarrative(
+    rawParts: string[],
+    facts: Fact[],
+    meta: { home: string; away: string; league?: string },
+    data: MatchData,
+    result: AnalysisResult,
+): { parts: string[]; verified: boolean; unverifiedNumbers: string[]; isFallbackTemplate: boolean } {
+    const allText = rawParts.join('\n')
+    const unverified = verifyNumbers(allText, facts)
+
+    if (unverified.length > 0) {
+        const fallbackParts = buildDeterministicNarrative(meta, data, result)
+        return {
+            parts: fallbackParts,
+            verified: false,
+            unverifiedNumbers: unverified,
+            isFallbackTemplate: true,
+        }
+    }
+
+    return {
+        parts: rawParts,
+        verified: true,
+        unverifiedNumbers: [],
+        isFallbackTemplate: false,
+    }
+}
+

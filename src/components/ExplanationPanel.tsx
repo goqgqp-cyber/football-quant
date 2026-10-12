@@ -2,7 +2,19 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { GlassCard } from './ui/GlassCard'
 import type { Explanation } from '../lib/types'
 
-const PART_TITLES = [
+export const SPEC_NARRATIVE_TITLES = [
+    '(1) Tóm tắt đối đầu (H2H)',
+    '(2) Phong độ sân nhà của đội nhà',
+    '(3) Phong độ sân khách của đội khách',
+    '(4) Tin tức lực lượng và bối cảnh',
+    '(5) Dữ liệu còn thiếu và mâu thuẫn nguồn',
+    '(6) Dữ liệu gợi ý điều gì (Mô tả khách quan)',
+    '(7) Kết luận đúng theo thuật toán định lượng',
+    '(8) Rủi ro lớn nhất đối với kết luận',
+    '(9) Danh sách nguồn dữ liệu',
+] as const
+
+const LEGACY_PART_TITLES = [
     '(1) Đối soát chỉ số',
     '(2) Chiến thuật & nhân sự',
     '(3) Đánh giá kèo & kịch bản thua',
@@ -10,11 +22,12 @@ const PART_TITLES = [
 ] as const
 
 /**
- * Hiển thị 4 phần giải thích do Qwen viết ở Bước C.
+ * Hiển thị 9 phần giải thích định lượng chuẩn (Spec Section 8).
  *
  * Mọi con số trong văn bản đã được engine tính sẵn và server thay token
  * `{{U..}}` trước khi gửi xuống; `verified` cho biết quét lại có còn số nào
- * không truy được về engine hay không — hiển thị cảnh báo đỏ nếu có.
+ * không truy được về engine hay không. Nếu có số bịa, server tự động kích hoạt
+ * mẫu chuẩn xác định và thông báo rõ ràng cho người dùng.
  */
 export function ExplanationPanel({
     explanation,
@@ -25,10 +38,12 @@ export function ExplanationPanel({
     loading?: boolean
     error?: string | null
 }) {
+    const titles = explanation && explanation.parts.length === 9 ? SPEC_NARRATIVE_TITLES : (explanation && explanation.parts.length > 4 ? SPEC_NARRATIVE_TITLES.slice(0, explanation.parts.length) : LEGACY_PART_TITLES)
+
     return (
         <GlassCard>
             <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="font-display text-sm font-bold text-ink-100">Giải thích (Bước C)</p>
+                <p className="font-display text-sm font-bold text-ink-100">Báo cáo Phân tích Định lượng (Spec Section 8)</p>
                 {explanation && (
                     <span
                         className={`rounded-full px-2 py-0.5 text-[11px] font-semibold ${explanation.verified
@@ -37,22 +52,21 @@ export function ExplanationPanel({
                             }`}
                         title={explanation.model}
                     >
-                        {explanation.verified ? 'Số đã được kiểm chứng' : 'Có số chưa khớp engine'}
+                        {explanation.verified ? 'Số đã được kiểm chứng' : 'Mẫu chuẩn an toàn (Đã đối soát)'}
                     </span>
                 )}
             </div>
             <p className="mt-1 text-xs text-ink-500">
-                AI chỉ viết văn; mọi con số đều do engine tính rồi chèn vào, sau đó server quét lại
-                toàn bộ văn bản.
+                AI chỉ viết văn thuyết minh; toàn bộ xác suất, mốc cược và phân bổ vốn do thuật toán tính toán độc lập.
             </p>
 
             {error && <p className="mt-3 text-xs text-danger-400">{error}</p>}
 
             {loading && (
                 <div className="mt-3 space-y-2" aria-busy>
-                    {PART_TITLES.map((t) => (
+                    {SPEC_NARRATIVE_TITLES.slice(0, 5).map((t) => (
                         <div key={t} className="animate-pulse">
-                            <div className="h-3 w-40 rounded bg-white/8" />
+                            <div className="h-3 w-48 rounded bg-white/8" />
                             <div className="mt-1.5 h-3 w-full rounded bg-white/5" />
                             <div className="mt-1 h-3 w-4/5 rounded bg-white/5" />
                         </div>
@@ -68,12 +82,19 @@ export function ExplanationPanel({
                         transition={{ duration: 0.25 }}
                         className="mt-3 space-y-3"
                     >
-                        {PART_TITLES.map((title, i) => {
+                        {explanation.isFallbackTemplate && (
+                            <div className="rounded-xl border border-amber-400/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+                                <strong>Lưu ý:</strong> Văn bản đã được tự động thay thế bằng mẫu chuẩn do phát hiện con số không có trong kết quả tính toán ({explanation.unverifiedNumbers.join(', ')}). Tất cả con số dưới đây đều lấy trực tiếp từ dữ liệu máy tính.
+                            </div>
+                        )}
+
+                        {titles.map((title, i) => {
                             const body = explanation.parts[i]?.trim()
+                            if (!body && i >= explanation.parts.length) return null
                             return (
-                                <div key={title}>
-                                    <p className="text-sm font-semibold text-ink-100">{title}</p>
-                                    <p className="mt-1 text-sm leading-relaxed text-ink-300">
+                                <div key={title} className="rounded-lg bg-white/[0.02] p-2.5">
+                                    <p className="text-xs font-semibold text-primary-300">{title}</p>
+                                    <p className="mt-1 text-sm leading-relaxed text-ink-200">
                                         {body || <span className="text-ink-500">—</span>}
                                     </p>
                                 </div>
@@ -93,7 +114,7 @@ export function ExplanationPanel({
                             </div>
                         )}
 
-                        {!explanation.verified && explanation.unverifiedNumbers.length > 0 && (
+                        {!explanation.verified && !explanation.isFallbackTemplate && explanation.unverifiedNumbers.length > 0 && (
                             <div className="rounded-xl border border-danger-400/30 bg-danger-500/10 px-3 py-2 text-xs text-danger-400">
                                 Cảnh báo: văn bản có số không khớp số engine tính (
                                 {explanation.unverifiedNumbers.join(', ')}). Hãy kiểm tra lại trước khi dùng.
@@ -109,3 +130,4 @@ export function ExplanationPanel({
         </GlassCard>
     )
 }
+

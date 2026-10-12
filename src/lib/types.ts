@@ -186,6 +186,18 @@ export interface Pick {
     compositeScore?: number
     /** Nhãn xếp hạng bắt buộc: Top 1 tối ưu hoặc Top 2 dự phòng */
     rankLabel?: '[KÈO TỐI ƯU NHẤT - TOP 1 VALUE]' | '[KÈO DỰ PHÒNG - TOP 2]'
+    /** Xác suất thắng headline (không tính push): P_win / (P_win + P_lose) */
+    headlineWinProb?: number
+    /** Mức odds hòa vốn tối thiểu: 1 / odds */
+    breakEven?: number | null
+    /** Xác suất đếm từ 5 nguồn dữ liệu (Count Engine P_data) */
+    pData?: Triple
+    /** Xác suất ngụ ý phi biên lợi nhuận từ thị trường (P_market no-vig) */
+    pMarket?: Triple | null
+    /** Xác suất hỗn hợp cuối cùng sau khi blend với thị trường (P_final) */
+    pFinal?: Triple
+    /** Chi tiết đánh giá từ Count Engine */
+    countEvaluation?: import('./engine/count-engine').SelectionEvaluation
 }
 
 /** Kết quả tính toán cho một trận. */
@@ -372,8 +384,8 @@ export interface CalibrationBin {
  * bằng số đã tính sẵn, rồi kiểm tra lại toàn bộ số trong văn bản (verifyNumbers).
  */
 export interface Explanation {
-    /** 4 phần: (1) đối soát chỉ số, (2) chiến thuật & nhân sự, (3) đánh giá kèo & kịch bản thua, (4) tổng kết */
-    parts: [string, string, string, string]
+    /** Danh sách các phần giải thích: 9 phần chuẩn theo Spec Section 8 hoặc 4 phần tương thích */
+    parts: string[]
     /** true nếu mọi con số trong văn bản đều khớp với số engine tính ra. */
     verified: boolean
     /** Các con số không truy được về engine (số thừa, số bịa) — hiển thị cảnh báo cho người dùng. */
@@ -381,4 +393,6 @@ export interface Explanation {
     /** Ghi chú về dữ liệu thiếu/mâu thuẫn mà AI nêu. */
     caveats: string[]
     model: string
+    /** Đánh dấu nếu văn bản được thay bằng template mẫu do phát hiện số bịa */
+    isFallbackTemplate?: boolean
 }

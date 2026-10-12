@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { analyzeMatch } from '@/lib/engine'
-import { buildFacts, factLabels, fmt, substituteFacts, verifyNumbers } from '@/lib/explain'
+import {
+    buildDeterministicNarrative,
+    buildFacts,
+    factLabels,
+    fmt,
+    postCheckNarrative,
+    substituteFacts,
+    verifyNumbers,
+} from '@/lib/explain'
 import { MOCK_MATCH_DATA, MOCK_ODDS } from '@/lib/mock'
 
 /**
@@ -95,3 +103,56 @@ describe('verifyNumbers', () => {
         expect(verifyNumbers(text, facts)).toEqual([])
     })
 })
+
+describe('Spec Section 8 & 15: Post-check and Deterministic Fallback Narrative', () => {
+    const meta = { home: 'Arsenal', away: 'Chelsea', league: 'Premier League' }
+
+    it('buildDeterministicNarrative sinh đúng 9 phần chuẩn theo Spec Section 8', () => {
+        const parts = buildDeterministicNarrative(meta, MOCK_MATCH_DATA, result)
+        expect(parts).toHaveLength(9)
+        // Tất cả các phần đều chứa nội dung chữ hợp lệ
+        for (const p of parts) {
+            expect(p.length).toBeGreaterThan(10)
+        }
+    })
+
+    it('postCheckNarrative giữ nguyên narrative nếu không có số bịa', () => {
+        const cleanParts = [
+            `Đối đầu ${valueOf(labels.H2H_N)} trận, ghi ${valueOf(labels.H2H_AVG)} bàn`,
+            `Nhà ghi ${valueOf(labels.HOME_GF)} bàn, thủng lưới ${valueOf(labels.HOME_GA)}`,
+            `Khách ghi ${valueOf(labels.AWAY_GF)} bàn, thủng lưới ${valueOf(labels.AWAY_GA)}`,
+            'Đội hình dự kiến lực lượng ổn định',
+        ]
+        const res = postCheckNarrative(cleanParts, facts, meta, MOCK_MATCH_DATA, result)
+        expect(res.verified).toBe(true)
+        expect(res.isFallbackTemplate).toBe(false)
+        expect(res.unverifiedNumbers).toEqual([])
+        expect(res.parts).toEqual(cleanParts)
+    })
+
+    it('postCheckNarrative lập tức thay thế bằng template mẫu khi có số bịa (Corrupted Narrative Test)', () => {
+        // Cố tình đưa vào số bịa không có trong facts (vd: 999.9%, 88.88)
+        const corruptedParts = [
+            'H2H hai đội có tỷ lệ thắng lên tới 999.9% cho Arsenal',
+            'Phong độ ghi bàn đạt mức khủng khiếp 88.88 bàn mỗi trận',
+            'Kèo chấp chắc thắng 100% không thể thua',
+        ]
+        const res = postCheckNarrative(corruptedParts, facts, meta, MOCK_MATCH_DATA, result)
+
+        // Phải phát hiện và gắn cờ cảnh báo
+        expect(res.verified).toBe(false)
+        expect(res.isFallbackTemplate).toBe(true)
+        expect(res.unverifiedNumbers).toContain('999.9')
+        expect(res.unverifiedNumbers).toContain('88.88')
+
+        // Narrative bị thay thế hoàn toàn bằng 9 phần chuẩn
+        expect(res.parts).toHaveLength(9)
+        expect(res.parts[0]).not.toContain('999.9')
+        expect(res.parts[1]).not.toContain('88.88')
+
+        // Số trong narrative thay thế phải hoàn toàn hợp lệ (không chứa số bịa)
+        const checkFallback = verifyNumbers(res.parts.join('\n'), facts)
+        expect(checkFallback).toEqual([])
+    })
+})
+
