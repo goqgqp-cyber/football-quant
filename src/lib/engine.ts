@@ -231,12 +231,16 @@ export function analyzeMatch(
     let matrix: number[][]
     let remMatrix: number[][] | null = null
 
-    const isLive = Boolean(inPlay?.isLive && inPlay.currentMinute != null && inPlay.currentMinute > 0)
+    const hasLiveScore = inPlay?.currentScore != null && (inPlay.currentScore.home > 0 || inPlay.currentScore.away > 0)
+    const isLive = Boolean(inPlay?.isLive || hasLiveScore)
     const curScore = inPlay?.currentScore ?? { home: 0, away: 0 }
+    const currentMinute = inPlay?.currentMinute != null && inPlay.currentMinute > 0
+        ? inPlay.currentMinute
+        : (hasLiveScore ? 45 : 0)
 
     // In-play time decay logic:
-    if (isLive) {
-        const decayed = inPlayScoreMatrix(blended.lambdaHome, blended.lambdaAway, inPlay!.currentMinute!, curScore)
+    if (isLive && currentMinute > 0) {
+        const decayed = inPlayScoreMatrix(blended.lambdaHome, blended.lambdaAway, currentMinute, curScore)
         matrix = decayed.matrix
         remMatrix = decayed.remMatrix
         lambdaHome = Math.max(0.08, decayed.lambdaRemHome)
@@ -255,19 +259,46 @@ export function analyzeMatch(
 
         // IN-PLAY ASIAN HANDICAP & TOTALS EVALUATION:
         // Trong cược trực tiếp (In-Play):
-        // - Kèo chấp Asian Handicap trên các nhà cái châu Á bắt đầu tính từ tỉ số HIỆN TẠI (0 - 0 cho thời gian còn lại):
-        //   Net Score = (Remaining Home Goals - Remaining Away Goals) + Handicap Line
-        //   -> BẮT BUỘC tính toán trên phân phối số bàn thắng CÒN LẠI (`remMatrix`), không dùng ma trận cộng dồn toàn trận!
-        // - Kèo Tài/Xỉu (Totals):
-        //   * Nếu mốc line <= tổng bàn hiện tại (curH + curA) -> đây là kèo Tài/Xỉu số bàn còn lại -> dùng `remMatrix`.
-        //   * Nếu mốc line > tổng bàn hiện tại -> đây là kèo Tài/Xỉu cả trận -> dùng `matrix` (Fulltime score).
+        // 1. Kèo chấp Asian Handicap:
+        //    * Nếu là kèo hiệp 2 / còn lại (period '2h', 'h2'): Bắt đầu từ tỉ số 0 - 0 cho thời gian còn lại -> dùng `remMatrix`.
+        //    * Nếu là kèo cả trận (FT / mặc định): BẮT BUỘC cộng dồn bàn thắng mô phỏng hiệp 2 vào tỉ số hiện tại (ví dụ 3 - 1):
+        //      Final Score = (Current Home 3 + RemHome) vs (Current Away 1 + RemAway) -> dùng `matrix` (Fulltime score)!
+        // 2. Kèo Tài/Xỉu (Totals):
+        //    * Nếu line <= tổng bàn hiện tại -> kèo Tài/Xỉu số bàn còn lại -> dùng `remMatrix`.
+        //    * Nếu line > tổng bàn hiện tại -> kèo Tài/Xỉu cả trận -> dùng `matrix`.
         let evalMatrix = matrix
         if (isLive && remMatrix) {
+            const periodStr = `${line.period || ''} ${line.id || ''}`.toLowerCase()
+            const isSecondHalfOnly =
+                periodStr.includes('2h') ||
+                periodStr.includes('h2') ||
+                periodStr.includes('hiệp 2') ||
+                periodStr.includes('remaining') ||
+                periodStr.includes('running')
+            const isFullMatch =
+                periodStr.includes('ft') ||
+                periodStr.includes('cả trận') ||
+                periodStr === 'full'
+
             if (line.kind === 'ah') {
-                evalMatrix = remMatrix
+                if (isSecondHalfOnly) {
+                    evalMatrix = remMatrix
+                } else if (isFullMatch) {
+                    evalMatrix = matrix
+                } else {
+                    // Nếu không chỉ định rõ FT:
+                    // Trong cược trực tiếp, nếu mức chấp nhỏ hơn cách biệt bàn thắng hiện tại (ví dụ chấp 0.5 hoặc 1.25 khi đang dẫn 2 bàn),
+                    // đây là kèo chấp hiệp 2 / trong trận (running handicap, tính từ 0 - 0 cho thời gian còn lại).
+                    const goalDiff = Math.abs(curScore.home - curScore.away)
+                    if (goalDiff > 0 && Math.abs(line.line) < goalDiff) {
+                        evalMatrix = remMatrix
+                    } else {
+                        evalMatrix = matrix
+                    }
+                }
             } else if (line.kind === 'totals') {
                 const curTotal = curScore.home + curScore.away
-                if (line.line <= curTotal) {
+                if (isSecondHalfOnly || line.line <= curTotal) {
                     evalMatrix = remMatrix
                 } else {
                     evalMatrix = matrix
@@ -375,12 +406,18 @@ export function analyzeMatch(
 
     // 1 & 2: Giải toán xếp hạng đề xuất (Top 1 Value & Top 2 Dự phòng)
     // Loại trừ triệt để kèo đối lập, áp trần chất lượng Edge >= 5% và EV > 0 cho Pick #2
-    solveRecommendedPicks(picks)
-
+    const solveRes = solveRecommendedPicks(picks)
 
     const noBetReasons: string[] = []
+    let noBet = false
     if (oddsLines.length === 0) {
+        noBet = true
         noBetReasons.push('Chưa nhập kèo nào để phân tích.')
+    } else if (!solveRes.top1) {
+        noBet = true
+        noBetReasons.push(
+            '⚠️ Tất cả các kèo trên bảng hiện tại đều có EV âm hoặc Edge dưới 3%. Thị trường đang định giá rất sát. Khuyến nghị: KHÔNG VÀO KÈO (NO BET) để bảo toàn vốn.',
+        )
     }
 
     return {
@@ -404,7 +441,7 @@ export function analyzeMatch(
         matrix,
         topScorelines: topScorelines(matrix, 5),
         picks,
-        noBet: oddsLines.length === 0,
+        noBet,
         noBetReasons,
     }
 }

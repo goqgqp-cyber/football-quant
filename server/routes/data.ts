@@ -32,6 +32,8 @@ const oddsLineSchema = z
         side: z.enum(['over', 'under', 'home', 'away']),
         line: z.number(),
         odds: z.coerce.number().min(1.01).max(500),
+        period: z.string().optional(),
+        object: z.string().optional(),
     })
     .strip()
 

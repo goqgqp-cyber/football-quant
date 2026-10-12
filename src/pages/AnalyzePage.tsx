@@ -287,11 +287,14 @@ export function AnalyzePage() {
             const minute = overrides?.currentMinute !== undefined ? overrides.currentMinute : currentMinute
             const score = overrides?.currentScore !== undefined ? overrides.currentScore : currentScore
 
-            const inPlay = liveFlag
+            const hasLiveScore = score != null && ((score.home ?? 0) > 0 || (score.away ?? 0) > 0)
+            const resolvedLive = Boolean(liveFlag || hasLiveScore)
+
+            const inPlay = resolvedLive
                 ? {
                       isLive: true,
-                      currentMinute: minute,
-                      currentScore: score,
+                      currentMinute: minute != null && minute > 0 ? minute : (hasLiveScore ? 45 : 0),
+                      currentScore: score ?? { home: 0, away: 0 },
                   }
                 : undefined
 
@@ -1448,12 +1451,29 @@ export function AnalyzePage() {
                                 </div>
                             )}
 
-                            {qualifyingPicks.length === 0 ? (
-                                <GlassCard className="border border-white/10 p-5">
-                                    <p className="text-center text-sm text-neutral-400">
-                                        Chưa có mốc kèo nào được nhập. Hãy tải ảnh bảng kèo hoặc thêm kèo thủ công để phân tích.
-                                    </p>
-                                </GlassCard>
+                            {result.noBet || qualifyingPicks.length === 0 ? (
+                                result.noBet && result.noBetReasons && result.noBetReasons.length > 0 ? (
+                                    <GlassCard className="border border-amber-500/40 bg-amber-950/20 p-5 text-center">
+                                        <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-amber-500/20 text-amber-400 text-2xl mb-3">
+                                            ⚠️
+                                        </div>
+                                        <h3 className="font-display text-base font-bold text-amber-300">
+                                            KHUYẾN NGHỊ: KHÔNG VÀO KÈO (NO BET)
+                                        </h3>
+                                        <p className="mt-2 text-xs text-neutral-300 max-w-lg mx-auto leading-relaxed">
+                                            {result.noBetReasons[0]}
+                                        </p>
+                                        <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 font-mono text-xs text-amber-300">
+                                            🛡️ Bảo toàn vốn · Thị trường định giá rất sát hoặc EV âm
+                                        </div>
+                                    </GlassCard>
+                                ) : (
+                                    <GlassCard className="border border-white/10 p-5">
+                                        <p className="text-center text-sm text-neutral-400">
+                                            Chưa có mốc kèo nào được nhập hoặc chưa đạt chuẩn Value. Hãy tải ảnh bảng kèo hoặc thêm kèo thủ công để phân tích.
+                                        </p>
+                                    </GlassCard>
+                                )
                             ) : (
                                 <div className="flex flex-col gap-3">
                                     <div className="flex items-center justify-between gap-2">

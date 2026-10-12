@@ -132,13 +132,22 @@ describe('analyzeMatch - integration & filtering', () => {
         expect(emptyRes.noBet).toBe(true)
         expect(emptyRes.noBetReasons[0]).toContain('Chưa nhập kèo')
 
-        // Kèo hợp lệ trong [1.60, 2.35] được xếp hạng Top 1 Value
-        const validOdds: OddsLine[] = [
-            { id: 'v1', kind: 'totals', side: 'over', line: 2.5, odds: 1.85 },
+        // Kèo hợp lệ trong [1.60, 2.35] có EV > 0 và Edge >= 3% được xếp hạng Top 1 Value
+        const positiveOdds: OddsLine[] = [
+            { id: 'v1', kind: 'totals', side: 'over', line: 2.5, odds: 2.05 },
         ]
-        const res = analyzeMatch(sampleMatchData(), validOdds)
-        expect(res.noBet).toBe(false)
-        expect(res.picks[0].rankLabel).toBe('[KÈO TỐI ƯU NHẤT - TOP 1 VALUE]')
+        const posRes = analyzeMatch(sampleMatchData(), positiveOdds)
+        expect(posRes.noBet).toBe(false)
+        expect(posRes.picks[0].rankLabel).toBe('[KÈO TỐI ƯU NHẤT - TOP 1 VALUE]')
+
+        // Kèo có EV âm hoặc Edge < 3% (ví dụ odds 1.85 cho Over 2.5) bị TỪ CHỐI, trả về NO BET
+        const negativeEvOdds: OddsLine[] = [
+            { id: 'neg', kind: 'totals', side: 'over', line: 2.5, odds: 1.85 },
+        ]
+        const negRes = analyzeMatch(sampleMatchData(), negativeEvOdds)
+        expect(negRes.noBet).toBe(true)
+        expect(negRes.picks[0].rankLabel).toBeUndefined()
+        expect(negRes.noBetReasons[0]).toContain('EV âm hoặc Edge dưới 3%')
 
         // Kèo ngoài khoảng [1.60, 2.35] (như 1.10 hay 4.12) bị từ chối đề xuất
         const outOfRangeOdds: OddsLine[] = [
@@ -179,6 +188,35 @@ describe('analyzeMatch - integration & filtering', () => {
         expect(normalPick!.rankLabel).toBe('[KÈO TỐI ƯU NHẤT - TOP 1 VALUE]')
     })
 
+    it('at Halftime (HT 3 - 1), grades Full Match FT Asian Handicap against 3 - 1 scoreline + 2nd half goals, strictly rejecting Venezia (+0.5 FT) and outputting NO BET if all lines have negative EV', () => {
+        // Venezia FC (+0.5 FT) at HT when Atalanta already leads 3 - 1:
+        // Full Match margin = Atalanta 3 + remH vs Venezia 1 + remA.
+        // For Venezia (+0.5 FT) to win, Venezia must outscore Atalanta by 2+ goals in 2nd half.
+        const veneziaFtOdds: OddsLine[] = [
+            { id: 'venezia-ft-05', kind: 'ah', side: 'away', line: 0.5, odds: 1.95, period: 'ft' },
+        ]
+
+        const res = analyzeMatch(sampleMatchData(), veneziaFtOdds, undefined, undefined, {
+            isLive: true,
+            currentMinute: 45,
+            currentScore: { home: 3, away: 1 },
+        })
+
+        const veneziaPick = res.picks[0]
+        expect(veneziaPick).toBeDefined()
+        // True win probability on full match scoreline is near zero (< 8%), NOT ~48% from a blind 0-0 distribution
+        expect(veneziaPick.pWin).toBeLessThan(0.25)
+        expect(veneziaPick.ev).toBeLessThan(0)
+        expect(veneziaPick.edge).toBeLessThan(0.03)
+
+        // Must NOT recommend negative EV / low edge pick as Top 1
+        expect(res.noBet).toBe(true)
+        expect(res.picks.every((p) => p.rankLabel === undefined)).toBe(true)
+        expect(res.noBetReasons[0]).toBe(
+            '⚠️ Tất cả các kèo trên bảng hiện tại đều có EV âm hoặc Edge dưới 3%. Thị trường đang định giá rất sát. Khuyến nghị: KHÔNG VÀO KÈO (NO BET) để bảo toàn vốn.',
+        )
+    })
+
     it('suggestedLines returns predefined common lines', () => {
         const lines = suggestedLines()
         expect(lines.length).toBeGreaterThanOrEqual(8)
@@ -198,14 +236,12 @@ describe('analyzeMatch - integration & filtering', () => {
             },
         }
 
-        const odds: OddsLine[] = [
-            { id: 't25', kind: 'totals', side: 'over', line: 2.5, odds: 1.95 },
-            { id: 't25u', kind: 'totals', side: 'under', line: 2.5, odds: 1.95 },
-            { id: 'ah0', kind: 'ah', side: 'home', line: 0, odds: 1.90 },
-            { id: 'ah0a', kind: 'ah', side: 'away', line: 0, odds: 1.90 },
+        // Kèo có mốc giá trị thực (Home -0.5 odds 2.10) để kiểm tra Top 1 recommendation và defensive stake
+        const oddsWithValue: OddsLine[] = [
+            { id: 'h05', kind: 'ah', side: 'home', line: -0.5, odds: 2.10 },
         ]
 
-        const res = analyzeMatch(lowData, odds)
+        const res = analyzeMatch(lowData, oddsWithValue)
 
         // Engine must complete without halting
         expect(res.status).toBe('SUCCESS')
@@ -220,7 +256,7 @@ describe('analyzeMatch - integration & filtering', () => {
             expect(p.confidence).toBe('low')
         }
 
-        // Top 1 Value recommendation is generated
+        // Top 1 Value recommendation is generated with defensive stake cap 0.015 (1.5%)
         expect(res.picks[0].rankLabel).toBe('[KÈO TỐI ƯU NHẤT - TOP 1 VALUE]')
         expect(res.picks[0].stakePct).toBe(0.015) // Defensive stake for low data
     })

@@ -188,5 +188,60 @@ describe('Recommendation Solver - Opposing Bets Ban & Thresholds', () => {
         expect(filtered.length).toBe(1)
         expect(filtered[0].oddsLineId).toBe('valid-195')
     })
+
+    it('enforces strict positive value gate (NO BET if EV <= 0 or Edge < 3%), rejecting Venezia (+0.5) with negative EV', () => {
+        // Case 1: The exact case from audit: Venezia FC (+0.5) with EDGE: -1.7% and EV: -0.031
+        const veneziaNegativeEv = makeMockPick({
+            oddsLineId: 'venezia-ah-05',
+            kind: 'ah',
+            side: 'away',
+            line: 0.5,
+            odds: 1.95,
+            edge: -0.017, // -1.7%
+            ev: -0.031, // Negative EV!
+            compositeScore: -0.025,
+        })
+        const atalantaNegativeEv = makeMockPick({
+            oddsLineId: 'atalanta-ah-05',
+            kind: 'ah',
+            side: 'home',
+            line: -0.5,
+            odds: 1.95,
+            edge: -0.025,
+            ev: -0.045,
+            compositeScore: -0.035,
+        })
+
+        // Market with only negative EV bets MUST NOT pick the "least bad" bet
+        const noBetRes = solveRecommendedPicks([veneziaNegativeEv, atalantaNegativeEv])
+        expect(noBetRes.top1).toBeNull()
+        expect(noBetRes.top2).toBeNull()
+        expect(filterRecommendedPicks(noBetRes.picks)).toEqual([])
+
+        // Case 2: Sub-3% Edge (e.g. edge = 2.5%, ev = 0.02 > 0) is also strictly rejected (< 3%)
+        const weakEdgePick = makeMockPick({
+            oddsLineId: 'weak-edge-25',
+            odds: 1.90,
+            edge: 0.025, // 2.5% < 3%
+            ev: 0.02,
+            compositeScore: 0.022,
+        })
+        const weakRes = solveRecommendedPicks([weakEdgePick])
+        expect(weakRes.top1).toBeNull()
+        expect(weakRes.top2).toBeNull()
+
+        // Case 3: Pick with Edge >= 3% and EV > 0 qualifies as Top 1
+        const positiveValuePick = makeMockPick({
+            oddsLineId: 'positive-val',
+            odds: 1.95,
+            edge: 0.035, // 3.5% >= 3%
+            ev: 0.04,
+            compositeScore: 0.038,
+        })
+        const positiveRes = solveRecommendedPicks([veneziaNegativeEv, positiveValuePick])
+        expect(positiveRes.top1?.oddsLineId).toBe('positive-val')
+        expect(positiveRes.top1?.rankLabel).toBe('[KÈO TỐI ƯU NHẤT - TOP 1 VALUE]')
+        expect(positiveRes.top2).toBeNull() // venezia is rejected for Top 2 as well!
+    })
 })
 
