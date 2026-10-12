@@ -142,4 +142,51 @@ describe('Recommendation Solver - Opposing Bets Ban & Thresholds', () => {
         expect(filtered.length).toBe(1)
         expect(filtered[0].oddsLineId).toBe('best-pick')
     })
+
+    it('strictly rejects extreme odds (< 1.60 or > 2.35) like 4.12 and 3.43 from candidate recommendations', () => {
+        const extremeHigh1 = makeMockPick({
+            oddsLineId: 'high-412',
+            odds: 4.12, // Exceeds 2.35
+            edge: 0.12,
+            ev: 0.15,
+            compositeScore: 0.14,
+        })
+        const extremeHigh2 = makeMockPick({
+            oddsLineId: 'high-343',
+            odds: 3.43, // Exceeds 2.35
+            edge: 0.10,
+            ev: 0.12,
+            compositeScore: 0.11,
+        })
+        const extremeLow = makeMockPick({
+            oddsLineId: 'low-145',
+            odds: 1.45, // Below 1.60
+            edge: 0.08,
+            ev: 0.09,
+            compositeScore: 0.085,
+        })
+        const validPick = makeMockPick({
+            oddsLineId: 'valid-195',
+            odds: 1.95, // Within [1.60, 2.35]
+            edge: 0.07,
+            ev: 0.08,
+            compositeScore: 0.075,
+        })
+
+        // When only extreme lines are present, none are recommended
+        const extremeOnlyRes = solveRecommendedPicks([extremeHigh1, extremeHigh2, extremeLow])
+        expect(extremeOnlyRes.top1).toBeNull()
+        expect(extremeOnlyRes.top2).toBeNull()
+        expect(filterRecommendedPicks(extremeOnlyRes.picks)).toEqual([])
+
+        // When a valid pick is present alongside high-odds lines, only validPick qualifies for Top 1 and high-odds lines are rejected for Top 2
+        const mixedRes = solveRecommendedPicks([extremeHigh1, validPick, extremeHigh2])
+        expect(mixedRes.top1?.oddsLineId).toBe('valid-195')
+        expect(mixedRes.top2).toBeNull()
+
+        const filtered = filterRecommendedPicks(mixedRes.picks)
+        expect(filtered.length).toBe(1)
+        expect(filtered[0].oddsLineId).toBe('valid-195')
+    })
 })
+

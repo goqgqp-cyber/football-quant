@@ -127,18 +127,56 @@ describe('analyzeMatch - integration & filtering', () => {
         expect(trapPick?.status).toBe('trap')
     })
 
-    it('returns noBet only when empty and forces Top 1 pick otherwise', () => {
+    it('returns noBet only when empty and assigns Top 1 Value pick for valid odds range [1.60, 2.35]', () => {
         const emptyRes = analyzeMatch(sampleMatchData(), [])
         expect(emptyRes.noBet).toBe(true)
         expect(emptyRes.noBetReasons[0]).toContain('Chưa nhập kèo')
 
-        // Kèo có odds thấp (< 1.50) vẫn luôn được engine xếp hạng và chọn Top 1 Value bắt buộc
-        const lowOdds: OddsLine[] = [
-            { id: 'lo', kind: 'totals', side: 'over', line: 0.5, odds: 1.10 },
+        // Kèo hợp lệ trong [1.60, 2.35] được xếp hạng Top 1 Value
+        const validOdds: OddsLine[] = [
+            { id: 'v1', kind: 'totals', side: 'over', line: 2.5, odds: 1.85 },
         ]
-        const res = analyzeMatch(sampleMatchData(), lowOdds)
+        const res = analyzeMatch(sampleMatchData(), validOdds)
         expect(res.noBet).toBe(false)
         expect(res.picks[0].rankLabel).toBe('[KÈO TỐI ƯU NHẤT - TOP 1 VALUE]')
+
+        // Kèo ngoài khoảng [1.60, 2.35] (như 1.10 hay 4.12) bị từ chối đề xuất
+        const outOfRangeOdds: OddsLine[] = [
+            { id: 'lo', kind: 'totals', side: 'over', line: 0.5, odds: 1.10 },
+            { id: 'hi', kind: 'ah', side: 'home', line: -1.25, odds: 4.12 },
+        ]
+        const outRes = analyzeMatch(sampleMatchData(), outOfRangeOdds)
+        expect(outRes.picks.every((p) => p.rankLabel === undefined)).toBe(true)
+    })
+
+    it('in-play Asian Handicap at minute 44 (HT 3 - 1) calculates on remaining goals distribution, avoids 77.3% error, and rejects odds > 2.35', () => {
+        const liveOdds: OddsLine[] = [
+            { id: 'atalanta-ah', kind: 'ah', side: 'home', line: -1.25, odds: 4.12 },
+            { id: 'backup-high', kind: 'totals', side: 'over', line: 5.5, odds: 3.43 },
+            { id: 'normal-ou', kind: 'totals', side: 'over', line: 4.5, odds: 1.95 },
+        ]
+
+        const res = analyzeMatch(sampleMatchData(), liveOdds, undefined, undefined, {
+            isLive: true,
+            currentMinute: 44,
+            currentScore: { home: 3, away: 1 },
+        })
+
+        const atalantaPick = res.picks.find((p) => p.oddsLineId === 'atalanta-ah')
+        expect(atalantaPick).toBeDefined()
+        // Win probability on remaining goals must NOT be 77.3% (must be <= 35%)
+        expect(atalantaPick!.pWin).toBeLessThan(0.35)
+        // Odds 4.12 exceeds maximum odds 2.35 -> must have odds_out_of_range flag and cannot be recommended
+        expect(atalantaPick!.flags).toContain('odds_out_of_range')
+        expect(atalantaPick!.rankLabel).toBeUndefined()
+
+        // Backup line 3.43 must also be rejected due to odds > 2.35
+        const backupPick = res.picks.find((p) => p.oddsLineId === 'backup-high')
+        expect(backupPick!.rankLabel).toBeUndefined()
+
+        // Normal line with odds 1.95 qualifies for Top 1 Value
+        const normalPick = res.picks.find((p) => p.oddsLineId === 'normal-ou')
+        expect(normalPick!.rankLabel).toBe('[KÈO TỐI ƯU NHẤT - TOP 1 VALUE]')
     })
 
     it('suggestedLines returns predefined common lines', () => {

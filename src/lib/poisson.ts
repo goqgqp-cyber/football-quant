@@ -133,12 +133,14 @@ export function topScorelines(
 
 /**
  * Tính ma trận phân phối tỉ số trong trận (In-play Poisson Decay):
- * - decayFactor = Math.max(0, (90 - currentMinute) / 90)
- * - lambda_remaining = lambda_baseline * decayFactor
- * - Simulate remaining score distribution using Dixon-Coles (rho = -0.08)
- * - Neo tỉ số cuối cùng vào tỉ số hiện tại:
- *   Final_Score_Home = currentScore.home + Simulated_Remaining_Home
- *   Final_Score_Away = currentScore.away + Simulated_Remaining_Away
+ * - Khi trận đấu ở Hiệp 2 (hoặc HT 44'-45'):
+ *   λ_2nd_Half = λ_FT,base * 0.55
+ *   decayFactor = 0.55 * (90 - clampedMinute) / 45
+ * - Trong Hiệp 1:
+ *   decayFactor = 0.45 * (45 - clampedMinute) / 45 + 0.55
+ * - Cập nhật nhịp độ bàn thắng quan sát được từ hiệp 1 (live pace adjustment)
+ *   nếu tỉ số hiện tại đã có nhiều bàn thắng (tránh dự đoán 0 bàn hiệp 2).
+ * - Trả về cả `matrix` (tổng tỉ số fulltime) và `remMatrix` (tỉ số bàn thắng còn lại).
  */
 export function inPlayScoreMatrix(
     lambdaHome: number,
@@ -146,19 +148,49 @@ export function inPlayScoreMatrix(
     currentMinute: number,
     currentScore: { home: number; away: number },
     rho = DC_RHO,
-): { matrix: number[][]; lambdaRemHome: number; lambdaRemAway: number; decayFactor: number } {
+): { matrix: number[][]; remMatrix: number[][]; lambdaRemHome: number; lambdaRemAway: number; decayFactor: number } {
     const clampedMinute = Math.min(88, Math.max(0, currentMinute))
-    const decayFactor = Math.max(0.05, (90 - clampedMinute) / 90)
-    const lambdaRemHome = Math.max(0.08, Number((lambdaHome * decayFactor).toFixed(4)))
-    const lambdaRemAway = Math.max(0.08, Number((lambdaAway * decayFactor).toFixed(4)))
+    const curH = Math.max(0, Math.floor(currentScore.home))
+    const curA = Math.max(0, Math.floor(currentScore.away))
+    const totalGoalsScored = curH + curA
+
+    // 1. Tính decayFactor theo hiệp:
+    // Hiệp 2 chiếm 55% số bàn thắng cả trận.
+    // Tại HT (phút 44'-45'): λ_2nd_Half = λ_FT,base * 0.55
+    let decayFactor: number
+    if (clampedMinute >= 44) {
+        const remainingH2 = Math.max(0, 90 - clampedMinute)
+        // Tại phút 44-45, tỷ lệ là 1.0 (toàn bộ hiệp 2)
+        const h2Fraction = Math.min(1.0, remainingH2 / 45)
+        decayFactor = Math.max(0.05, 0.55 * h2Fraction)
+    } else {
+        const remainingH1Fraction = (45 - clampedMinute) / 45
+        decayFactor = Math.max(0.05, 0.45 * remainingH1Fraction + 0.55)
+    }
+
+    // 2. Cập nhật nhịp độ bàn thắng quan sát được (In-Play Pace Updating):
+    // Nếu hiệp 1 đã có nhiều bàn thắng (ví dụ 3 - 1 = 4 bàn), nhịp độ trận đấu rất mở.
+    // Điều chỉnh nhẹ hệ số nhịp độ để phản ánh tốc độ trận thực tế, tránh dự đoán 0 bàn hiệp 2.
+    let paceMultiplier = 1.0
+    if (totalGoalsScored > 0 && clampedMinute >= 30) {
+        const baseExpectedSoFar = (lambdaHome + lambdaAway) * (1 - decayFactor)
+        if (baseExpectedSoFar > 0) {
+            const rawRatio = totalGoalsScored / baseExpectedSoFar
+            // Làm mịn hệ số nhịp độ trong khoảng [1.0, 1.45]
+            paceMultiplier = Math.min(1.45, Math.max(1.0, 1.0 + (rawRatio - 1.0) * 0.25))
+        }
+    }
+
+    const effLambdaHome = lambdaHome * paceMultiplier
+    const effLambdaAway = lambdaAway * paceMultiplier
+
+    const lambdaRemHome = Math.max(0.08, Number((effLambdaHome * decayFactor).toFixed(4)))
+    const lambdaRemAway = Math.max(0.08, Number((effLambdaAway * decayFactor).toFixed(4)))
 
     // Mô phỏng số bàn thắng còn lại bằng Dixon-Coles
     const remMatrix = scoreMatrix(lambdaRemHome, lambdaRemAway, rho)
 
     // Neo vào tỉ số hiện tại
-    const curH = Math.max(0, Math.floor(currentScore.home))
-    const curA = Math.max(0, Math.floor(currentScore.away))
-
     const finalMatrix: number[][] = Array.from({ length: MAX_GOALS + 1 }, () =>
         Array.from({ length: MAX_GOALS + 1 }, () => 0),
     )
@@ -185,7 +217,7 @@ export function inPlayScoreMatrix(
         out.push(row)
     }
 
-    return { matrix: out, lambdaRemHome, lambdaRemAway, decayFactor }
+    return { matrix: out, remMatrix, lambdaRemHome, lambdaRemAway, decayFactor }
 }
 
 export interface DataQuality {

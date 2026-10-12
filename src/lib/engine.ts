@@ -229,17 +229,22 @@ export function analyzeMatch(
     let lambdaHome = blended.lambdaHome
     let lambdaAway = blended.lambdaAway
     let matrix: number[][]
+    let remMatrix: number[][] | null = null
+
+    const isLive = Boolean(inPlay?.isLive && inPlay.currentMinute != null && inPlay.currentMinute > 0)
+    const curScore = inPlay?.currentScore ?? { home: 0, away: 0 }
 
     // In-play time decay logic:
-    if (inPlay?.isLive && inPlay.currentMinute != null && inPlay.currentMinute > 0) {
-        const curScore = inPlay.currentScore ?? { home: 0, away: 0 }
-        const decayed = inPlayScoreMatrix(blended.lambdaHome, blended.lambdaAway, inPlay.currentMinute, curScore)
+    if (isLive) {
+        const decayed = inPlayScoreMatrix(blended.lambdaHome, blended.lambdaAway, inPlay!.currentMinute!, curScore)
         matrix = decayed.matrix
+        remMatrix = decayed.remMatrix
         lambdaHome = Math.max(0.08, decayed.lambdaRemHome)
         lambdaAway = Math.max(0.08, decayed.lambdaRemAway)
     } else {
         // Bước 4: Ma trận Dixon-Coles rho=-0.08 từ lambda_final
         matrix = scoreMatrix(blended.lambdaHome, blended.lambdaAway)
+        remMatrix = matrix
     }
 
     // Gán odds đối diện để loại vig
@@ -247,12 +252,43 @@ export function analyzeMatch(
 
     for (const line of oddsLines) {
         const opposite = findOpposite(oddsLines, line)
-        const rawTriple = tripleFor(matrix, line.kind, line.line, line.side)
+
+        // IN-PLAY ASIAN HANDICAP & TOTALS EVALUATION:
+        // Trong cược trực tiếp (In-Play):
+        // - Kèo chấp Asian Handicap trên các nhà cái châu Á bắt đầu tính từ tỉ số HIỆN TẠI (0 - 0 cho thời gian còn lại):
+        //   Net Score = (Remaining Home Goals - Remaining Away Goals) + Handicap Line
+        //   -> BẮT BUỘC tính toán trên phân phối số bàn thắng CÒN LẠI (`remMatrix`), không dùng ma trận cộng dồn toàn trận!
+        // - Kèo Tài/Xỉu (Totals):
+        //   * Nếu mốc line <= tổng bàn hiện tại (curH + curA) -> đây là kèo Tài/Xỉu số bàn còn lại -> dùng `remMatrix`.
+        //   * Nếu mốc line > tổng bàn hiện tại -> đây là kèo Tài/Xỉu cả trận -> dùng `matrix` (Fulltime score).
+        let evalMatrix = matrix
+        if (isLive && remMatrix) {
+            if (line.kind === 'ah') {
+                evalMatrix = remMatrix
+            } else if (line.kind === 'totals') {
+                const curTotal = curScore.home + curScore.away
+                if (line.line <= curTotal) {
+                    evalMatrix = remMatrix
+                } else {
+                    evalMatrix = matrix
+                }
+            }
+        }
+
+        const rawTriple = tripleFor(evalMatrix, line.kind, line.line, line.side)
         const { edge: rawEdge } = evAndEdge(rawTriple, line.odds)
 
-        // HARD SANITY CAP (ABSOLUTE BAN ON 100.0% WIN RATES):
-        // 1. Khóa trần xác suất thắng trong khoảng [22%, 78%] (tuyệt đối không để 100%)
-        const finalWinProb = Math.min(0.78, Math.max(0.22, rawTriple.win))
+        // HARD SANITY CAP (ABSOLUTE BAN ON UNREALISTIC HIGH ODDS WIN RATES):
+        // 1. Capping win probability:
+        //    - Mặc định giới hạn trong [22%, 78%] cho kèo thông thường.
+        //    - Với bất kỳ kèo nào có odds >= 3.0: Xác suất thắng KHÔNG THỂ vượt quá 40% (math cap <= 40%).
+        let finalWinProb: number
+        if (line.odds >= 3.0) {
+            finalWinProb = Math.min(0.40, rawTriple.win)
+        } else {
+            finalWinProb = Math.min(0.78, Math.max(0.22, rawTriple.win))
+        }
+
         // 2. Khóa trần Edge trong khoảng [-20%, 15%]
         const finalEdge = Math.min(0.15, Math.max(-0.20, rawEdge))
         // 3. Tính toán lại EV theo xác suất chuẩn: (finalWinProb * odds) - 1
@@ -278,6 +314,7 @@ export function analyzeMatch(
 
         const flags: string[] = []
         if (line.odds < MIN_ODDS) flags.push('odds_below_min')
+        if (line.odds < 1.60 || line.odds > 2.35) flags.push('odds_out_of_range')
         if (edge < MIN_EDGE) flags.push('edge_below_min')
         if (ev <= 0) flags.push('ev_non_positive')
         if (marketDelta > MAX_MARKET_DELTA) flags.push('model_disagreement')
@@ -291,7 +328,8 @@ export function analyzeMatch(
 
         let status: Pick['status'] = 'rejected'
         if (
-            line.odds >= MIN_ODDS &&
+            line.odds >= 1.60 &&
+            line.odds <= 2.35 &&
             edge >= MIN_EDGE &&
             ev > 0 &&
             marketDelta <= MAX_MARKET_DELTA &&
@@ -299,7 +337,7 @@ export function analyzeMatch(
             !flags.includes('suspicious_edge')
         ) {
             status = 'value'
-        } else if (flags.includes('trap_high_odds_negative_edge')) {
+        } else if (flags.includes('trap_high_odds_negative_edge') || line.odds > 2.35) {
             status = 'trap'
         }
 

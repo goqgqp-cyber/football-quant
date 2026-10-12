@@ -85,16 +85,43 @@ export interface SolvePicksResult {
     top2: Pick | null
 }
 
+export const MIN_RECOMMENDED_ODDS = 1.60
+export const MAX_RECOMMENDED_ODDS = 2.35
+
+/**
+ * Checks if a pick falls within the strictly enforced odds range [1.60, 2.35].
+ * Rejects extreme lines like < 1.60 or > 2.35 (e.g. 3.43, 4.12).
+ */
+export function isEligibleOdds(odds: number): boolean {
+    return odds >= MIN_RECOMMENDED_ODDS && odds <= MAX_RECOMMENDED_ODDS
+}
+
+/**
+ * Enforce hard boundary in candidate selection:
+ * Rejects odds < 1.60 or > 2.35, traps, and suspicious edges.
+ */
+export function isCandidateEligible(line: Pick): boolean {
+    if (line.odds < 1.60 || line.odds > 2.35) {
+        return false // Strictly reject secondary high-odds lines like 3.43 or 4.12
+    }
+    if (line.status === 'trap' || line.flags.includes('suspicious_edge')) {
+        return false
+    }
+    return true
+}
+
 /**
  * Solves top recommendations with strict anti-contradiction and quality guards:
  * 1. Sorts picks by compositeScore ((EV * 0.6) + (Edge * 0.4)) descending.
- * 2. Picks Top 1 (highest composite score that is not suspicious/trap).
+ * 2. Picks Top 1 within strict odds range [1.60, 2.35] (not suspicious/trap).
  * 3. Filters candidates for Top 2:
+ *    - MUST have odds in [1.60, 2.35].
  *    - MUST NOT be directly opposing Top 1.
  *    - MUST have Edge >= 5% (0.05).
  *    - MUST have EV > 0.
  *    - MUST NOT be a trap or suspicious edge.
  * 4. If no candidate qualifies for Top 2, only Top 1 is labeled and recommended.
+ * 5. If no candidate qualifies for Top 1, returns null recommendations.
  */
 export function solveRecommendedPicks(picks: Pick[]): SolvePicksResult {
     if (picks.length === 0) {
@@ -110,8 +137,10 @@ export function solveRecommendedPicks(picks: Pick[]): SolvePicksResult {
     picks.sort((a, b) => (b.compositeScore ?? 0) - (a.compositeScore ?? 0))
 
     // Select Top 1 Pick
-    let p1Idx = picks.findIndex((p) => !p.flags.includes('suspicious_edge') && p.status !== 'trap')
-    if (p1Idx === -1) p1Idx = 0
+    let p1Idx = picks.findIndex((p) => isCandidateEligible(p))
+    if (p1Idx === -1) {
+        return { picks, top1: null, top2: null }
+    }
 
     const p1 = picks[p1Idx]
     p1.rankLabel = '[KÈO TỐI ƯU NHẤT - TOP 1 VALUE]'
@@ -131,6 +160,11 @@ export function solveRecommendedPicks(picks: Pick[]): SolvePicksResult {
     for (let i = 0; i < picks.length; i++) {
         if (i === p1Idx) continue
         const cand = picks[i]
+
+        // 0. Hard boundary in candidate selection: [1.60, 2.35]
+        if (cand.odds < 1.60 || cand.odds > 2.35) {
+            continue // Strictly reject secondary high-odds lines like 3.43 or 4.12
+        }
 
         // 1. Strict opposition ban
         if (isOpposingPick(p1, cand)) {
@@ -179,7 +213,6 @@ export function solveRecommendedPicks(picks: Pick[]): SolvePicksResult {
         }
     }
 
-
     return {
         picks,
         top1: p1,
@@ -194,17 +227,17 @@ export function solveRecommendedPicks(picks: Pick[]): SolvePicksResult {
  */
 export function filterRecommendedPicks(picks: Pick[]): Pick[] {
     if (picks.length === 0) return []
-    const topPicks = picks.filter((p) => p.rankLabel)
+    const topPicks = picks.filter((p) => p.rankLabel && isEligibleOdds(p.odds))
     if (topPicks.length > 0) {
         return topPicks.slice(0, 2)
     }
 
     // Fallback if rankLabel was not explicitly run:
     const valuePicks = picks.filter(
-        (p) => p.status === 'value' && p.edge >= 0.05 && p.ev > 0 && !p.flags.includes('suspicious_edge'),
+        (p) => isEligibleOdds(p.odds) && p.status === 'value' && p.edge >= 0.05 && p.ev > 0 && !p.flags.includes('suspicious_edge'),
     )
     if (valuePicks.length === 0) {
-        return picks.slice(0, 1)
+        return []
     }
     if (valuePicks.length === 1) {
         return valuePicks
