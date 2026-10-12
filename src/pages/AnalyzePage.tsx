@@ -85,6 +85,8 @@ export function AnalyzePage() {
     const [currentMinute, setCurrentMinute] = useState<number | null>(null)
     const [currentScore, setCurrentScore] = useState<{ home: number; away: number } | null>(null)
     const [period, setPeriod] = useState<string>('')
+    const [ocrCorners, setOcrCorners] = useState<{ home: number; away: number } | null>(null)
+    const [ocrShots, setOcrShots] = useState<{ home: number; away: number } | null>(null)
 
     // ---- Ảnh → Qwen OCR đọc kèo (G3) ----
     const [imagePreviews, setImagePreviews] = useState<string[]>([])
@@ -175,27 +177,35 @@ export function AnalyzePage() {
                 ? 'inprogress'
                 : ((currentLiveData?.status as 'notstarted' | 'inprogress' | 'finished') ?? 'notstarted')
 
-        // Fallback realistic baseline stats for minor leagues / missing stats when match is in-play
-        const baselineCorners = live ? { home: 5, away: 4 } : { home: 0, away: 0 }
-        const baselineShots = live ? { home: 4, away: 3 } : { home: 0, away: 0 }
-        const baselineShotsTotal = live ? { home: 11, away: 9 } : { home: 0, away: 0 }
-        const baselinePoss = live ? { home: 52, away: 48 } : { home: 50, away: 50 }
+        // DATA SOURCE HIERARCHY: Priority 1 (OCR) -> Priority 2 (API-Football) -> Priority 3 (null)
+        // Completely purged hardcoded mock stats (5-4 corners, 52-48% possession, 11-9 shots, 4-3 shots on target)
+        const apiCorners = currentLiveData?.corners
+        const hasApiCorners = Boolean(apiCorners && (apiCorners.home > 0 || apiCorners.away > 0))
+        const finalCorners = ocrCorners
+            ? { home: ocrCorners.home, away: ocrCorners.away, source: 'ocr' as const }
+            : hasApiCorners
+              ? { home: apiCorners!.home, away: apiCorners!.away, source: 'api' as const }
+              : null
 
-        const cHome = currentLiveData?.corners?.home ?? 0
-        const cAway = currentLiveData?.corners?.away ?? 0
-        const finalCorners = (cHome === 0 && cAway === 0) ? baselineCorners : { home: cHome, away: cAway }
+        const apiShotsOnTarget = currentLiveData?.shotsOnTarget
+        const hasApiShotsOnTarget = Boolean(apiShotsOnTarget && (apiShotsOnTarget.home > 0 || apiShotsOnTarget.away > 0))
+        const finalShotsOnTarget = hasApiShotsOnTarget
+            ? { home: apiShotsOnTarget!.home, away: apiShotsOnTarget!.away, source: 'api' as const }
+            : null
 
-        const sOnH = currentLiveData?.shotsOnTarget?.home ?? 0
-        const sOnA = currentLiveData?.shotsOnTarget?.away ?? 0
-        const finalShotsOnTarget = (sOnH === 0 && sOnA === 0) ? baselineShots : { home: sOnH, away: sOnA }
+        const apiShotsTotal = currentLiveData?.shotsTotal
+        const hasApiShotsTotal = Boolean(apiShotsTotal && (apiShotsTotal.home > 0 || apiShotsTotal.away > 0))
+        const finalShotsTotal = ocrShots
+            ? { home: ocrShots.home, away: ocrShots.away, source: 'ocr' as const }
+            : hasApiShotsTotal
+              ? { home: apiShotsTotal!.home, away: apiShotsTotal!.away, source: 'api' as const }
+              : null
 
-        const sTotH = currentLiveData?.shotsTotal?.home ?? 0
-        const sTotA = currentLiveData?.shotsTotal?.away ?? 0
-        const finalShotsTotal = (sTotH === 0 && sTotA === 0) ? baselineShotsTotal : { home: sTotH, away: sTotA }
-
-        const possH = currentLiveData?.possession?.home ?? 0
-        const possA = currentLiveData?.possession?.away ?? 0
-        const finalPoss = (possH === 0 && possA === 0) || (possH === 50 && possA === 50 && live) ? baselinePoss : { home: possH || 50, away: possA || 50 }
+        const apiPoss = currentLiveData?.possession
+        const hasApiPoss = Boolean(apiPoss && (apiPoss.home > 0 || apiPoss.away > 0) && !(apiPoss.home === 50 && apiPoss.away === 50 && !live))
+        const finalPoss = hasApiPoss
+            ? { home: apiPoss!.home, away: apiPoss!.away, source: 'api' as const }
+            : null
 
         return {
             home: input.homeTeam,
@@ -214,8 +224,11 @@ export function AnalyzePage() {
             shotsOnTarget: finalShotsOnTarget,
             shotsTotal: finalShotsTotal,
             possession: finalPoss,
+            ocrCorners,
+            ocrShots,
+            fixtureId: fixtureId ? Number(fixtureId) : (currentLiveData?.fixtureId ?? null),
         }
-    }, [isLive, currentLiveData, currentMinute, currentScore, input.homeTeam, input.awayTeam, input.league, period])
+    }, [isLive, currentLiveData, currentMinute, currentScore, input.homeTeam, input.awayTeam, input.league, period, ocrCorners, ocrShots, fixtureId])
 
     const setStepStatus = (id: string, status: Step['status']) => {
         setSteps((prev) => prev.map((s) => (s.id === id ? { ...s, status } : s)))
@@ -428,6 +441,8 @@ export function AnalyzePage() {
                 if (res.currentMinute !== undefined) setCurrentMinute(res.currentMinute)
                 if (res.currentScore !== undefined) setCurrentScore(res.currentScore)
                 if (res.period !== undefined) setPeriod(res.period)
+                if (res.corners !== undefined) setOcrCorners(res.corners)
+                if (res.shots !== undefined) setOcrShots(res.shots)
 
                 const rows = res.rows.map(toConfirmRow)
                 const cleanLines = rows.map((r) => r.line)
@@ -719,21 +734,32 @@ export function AnalyzePage() {
                         {/* Bảng thống kê trực tiếp thời gian thực */}
                         <div className="grid grid-cols-3 gap-2 pt-1 text-center font-medium">
                             <div className="rounded-lg bg-black/40 p-2">
-                                <p className="text-[11px] text-neutral-400">Phạt góc</p>
+                                <p className="text-[11px] text-neutral-400">
+                                    Phạt góc
+                                    {activeMatch.corners?.source === 'ocr' && (
+                                        <span className="ml-1 text-[10px] text-sky-400 font-normal">(ảnh)</span>
+                                    )}
+                                </p>
                                 <p className="mt-0.5 font-mono text-sm font-bold text-sky-400">
-                                    {activeMatch.corners.home} - {activeMatch.corners.away}
+                                    {activeMatch.corners && activeMatch.corners.home !== null && activeMatch.corners.away !== null
+                                        ? `${activeMatch.corners.home} - ${activeMatch.corners.away}`
+                                        : '—'}
                                 </p>
                             </div>
                             <div className="rounded-lg bg-black/40 p-2">
                                 <p className="text-[11px] text-neutral-400">Sút trúng đích (Tổng sút)</p>
                                 <p className="mt-0.5 font-mono text-sm font-bold text-amber-400">
-                                    {activeMatch.shotsOnTarget.home} ({activeMatch.shotsTotal.home}) - {activeMatch.shotsOnTarget.away} ({activeMatch.shotsTotal.away})
+                                    {activeMatch.shotsOnTarget || activeMatch.shotsTotal
+                                        ? `${activeMatch.shotsOnTarget?.home ?? '—'}${activeMatch.shotsTotal ? ` (${activeMatch.shotsTotal.home})` : ''} - ${activeMatch.shotsOnTarget?.away ?? '—'}${activeMatch.shotsTotal ? ` (${activeMatch.shotsTotal.away})` : ''}`
+                                        : '—'}
                                 </p>
                             </div>
                             <div className="rounded-lg bg-black/40 p-2">
                                 <p className="text-[11px] text-neutral-400">Kiểm soát bóng</p>
                                 <p className="mt-0.5 font-mono text-sm font-bold text-emerald-400">
-                                    {activeMatch.possession.home}% - {activeMatch.possession.away}%
+                                    {activeMatch.possession && activeMatch.possession.home !== null && activeMatch.possession.away !== null
+                                        ? `${activeMatch.possession.home}% - ${activeMatch.possession.away}%`
+                                        : '—'}
                                 </p>
                             </div>
                         </div>
@@ -814,6 +840,9 @@ export function AnalyzePage() {
                 fixtureId={fixtureId ? Number(fixtureId) : undefined}
                 initialLiveData={currentLiveData ?? undefined}
                 activeMatch={activeMatch}
+                onFixtureResolved={(resolvedId) => {
+                    setFixtureId(String(resolvedId))
+                }}
             />
 
             {/* Số liệu nền tảng: thật từ Qwen AI Engine & API-Football (Bước A) */}

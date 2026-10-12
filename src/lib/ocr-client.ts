@@ -292,6 +292,38 @@ CẤU TRÚC JSON MẪU:
 
     const lowConfidence = rows.some((r) => r.confidence < 0.8)
 
+    let corners: { home: number; away: number } | null = null
+    const rawCorners = (parsed as Record<string, unknown>).corners as Record<string, unknown> | undefined
+    if (rawCorners && typeof rawCorners === 'object') {
+        const ch = typeof rawCorners.home === 'number' ? rawCorners.home : parseInt(String(rawCorners.home || ''), 10)
+        const ca = typeof rawCorners.away === 'number' ? rawCorners.away : parseInt(String(rawCorners.away || ''), 10)
+        if (!isNaN(ch) && !isNaN(ca)) {
+            corners = { home: Math.max(0, ch), away: Math.max(0, ca) }
+        }
+    }
+    if (!corners && typeof responseText === 'string') {
+        const cornerMatch = responseText.match(/(?:phạt\s*góc|góc|corner|corners|fg)[^\d\n\r]{0,25}(\d+)\s*[-:]\s*(\d+)/i)
+        if (cornerMatch) {
+            corners = { home: parseInt(cornerMatch[1], 10), away: parseInt(cornerMatch[2], 10) }
+        }
+    }
+
+    let shots: { home: number; away: number } | null = null
+    const rawShots = (parsed as Record<string, unknown>).shots as Record<string, unknown> | undefined
+    if (rawShots && typeof rawShots === 'object') {
+        const sh = typeof rawShots.home === 'number' ? rawShots.home : parseInt(String(rawShots.home || ''), 10)
+        const sa = typeof rawShots.away === 'number' ? rawShots.away : parseInt(String(rawShots.away || ''), 10)
+        if (!isNaN(sh) && !isNaN(sa)) {
+            shots = { home: Math.max(0, sh), away: Math.max(0, sa) }
+        }
+    }
+    if (!shots && typeof responseText === 'string') {
+        const shotMatch = responseText.match(/(?:sút|shot|shots)[^\d\n\r]{0,25}(\d+)\s*[-:]\s*(\d+)/i)
+        if (shotMatch) {
+            shots = { home: parseInt(shotMatch[1], 10), away: parseInt(shotMatch[2], 10) }
+        }
+    }
+
     return {
         rows,
         meta: {
@@ -307,6 +339,8 @@ CẤU TRÚC JSON MẪU:
         isLive: Boolean(parsed.isLive),
         currentMinute: parsed.currentMinute ?? null,
         currentScore: parsed.currentScore ?? null,
+        corners,
+        shots,
         period: parsed.period,
         odds: oddsList,
         lowConfidence,

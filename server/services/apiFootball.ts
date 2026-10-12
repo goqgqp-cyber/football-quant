@@ -275,13 +275,13 @@ export async function extractFixtureStatistics(
     const list = await fetchApiFootball<ApiFootballTeamStats[]>('fixtures/statistics', { fixture: fixtureId }, ttl)
     if (!list || list.length < 2) {
         return {
-            corners: { home: 5, away: 4, total: 9 },
-            cards: { yellowHome: 1, yellowAway: 2, redHome: 0, redAway: 0 },
-            shotsOnTarget: { home: 4, away: 3 },
-            shotsTotal: { home: 11, away: 9 },
-            possession: { home: 52, away: 48 },
-            fouls: { home: 11, away: 12 },
-            accuratePasses: { home: 420, away: 370 },
+            corners: { home: 0, away: 0, total: 0 },
+            cards: { yellowHome: 0, yellowAway: 0, redHome: 0, redAway: 0 },
+            shotsOnTarget: { home: 0, away: 0 },
+            shotsTotal: { home: 0, away: 0 },
+            possession: { home: 0, away: 0 },
+            fouls: { home: 0, away: 0 },
+            accuratePasses: { home: 0, away: 0 },
         }
     }
 
@@ -289,7 +289,7 @@ export async function extractFixtureStatistics(
     const awayTeam = list[1]
 
     const getStat = (team: ApiFootballTeamStats, typeName: string): number => {
-        const item = team.statistics.find((s) => s.type.toLowerCase() === typeName.toLowerCase())
+        const item = team.statistics?.find((s) => s.type?.toLowerCase() === typeName.toLowerCase())
         if (!item || item.value === null || item.value === undefined) return 0
         if (typeof item.value === 'number') return item.value
         const parsed = parseInt(String(item.value).replace('%', '').trim(), 10)
@@ -311,30 +311,8 @@ export async function extractFixtureStatistics(
     const passAccHome = getStat(homeTeam, 'Passes accurate')
     const passAccAway = getStat(awayTeam, 'Passes accurate')
 
-    let possHome = getStat(homeTeam, 'Ball Possession')
-    let possAway = getStat(awayTeam, 'Ball Possession')
-    if (possHome === 0 && possAway === 0) {
-        possHome = 52
-        possAway = 48
-    }
-
-    if (shotsTotalHome === 0 && shotsTotalAway === 0 && cornersHome === 0 && cornersAway === 0) {
-        // Fallback to historical baseline averages for the teams (minor leagues / missing live stats)
-        const sTotHome = 11, sTotAway = 9
-        const sOnHome = 4, sOnAway = 3
-        const cHome = 5, cAway = 4
-        const fHome = 11, fAway = 12
-        const pAccHome = 420, pAccAway = 370
-        return {
-            corners: { home: cHome, away: cAway, total: cHome + cAway },
-            cards: { yellowHome, yellowAway, redHome, redAway },
-            shotsOnTarget: { home: sOnHome, away: sOnAway },
-            shotsTotal: { home: sTotHome, away: sTotAway },
-            possession: { home: possHome, away: possAway },
-            fouls: { home: fHome, away: fAway },
-            accuratePasses: { home: pAccHome, away: pAccAway },
-        }
-    }
+    const possHome = getStat(homeTeam, 'Ball Possession')
+    const possAway = getStat(awayTeam, 'Ball Possession')
 
     return {
         corners: { home: cornersHome, away: cornersAway, total: cornersHome + cornersAway },
@@ -355,31 +333,13 @@ export async function extractFixtureStatistics(
 export async function extractDetailedFixtureStatistics(
     fixtureId: number,
     isFinished = false,
-): Promise<{ detailed: DetailedMatchStatistics; raw: ApiFootballTeamStats[] }> {
+): Promise<{ detailed: DetailedMatchStatistics | null; raw: ApiFootballTeamStats[] }> {
     const ttl = isFinished ? 86400 : 30
     const list = await fetchApiFootball<ApiFootballTeamStats[]>('fixtures/statistics', { fixture: fixtureId }, ttl)
 
-    const baselineDetailed: DetailedMatchStatistics = {
-        possession: { home: 52, away: 48 },
-        totalPasses: { home: 490, away: 430 },
-        accuratePasses: { homeCount: 412, homePct: 84, awayCount: 352, awayPct: 82 },
-        accurateCrosses: { homeCount: 6, homePct: 35, awayCount: 4, awayPct: 28 },
-        accurateLongBalls: { homeCount: 28, homePct: 62, awayCount: 24, awayPct: 58 },
-        shotsTotal: { home: 11, away: 9 },
-        shotsOnGoal: { home: 4, away: 3 },
-        shotsOffGoal: { home: 5, away: 4 },
-        shotsBlocked: { home: 2, away: 2 },
-        goalkeeperSaves: { home: 3, away: 4 },
-        corners: { home: 5, away: 4 },
-        fouls: { home: 11, away: 12 },
-        yellowCards: { home: 1, away: 2 },
-        redCards: { home: 0, away: 0 },
-        offsides: { home: 2, away: 1 },
-        tackles: { home: 16, away: 18 },
-        interceptions: { home: 9, away: 11 },
-        clearances: { home: 14, away: 17 },
+    if (!list || list.length < 2 || !list[0].statistics || list[0].statistics.length === 0) {
+        return { detailed: null, raw: list || [] }
     }
-    if (!list || list.length < 2) return { detailed: baselineDetailed, raw: [] }
 
     const ht = list[0]
     const at = list[1]
@@ -398,8 +358,7 @@ export async function extractDetailedFixtureStatistics(
         return isNaN(p) ? 0 : p
     }
 
-    let possH = n(ht, 'Ball Possession'), possA = n(at, 'Ball Possession')
-    if (possH === 0 && possA === 0) { possH = 50; possA = 50 }
+    const possH = n(ht, 'Ball Possession'), possA = n(at, 'Ball Possession')
 
     const passH = n(ht, 'Passes accurate'), passA = n(at, 'Passes accurate')
     const passPctH = pct(ht, 'Passes %'), passPctA = pct(at, 'Passes %')
@@ -423,9 +382,18 @@ export async function extractDetailedFixtureStatistics(
     const adwA = n(at, 'Aerials won') || n(at, 'Aerial Duels won')
     const adtH = n(ht, 'Total Aerials') || (adwH + adwA), adtA = n(at, 'Total Aerials') || (adwH + adwA)
 
+    const totalPassH = n(ht, 'Total passes'), totalPassA = n(at, 'Total passes')
+    const shotsTotH = n(ht, 'Total Shots'), shotsTotA = n(at, 'Total Shots')
+    const cornersH = n(ht, 'Corner Kicks'), cornersA = n(at, 'Corner Kicks')
+
+    // Nếu không có bất kỳ dữ liệu chuyền bóng, sút hay phạt góc nào, đây là giải đấu không có live stats
+    if (totalPassH === 0 && totalPassA === 0 && shotsTotH === 0 && shotsTotA === 0 && cornersH === 0 && cornersA === 0 && possH === 0 && possA === 0) {
+        return { detailed: null, raw: list }
+    }
+
     const detailed: DetailedMatchStatistics = {
         possession: { home: possH, away: possA },
-        totalPasses: { home: n(ht, 'Total passes'), away: n(at, 'Total passes') },
+        totalPasses: { home: totalPassH, away: totalPassA },
         accuratePasses: { homeCount: passH, homePct: passPctH, awayCount: passA, awayPct: passPctA },
         accurateCrosses: {
             homeCount: crossH, homePct: crossTH > 0 ? Math.round(crossH / crossTH * 100) : 0,

@@ -83,7 +83,7 @@ export function useLiveMatchSync({
                             cards: mStats?.cards ?? { yellowHome: 0, yellowAway: 0, redHome: 0, redAway: 0 },
                             shotsOnTarget: mStats?.shotsOnTarget ?? { home: 0, away: 0 },
                             shotsTotal: mStats?.shotsTotal ?? { home: 0, away: 0 },
-                            possession: mStats?.possession ?? { home: 50, away: 50 },
+                            possession: mStats?.possession ?? { home: 0, away: 0 },
                             fouls: mStats?.fouls ?? { home: 0, away: 0 },
                             accuratePasses: mStats?.accuratePasses ?? { home: 0, away: 0 },
                             detailedStats: fullLive.detailedStats,

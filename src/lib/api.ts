@@ -473,6 +473,8 @@ export interface ExtractResponse {
     isLive?: boolean
     currentMinute?: number | null
     currentScore?: { home: number; away: number } | null
+    corners?: { home: number; away: number } | null
+    shots?: { home: number; away: number } | null
     period?: string
     odds?: ExtractedOddsItem[]
     lowConfidence: boolean

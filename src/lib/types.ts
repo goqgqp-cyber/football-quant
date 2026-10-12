@@ -128,9 +128,9 @@ export function resolveMatchMinute(
     }
 
     if (minVal != null) {
-        // Clamping guard: Regular match cannot exceed 100 minutes
-        if (minVal > 100 && statusUpper !== 'AET' && statusUpper !== 'PEN') {
-            minVal = 90
+        // Nếu phút > 105 và không đang trong trận (không phải hiệp phụ), coi như trận đã kết thúc
+        if (minVal > 105 && statusUpper !== 'INPROGRESS' && statusUpper !== '1H' && statusUpper !== '2H' && statusUpper !== 'ET' && statusUpper !== 'AET' && statusUpper !== 'PEN') {
+            return 'FT'
         }
         return minVal
     }
@@ -310,7 +310,7 @@ export interface LiveMatchData {
     possession: { home: number; away: number }
     fouls?: { home: number; away: number }
     accuratePasses?: { home: number; away: number }
-    detailedStats?: DetailedMatchStatistics
+    detailedStats?: DetailedMatchStatistics | null
     rawStatistics?: Array<{
         team: { id: number; name: string; logo?: string }
         statistics: Array<{ type: string; value: number | string | null }>

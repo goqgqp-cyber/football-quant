@@ -109,12 +109,15 @@ export function MatchHeader({
         if (minute === 'FT' || status === 'finished') return 'Hết giờ (FT)'
         if (minute === 'HT') return 'Nghỉ giữa hiệp (HT)'
         if (typeof minute === 'number') {
-            const clamped = minute > 100 ? 90 : minute
-            return `Phút ${clamped}'`
+            if (minute > 90 && minute <= 100) return `Phút 90+${minute - 90}'`
+            if (minute > 100) return status === 'inprogress' ? `Phút ${minute}'` : 'Hết giờ (FT)'
+            return `Phút ${minute}'`
         }
         if (typeof minute === 'string' && minute && minute !== '—') {
             const parsed = parseInt(minute.replace(/[^0-9]/g, ''), 10)
-            if (!isNaN(parsed) && parsed > 100) return "Phút 90'"
+            if (!isNaN(parsed) && parsed > 100) {
+                return status === 'inprogress' ? `Phút ${parsed}'` : 'Hết giờ (FT)'
+            }
             return minute
         }
         return status === 'inprogress' ? 'Đang đá' : 'Chưa đấu'

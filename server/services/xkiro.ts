@@ -64,6 +64,8 @@ export interface ExtractResult {
     currentMinute?: number | null
     currentScore?: { home: number; away: number } | null
     period?: string
+    corners?: { home: number; away: number } | null
+    shots?: { home: number; away: number } | null
     odds?: Array<{
         type: 'hdp' | 'ou' | '1x2'
         target: 'home' | 'away' | 'over' | 'under'
@@ -267,7 +269,9 @@ Nhiệm vụ: Phân tích ảnh chụp màn hình bảng kèo nhà cái và bóc
 2. Trạng thái trong trận (Temporal & Live Grounding):
    - isLive: boolean (true nếu ảnh có dấu hiệu trận đang đá, ví dụ đồng hồ chạy phút "25:27", "Trong Trận", "Live", "2H", tỉ số đang chạy; false nếu là kèo trước trận / pre-match).
    - currentMinute: integer hoặc null (ví dụ: 25 nếu đồng hồ là "25:27", hoặc null nếu trước trận).
-   - currentScore: object { "home": number, "away": number } (tỉ số hiện tại nếu trận đang đá, ví dụ { "home": 0, "away": 0 }).
+   - currentScore: object { "home": number, "away": number } (tỉ số bàn thắng hiện tại nếu trận đang đá, ví dụ { "home": 0, "away": 0 }).
+   - corners: object { "home": number, "away": number } hoặc null (số quả phạt góc trực tiếp hiển thị trên ảnh nếu có, ví dụ "5 - 1" -> { "home": 5, "away": 1 }, hoặc null).
+   - shots: object { "home": number, "away": number } hoặc null (số cú sút hiển thị trên ảnh nếu có, hoặc null).
    - period: string ("1st Half", "2nd Half", "Halftime", hoặc "Pre-match").
 3. Bảng kèo cá cược:
    - odds: mảng các đối tượng { "type": "hdp" | "ou" | "1x2", "target": "home" | "away" | "over" | "under", "line": number, "odds": number, "period": "FT" | "H1", "object": "goals" | "corners" }.
@@ -298,6 +302,8 @@ CẤU TRÚC JSON MẪU BẮT BUỘC:
   "isLive": false,
   "currentMinute": null,
   "currentScore": { "home": 0, "away": 0 },
+  "corners": null,
+  "shots": null,
   "period": "Pre-match",
   "odds": [
     { "type": "ou", "target": "over", "line": 2.5, "odds": 1.95, "period": "FT", "object": "goals" },
@@ -402,6 +408,8 @@ export async function extractOddsFromImages(
         isLive?: boolean
         currentMinute?: number | null
         currentScore?: { home: number; away: number }
+        corners?: { home: number; away: number }
+        shots?: { home: number; away: number }
         period?: string
         note?: string
     }
@@ -531,6 +539,32 @@ export async function extractOddsFromImages(
 
     const period = typeof pAny.period === 'string' ? pAny.period : typeof m.period === 'string' ? m.period : undefined
 
+    let corners: { home: number; away: number } | null = null
+    const rawCorners = (pAny.corners ?? m.corners) as Record<string, unknown> | undefined
+    if (rawCorners && typeof rawCorners === 'object') {
+        const ch = num(rawCorners.home)
+        const ca = num(rawCorners.away)
+        if (ch !== null && ca !== null) {
+            corners = { home: Math.max(0, Math.round(ch)), away: Math.max(0, Math.round(ca)) }
+        }
+    }
+    if (!corners && typeof text === 'string') {
+        const cornerMatch = text.match(/(?:phạt\s*góc|góc|corner|corners|fg)[^\d\n\r]{0,25}(\d+)\s*[-:]\s*(\d+)/i)
+        if (cornerMatch) {
+            corners = { home: parseInt(cornerMatch[1], 10), away: parseInt(cornerMatch[2], 10) }
+        }
+    }
+
+    let shots: { home: number; away: number } | null = null
+    const rawShots = (pAny.shots ?? m.shots) as Record<string, unknown> | undefined
+    if (rawShots && typeof rawShots === 'object') {
+        const sh = num(rawShots.home)
+        const sa = num(rawShots.away)
+        if (sh !== null && sa !== null) {
+            shots = { home: Math.max(0, Math.round(sh)), away: Math.max(0, Math.round(sa)) }
+        }
+    }
+
     const meta: ExtractedMeta = {
         home: typeof rawHome === 'string' && rawHome.trim() ? rawHome.trim().slice(0, 80) : undefined,
         away: typeof rawAway === 'string' && rawAway.trim() ? rawAway.trim().slice(0, 80) : undefined,
@@ -549,6 +583,8 @@ export async function extractOddsFromImages(
         isLive,
         currentMinute: currentMinute !== null ? Math.round(currentMinute) : null,
         currentScore,
+        corners,
+        shots,
         period,
         odds: oddsList,
         lowConfidence: rows.some((r) => r.confidence < 0.8),
