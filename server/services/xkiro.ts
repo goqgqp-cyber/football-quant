@@ -14,14 +14,28 @@ import { env } from '../env.js'
 import type {
     AnalysisResult,
     Explanation,
+    ExternalCallLog,
+    FixtureIdentity,
     H2H,
     MatchData,
+    MatchRecord,
+    ProviderStatusCode,
+    ProviderSummary,
     Source,
     TeamStats,
 } from '../../src/lib/types.js'
 import { buildFacts, factLabels, postCheckNarrative, substituteFacts } from '../../src/lib/explain.js'
 import { extractValidJson } from '../../src/lib/json-cleaner.js'
-import { findFixture, getFixtureH2H } from './apiFootball.js'
+import {
+    findFixture,
+    getFixtureH2H,
+    getTeamRecentFixtures,
+    getFixtureLineups,
+    getFixtureInjuries,
+    getApiFootballQuota,
+    getLeagueStandings,
+    deduplicateMatchRecords,
+} from './apiFootball.js'
 import {
     fetchLiveMatchGrounding,
     type SearchGroundingResponse,
@@ -631,6 +645,12 @@ export interface GroundedHint {
     league?: string
     kickoff?: string | null
     eventId?: number | null
+    forceRefresh?: boolean
+}
+
+export interface CollectStreamOptions {
+    auditLogger?: (log: ExternalCallLog) => void
+    onWarning?: (warning: { provider: string; message: string; group?: string }) => void
 }
 
 
@@ -751,55 +771,328 @@ function normalizeMatchData(raw: unknown, sources: Source[]): MatchData {
 }
 
 /**
- * BƯỚC A: Phân tích định lượng (xG, Poisson, ép sân, phạt góc) và thu thập số liệu qua xKiro.
+ * Xây dựng bảng tóm tắt nhà cung cấp và tóm tắt tìm kiếm web bằng ngôn ngữ tự nhiên.
+ */
+export function buildProviderSummaries(
+    callLogs: ExternalCallLog[],
+    quota = getApiFootballQuota(),
+): {
+    providerSummaries: ProviderSummary[]
+    webSearchSummary: { searched: boolean; reason?: string; text: string }
+} {
+    const summaries: ProviderSummary[] = []
+
+    // 1. API-Football
+    const afLogs = callLogs.filter((l) => l.provider === 'api-football')
+    if (afLogs.length === 0) {
+        summaries.push({
+            provider: 'api-football',
+            status: 'NOT_CALLED',
+            summary: 'Chưa gọi API-Football',
+            resultCount: 0,
+            queryCount: 0,
+            quotaInfo: {
+                remaining: quota.remaining,
+                limit: quota.limit,
+            },
+        })
+    } else {
+        const queryCount = afLogs.length
+        const resultCount = afLogs.reduce((acc, l) => acc + l.resultCount, 0)
+        let status: ProviderStatusCode = 'OK'
+        let errorMessage: string | undefined
+        let summaryText = ''
+
+        if (quota.isSuspended) {
+            status = 'ERROR'
+            errorMessage = quota.suspendedMessage || 'Tài khoản API-Football bị tạm khóa'
+            summaryText = 'Tài khoản bị tạm khóa'
+        } else if (quota.remaining !== null && quota.remaining <= 0) {
+            status = 'ERROR'
+            errorMessage = 'Hết quota API-Football (0 requests remaining)'
+            summaryText = 'Hết quota API-Football'
+        } else {
+            const errLog = afLogs.find((l) => l.errorMessage)
+            if (errLog) {
+                errorMessage = errLog.errorMessage
+                status = resultCount > 0 ? 'OK' : 'ERROR'
+                summaryText = resultCount > 0 ? `${resultCount} kết quả (${queryCount} truy vấn)` : (errorMessage || 'Lỗi API-Football')
+            } else if (resultCount === 0) {
+                status = 'EMPTY'
+                summaryText = '0 bản ghi trả về'
+                errorMessage = 'Không tìm thấy dữ liệu'
+            } else {
+                status = 'OK'
+                summaryText = `${resultCount} bản ghi (${queryCount} truy vấn)`
+            }
+        }
+
+        summaries.push({
+            provider: 'api-football',
+            status,
+            summary: summaryText,
+            resultCount,
+            queryCount,
+            errorMessage,
+            quotaInfo: {
+                remaining: quota.remaining,
+                limit: quota.limit,
+            },
+        })
+    }
+
+    // 2. Brave Search
+    const braveLogs = callLogs.filter((l) => l.provider === 'brave')
+    if (braveLogs.length === 0) {
+        summaries.push({
+            provider: 'brave',
+            status: 'NOT_CALLED',
+            summary: 'Không được gọi',
+            resultCount: 0,
+            queryCount: 0,
+        })
+    } else {
+        const queryCount = braveLogs.length
+        const resultCount = braveLogs.reduce((acc, l) => acc + l.resultCount, 0)
+        const errLog = braveLogs.find((l) => l.errorMessage)
+        const allCached = braveLogs.every((l) => l.servedFromCache)
+        let status: ProviderStatusCode = 'OK'
+        if (errLog && resultCount === 0) status = 'ERROR'
+        else if (resultCount === 0) status = 'EMPTY'
+        else if (allCached) status = 'SKIPPED'
+        summaries.push({
+            provider: 'brave',
+            status,
+            summary: `${queryCount} truy vấn, ${resultCount} kết quả`,
+            resultCount,
+            queryCount,
+            errorMessage: errLog?.errorMessage,
+        })
+    }
+
+    // 3. Tavily Search
+    const tavilyLogs = callLogs.filter((l) => l.provider === 'tavily')
+    if (tavilyLogs.length === 0) {
+        summaries.push({
+            provider: 'tavily',
+            status: 'NOT_CALLED',
+            summary: 'Không được gọi',
+            resultCount: 0,
+            queryCount: 0,
+        })
+    } else {
+        const queryCount = tavilyLogs.length
+        const resultCount = tavilyLogs.reduce((acc, l) => acc + l.resultCount, 0)
+        const errLog = tavilyLogs.find((l) => l.errorMessage)
+        const allCached = tavilyLogs.every((l) => l.servedFromCache)
+        let status: ProviderStatusCode = 'OK'
+        if (errLog && resultCount === 0) status = 'ERROR'
+        else if (resultCount === 0) status = 'EMPTY'
+        else if (allCached) status = 'SKIPPED'
+        summaries.push({
+            provider: 'tavily',
+            status,
+            summary: `${queryCount} trang, ${resultCount} kết quả`,
+            resultCount,
+            queryCount,
+            errorMessage: errLog?.errorMessage,
+        })
+    }
+
+    // 4. Qwen AI
+    const qwenLogs = callLogs.filter((l) => l.provider === 'qwen')
+    if (qwenLogs.length === 0) {
+        summaries.push({
+            provider: 'qwen',
+            status: 'NOT_CALLED',
+            summary: 'Không được gọi',
+            resultCount: 0,
+            queryCount: 0,
+        })
+    } else {
+        const errLog = qwenLogs.find((l) => l.errorMessage)
+        summaries.push({
+            provider: 'qwen',
+            status: errLog ? 'ERROR' : 'OK',
+            summary: errLog ? (errLog.errorMessage || 'Lỗi phản hồi Qwen') : 'Phân tích hoàn tất',
+            resultCount: qwenLogs.length,
+            queryCount: qwenLogs.length,
+            errorMessage: errLog?.errorMessage,
+        })
+    }
+
+    // Web Search Summary (chuỗi tiếng Việt chuẩn quy định)
+    const webLogs = [...braveLogs, ...tavilyLogs, ...callLogs.filter((l) => l.provider === 'serper')]
+    const webQueries = webLogs.length
+    const webResults = webLogs.reduce((acc, l) => acc + l.resultCount, 0)
+    let webSearchSummary: { searched: boolean; reason?: string; text: string }
+
+    if (webQueries > 0 && webResults > 0) {
+        const parts: string[] = []
+        if (braveLogs.length > 0) parts.push(`${braveLogs.length} truy vấn Brave`)
+        if (tavilyLogs.length > 0) parts.push(`${tavilyLogs.length} trang Tavily`)
+        const serperLogs = callLogs.filter((l) => l.provider === 'serper')
+        if (serperLogs.length > 0) parts.push(`${serperLogs.length} truy vấn Serper`)
+        webSearchSummary = {
+            searched: true,
+            text: `Đã tra web: CÓ (${parts.join(', ')}; tổng ${webResults} nguồn)`,
+        }
+    } else if (webQueries > 0 && webResults === 0) {
+        const err = webLogs.find((l) => l.errorMessage)?.errorMessage || 'Không tìm thấy kết quả nào'
+        webSearchSummary = {
+            searched: false,
+            reason: err,
+            text: `Đã tra web: THẤT BẠI, lý do: ${err}`,
+        }
+    } else {
+        webSearchSummary = {
+            searched: false,
+            reason: 'Không có truy vấn tìm kiếm',
+            text: 'Đã tra web: KHÔNG, lý do: Không có truy vấn tìm kiếm',
+        }
+    }
+
+    return { providerSummaries: summaries, webSearchSummary }
+}
+
+/**
+ * BƯỚC A: Phân tích định lượng (xG, Poisson, ép sân, phạt góc) và thu thập số liệu qua API-Football, Search & xKiro.
  */
 export async function streamCollectMatchData(
     hint: GroundedHint,
     onDelta: (chunk: string) => void,
+    options?: CollectStreamOptions,
 ): Promise<MatchData> {
-    if (!env.xkiroApiKey) {
-        throw new XKiroError('Chưa cấu hình XKIRO_API_KEY trên server.', 503)
-    }
-
     const cleanHome = sanitizeCleanText(hint.home)
     const cleanAway = sanitizeCleanText(hint.away)
     const cleanLeague = sanitizeCleanText(hint.league ?? '')
     const cleanKickoff = sanitizeCleanText(hint.kickoff ?? '')
 
-    // Đối soát đa tầng thời gian thực: API-Football H2H + Multi-Tier Waterfall Search (Serper -> Tavily -> Brave -> DuckDuckGo)
+    const callLogs: ExternalCallLog[] = []
+    const addLog = (log: ExternalCallLog) => {
+        callLogs.push(log)
+        options?.auditLogger?.(log)
+        if (log.errorMessage) {
+            options?.onWarning?.({
+                provider: log.provider,
+                message: log.errorMessage,
+                group: log.purpose,
+            })
+        }
+    }
+
     let h2hText = ''
     let fixtureId = hint.eventId ?? undefined
-    let searchGrounding: (SearchGroundingResponse & { providerUsed: import('./search.js').SearchProvider; snippets: string[] }) | null = null
+    let fixtureIdentity: FixtureIdentity | undefined
+    let homeMatches: MatchRecord[] = []
+    let awayMatches: MatchRecord[] = []
+    let h2hMatches: MatchRecord[] = []
+    const fetchedAtTimes: Record<string, string> = {
+        apiFootball: new Date().toISOString(),
+    }
 
+    // 1. Thu thập dữ liệu API-Football (sử dụng team ID, không dùng tên hiển thị)
     try {
-        console.log("[SEARCH] Querying real web grounding for:", cleanHome, "vs", cleanAway)
-        const [fixtureRes, searchData] = await Promise.all([
-            (async () => {
-                try {
-                    const fixtureItem = await findFixture(cleanHome, cleanAway, fixtureId)
-                    if (fixtureItem) {
-                        const fixId = fixtureItem.fixture.id
-                        const homeId = fixtureItem.teams?.home?.id
-                        const awayId = fixtureItem.teams?.away?.id
-                        if (homeId && awayId) {
-                            const h2hRes = await getFixtureH2H(homeId, awayId)
-                            return { fixtureId: fixId, h2hText: h2hRes?.h2hText || '' }
-                        }
-                        return { fixtureId: fixId, h2hText: '' }
-                    }
-                } catch {
-                    /* ignore fixture H2H lookup error */
-                }
-                return { fixtureId, h2hText: '' }
-            })(),
-            fetchLiveMatchGrounding(cleanHome, cleanAway, cleanLeague),
-        ])
+        const fixtureItem = await findFixture(cleanHome, cleanAway, fixtureId, {
+            kickoff: cleanKickoff,
+            forceRefresh: hint.forceRefresh,
+            auditLogger: addLog,
+        })
 
-        if (fixtureRes?.fixtureId) fixtureId = fixtureRes.fixtureId
-        if (fixtureRes?.h2hText) h2hText = fixtureRes.h2hText
+        if (fixtureItem) {
+            const fixId = fixtureItem.fixture.id
+            const homeId = fixtureItem.teams?.home?.id
+            const awayId = fixtureItem.teams?.away?.id
+            const leagueId = fixtureItem.league?.id
+            const season = fixtureItem.league?.season
+            const status = fixtureItem.fixture?.status?.short
+            const kickoffDate = fixtureItem.fixture?.date
 
-        searchGrounding = searchData
-        console.log("[SEARCH] Provider used:", searchData.providerUsed, "Found snippets:", searchData.snippets.length)
+            fixtureId = fixId
+            fixtureIdentity = {
+                fixtureId: fixId,
+                homeTeamId: homeId,
+                awayTeamId: awayId,
+                leagueId,
+                season,
+                status,
+                kickoff: kickoffDate,
+            }
+
+            if (homeId && awayId) {
+                const [homeRes, awayRes, h2hRes] = await Promise.all([
+                    getTeamRecentFixtures(homeId, {
+                        season,
+                        kickoff: cleanKickoff,
+                        forceRefresh: hint.forceRefresh,
+                        auditLogger: addLog,
+                    }),
+                    getTeamRecentFixtures(awayId, {
+                        season,
+                        kickoff: cleanKickoff,
+                        forceRefresh: hint.forceRefresh,
+                        auditLogger: addLog,
+                    }),
+                    getFixtureH2H(homeId, awayId, {
+                        kickoff: cleanKickoff,
+                        forceRefresh: hint.forceRefresh,
+                        auditLogger: addLog,
+                    }),
+                ])
+
+                homeMatches = homeRes.matches
+                awayMatches = awayRes.matches
+                h2hMatches = h2hRes?.matches || []
+                fetchedAtTimes.homeForm = homeRes.fetchedAt
+                fetchedAtTimes.awayForm = awayRes.fetchedAt
+                if (h2hRes?.fetchedAt) fetchedAtTimes.h2h = h2hRes.fetchedAt
+                if (h2hRes?.h2hText) h2hText = h2hRes.h2hText
+
+                // Gọi song song lineups, injuries và standings (chỉ cho senior leagues)
+                const isJuniorOrFriendly =
+                    cleanLeague.toLowerCase().includes('u19') ||
+                    cleanLeague.toLowerCase().includes('u21') ||
+                    cleanLeague.toLowerCase().includes('u23') ||
+                    cleanLeague.toLowerCase().includes('friendly')
+                const isSeniorLeague = !isJuniorOrFriendly && Boolean(leagueId && season)
+
+                void Promise.all([
+                    getFixtureLineups(fixId, {
+                        forceRefresh: hint.forceRefresh,
+                        kickoff: cleanKickoff,
+                        auditLogger: addLog,
+                    }),
+                    getFixtureInjuries(fixId, {
+                        forceRefresh: hint.forceRefresh,
+                        kickoff: cleanKickoff,
+                        auditLogger: addLog,
+                    }),
+                    isSeniorLeague && leagueId && season
+                        ? getLeagueStandings(leagueId, season, true, {
+                              forceRefresh: hint.forceRefresh,
+                              auditLogger: addLog,
+                          })
+                        : Promise.resolve(null),
+                ]).catch(() => {/* ignore optional secondary errors */})
+            }
+        }
+    } catch (err) {
+        console.error('[API-FOOTBALL] Ingestion error:', err)
+    }
+
+    // Khử trùng lặp danh sách trận đấu và ưu tiên API-Football scores
+    homeMatches = deduplicateMatchRecords(homeMatches)
+    awayMatches = deduplicateMatchRecords(awayMatches)
+    h2hMatches = deduplicateMatchRecords(h2hMatches)
+
+    // 2. Thu thập tìm kiếm web đối soát đa tầng (Serper -> Tavily -> Brave -> DuckDuckGo)
+    let searchGrounding: (SearchGroundingResponse & { providerUsed: import('./search.js').SearchProvider; snippets: string[] }) | null = null
+    try {
+        searchGrounding = await fetchLiveMatchGrounding(cleanHome, cleanAway, cleanLeague, {
+            forceRefresh: hint.forceRefresh,
+            kickoff: cleanKickoff,
+            auditLogger: addLog,
+        })
 
         if (searchGrounding.snippets.length > 0) {
             const pName = searchGrounding.providerUsed.toUpperCase()
@@ -809,10 +1102,41 @@ export async function streamCollectMatchData(
             onDelta(`🔍 [Multi-Tier Search Grounding] Tier ${tier} (${pName}) hoàn tất trong ${ms}ms (${cnt} nguồn tin xác thực).\n`)
         }
     } catch (err) {
-        console.error("[SEARCH] Grounding collection error:", err)
+        console.error('[SEARCH] Grounding collection error:', err)
     }
 
+    // 3. HARD ENFORCEMENT: Kiểm tra trường hợp tất cả provider đều thất bại hoặc trả về rỗng
     const hasSearchSnippets = Boolean(searchGrounding && searchGrounding.snippets && searchGrounding.snippets.length > 0)
+    const isAllProvidersFailed =
+        homeMatches.length === 0 &&
+        awayMatches.length === 0 &&
+        !hasSearchSnippets
+
+    if (isAllProvidersFailed) {
+        const { providerSummaries, webSearchSummary } = buildProviderSummaries(callLogs)
+        const emptyData: MatchData = {
+            home: { xgf: null, xga: null, goals_for: null, goals_against: null, n: 0, injuries: [], lineup_confirmed: false },
+            away: { xgf: null, xga: null, goals_for: null, goals_against: null, n: 0, injuries: [], lineup_confirmed: false },
+            h2h: { n: 0, avg_goals: null, btts_rate: null },
+            sources: [],
+            conflicts: [],
+            missing: ['all_providers_failed'],
+            origin: 'failed',
+            fixtureIdentity,
+            matchRecords: { home: homeMatches, away: awayMatches, h2h: h2hMatches },
+            fetchedAtTimes,
+            callLogs,
+            providerSummaries,
+            webSearchSummary,
+        }
+        return emptyData
+    }
+
+    // 4. Gọi xKiro Qwen để trích xuất Poisson / xG / chiến thuật
+    if (!env.xkiroApiKey) {
+        throw new XKiroError('Chưa cấu hình XKIRO_API_KEY trên server.', 503)
+    }
+
     const searchPromptBlock = hasSearchSnippets && searchGrounding
         ? [
               '',
@@ -853,15 +1177,44 @@ export async function streamCollectMatchData(
         `Yêu cầu: Dựa trên mô hình Poisson, thống kê xG (xgf, xga), tỷ lệ ép sân/áp lực tấn công và kỳ vọng phạt góc, xuất ra đối tượng JSON chuẩn xác theo đúng schema.`,
     ].filter(Boolean).join('\n')
 
-    const res = await callXKiroChat(
-        [
-            { role: 'system', content: QUANT_ANALYST_SYSTEM_PROMPT },
-            { role: 'user', content: userPrompt },
-        ],
-        { stream: true, temperature: 0.2 },
-    )
+    const qwenStart = Date.now()
+    let text = ''
+    try {
+        const res = await callXKiroChat(
+            [
+                { role: 'system', content: QUANT_ANALYST_SYSTEM_PROMPT },
+                { role: 'user', content: userPrompt },
+            ],
+            { stream: true, temperature: 0.2 },
+        )
 
-    const { text } = await readXKiroStream(res, onDelta)
+        const streamRes = await readXKiroStream(res, onDelta)
+        text = streamRes.text
+        addLog({
+            provider: 'qwen',
+            purpose: 'quant_analysis_step_a',
+            requestSummary: `${cleanHome} vs ${cleanAway}`,
+            startTime: qwenStart,
+            durationMs: Date.now() - qwenStart,
+            httpStatus: 200,
+            resultCount: 1,
+            servedFromCache: false,
+        })
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        addLog({
+            provider: 'qwen',
+            purpose: 'quant_analysis_step_a',
+            requestSummary: `${cleanHome} vs ${cleanAway}`,
+            startTime: qwenStart,
+            durationMs: Date.now() - qwenStart,
+            httpStatus: 502,
+            resultCount: 0,
+            errorMessage: msg,
+            servedFromCache: false,
+        })
+        throw err
+    }
 
     if (!text.trim()) {
         throw new XKiroError('xKiro không trả về dữ liệu phân tích cho trận này.', 502)
@@ -903,6 +1256,11 @@ export async function streamCollectMatchData(
 
     const data = normalizeMatchData(parsed, sources)
 
+    // Cập nhật số trận thực tế có Provenance
+    if (homeMatches.length > 0) data.home.n = homeMatches.length
+    if (awayMatches.length > 0) data.away.n = awayMatches.length
+    if (h2hMatches.length > 0) data.h2h.n = h2hMatches.length
+
     // Nếu search grounding xác nhận chắc chắn đội hình ra sân, cập nhật lineup_confirmed
     if (searchGrounding?.lineupConfirmedHint) {
         data.home.lineup_confirmed = true
@@ -915,6 +1273,16 @@ export async function streamCollectMatchData(
             data.home.injuries = searchGrounding.injuriesHint.slice(0, 4)
         }
     }
+
+    // Gắn metadata và nhật ký kiểm tra
+    data.fixtureIdentity = fixtureIdentity
+    data.matchRecords = { home: homeMatches, away: awayMatches, h2h: h2hMatches }
+    data.fetchedAtTimes = fetchedAtTimes
+    data.callLogs = callLogs
+
+    const { providerSummaries, webSearchSummary } = buildProviderSummaries(callLogs)
+    data.providerSummaries = providerSummaries
+    data.webSearchSummary = webSearchSummary
 
     return data
 }
@@ -1059,5 +1427,40 @@ export async function generateExplanation(
         caveats,
         model: XKIRO_MODEL,
         isFallbackTemplate: postChecked.isFallbackTemplate,
+    }
+}
+
+/**
+ * Kiểm tra kết nối xKiro AI (Qwen) (dùng cho nút Self-Test).
+ */
+export async function testXkiroConnection(): Promise<{
+    success: boolean
+    latencyMs: number
+    error?: string
+}> {
+    const startTime = Date.now()
+    try {
+        const res = await callXKiroChat(
+            [{ role: 'user', content: 'ping' }],
+            { maxTokens: 5, temperature: 0.1, stream: false },
+        )
+        if (!res.ok) {
+            const errText = await res.text().catch(() => '')
+            return {
+                success: false,
+                latencyMs: Date.now() - startTime,
+                error: `HTTP ${res.status}: ${errText.slice(0, 100)}`,
+            }
+        }
+        return {
+            success: true,
+            latencyMs: Date.now() - startTime,
+        }
+    } catch (e) {
+        return {
+            success: false,
+            latencyMs: Date.now() - startTime,
+            error: e instanceof Error ? e.message : String(e),
+        }
     }
 }

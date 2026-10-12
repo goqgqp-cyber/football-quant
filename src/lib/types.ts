@@ -41,7 +41,69 @@ export interface Source {
     fetched_at: string
 }
 
-/** JSON chuẩn hoá ở Bước A (xKiro AI Engine). */
+/** Thông tin danh tính trận đấu và đội bóng lấy trực tiếp từ API-Football */
+export interface FixtureIdentity {
+    fixtureId?: number
+    homeTeamId?: number
+    awayTeamId?: number
+    leagueId?: number
+    season?: number
+    status?: string
+    kickoff?: string
+}
+
+/** Bản ghi một trận đấu đã hoàn thành với đầy đủ nguồn gốc (Provenance) */
+export interface MatchRecord {
+    id?: number | string
+    date: string
+    competition: string
+    homeTeam: string
+    awayTeam: string
+    homeTeamId?: number
+    awayTeamId?: number
+    gender?: 'men' | 'women' | string
+    ageGroup?: 'senior' | 'u19' | 'u21' | 'u23' | string
+    ftScore: { home: number; away: number }
+    htScore?: { home: number; away: number }
+    status: 'FT' | 'AET' | 'PEN' | string
+    source: 'api-football' | 'web' | 'manual'
+    provenance: {
+        source: string
+        fetchedAt: string
+        verified?: boolean
+    }
+}
+
+/** Nhật ký truy vấn external API/Search để giám sát minh bạch */
+export interface ExternalCallLog {
+    provider: 'api-football' | 'serper' | 'tavily' | 'brave' | 'duckduckgo' | 'qwen'
+    purpose: string
+    requestSummary: string // Query hoặc URL, TUYỆT ĐỐI KHÔNG chứa API keys
+    startTime: number
+    durationMs: number
+    httpStatus?: number
+    resultCount: number
+    errorMessage?: string
+    servedFromCache: boolean
+}
+
+export type ProviderStatusCode = 'OK' | 'EMPTY' | 'ERROR' | 'SKIPPED' | 'NOT_CALLED'
+
+export interface ProviderSummary {
+    provider: 'api-football' | 'brave' | 'tavily' | 'qwen' | 'serper'
+    status: ProviderStatusCode
+    summary: string
+    resultCount: number
+    queryCount: number
+    errorMessage?: string
+    quotaInfo?: {
+        remaining?: number | null
+        limit?: number | null
+        resetsAt?: string | null
+    }
+}
+
+/** JSON chuẩn hoá ở Bước A (xKiro AI Engine / API-Football). */
 export interface MatchData {
     home: TeamStats
     away: TeamStats
@@ -49,8 +111,28 @@ export interface MatchData {
     sources: Source[]
     conflicts: string[]
     missing: string[]
-    /** Nguồn gốc dữ liệu: 'search' | 'image' | 'manual' */
-    origin?: 'search' | 'image' | 'manual'
+    /** Nguồn gốc dữ liệu: 'search' | 'image' | 'manual' | 'failed' */
+    origin?: 'search' | 'image' | 'manual' | 'failed'
+    /** Danh tính trận & đội từ API-Football */
+    fixtureIdentity?: FixtureIdentity
+    /** Mẫu trận đấu thực tế đã chuẩn hóa có Provenance */
+    matchRecords?: {
+        home: MatchRecord[]
+        away: MatchRecord[]
+        h2h: MatchRecord[]
+    }
+    /** Thời điểm lấy dữ liệu theo từng nhóm */
+    fetchedAtTimes?: Record<string, string>
+    /** Nhật ký các cuộc gọi API ngoài trong lượt phân tích này */
+    callLogs?: ExternalCallLog[]
+    /** Tóm tắt trạng thái từng nhà cung cấp */
+    providerSummaries?: ProviderSummary[]
+    /** Tóm tắt tìm kiếm web bằng ngôn ngữ tự nhiên */
+    webSearchSummary?: {
+        searched: boolean
+        reason?: string
+        text: string
+    }
 }
 
 /** Đầu vào một trận (do người dùng nhập / xác nhận). */
@@ -200,8 +282,25 @@ export interface Pick {
     countEvaluation?: import('./engine/count-engine').SelectionEvaluation
 }
 
+export type AnalysisStatus = 'SUCCESS' | 'INSUFFICIENT_DATA' | 'DATA_UNAVAILABLE'
+
 /** Kết quả tính toán cho một trận. */
 export interface AnalysisResult {
+    status?: AnalysisStatus
+    dataGatePassed?: boolean
+    dataCounts?: {
+        homeMatches: number
+        awayMatches: number
+        h2hMatches: number
+    }
+    fixtureIdentity?: FixtureIdentity
+    providerSummaries?: ProviderSummary[]
+    callLogs?: ExternalCallLog[]
+    webSearchSummary?: {
+        searched: boolean
+        reason?: string
+        text: string
+    }
     lambdaHome: number
     lambdaAway: number
     lambdaModel?: { home: number; away: number }

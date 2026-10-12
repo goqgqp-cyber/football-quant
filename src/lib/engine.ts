@@ -19,6 +19,7 @@ import {
 } from './poisson'
 import { tripleFor } from './markets'
 import { solveRecommendedPicks, filterRecommendedPicks } from './quant/solver'
+import { validateSampleStreamsProvenance } from './engine/count-engine'
 export { filterRecommendedPicks }
 
 
@@ -132,6 +133,75 @@ export function analyzeMatch(
     lgAway = DEFAULT_LG_AWAY,
     inPlay?: InPlayOptions,
 ): AnalysisResult {
+    // 0. HARD ENFORCEMENT: Xác thực Provenance nếu có matchRecords truyền vào
+    if (data.matchRecords) {
+        if (data.matchRecords.home) validateSampleStreamsProvenance(data.matchRecords.home)
+        if (data.matchRecords.away) validateSampleStreamsProvenance(data.matchRecords.away)
+        if (data.matchRecords.h2h) validateSampleStreamsProvenance(data.matchRecords.h2h)
+    }
+
+    const homeN = data.matchRecords?.home ? data.matchRecords.home.length : (data.home?.n ?? 0)
+    const awayN = data.matchRecords?.away ? data.matchRecords.away.length : (data.away?.n ?? 0)
+    const h2hN = data.matchRecords?.h2h ? data.matchRecords.h2h.length : (data.h2h?.n ?? 0)
+
+    // HARD ENFORCEMENT 1: DATA_UNAVAILABLE
+    // Nếu tất cả provider thất bại hoặc không có nguồn dữ liệu nào thu thập được
+    const isDataUnavailable =
+        data.origin === 'failed' ||
+        (homeN === 0 && awayN === 0 && (!data.sources || data.sources.length === 0)) ||
+        (data.missing && data.missing.includes('all_providers_failed'))
+
+    if (isDataUnavailable) {
+        return {
+            status: 'DATA_UNAVAILABLE',
+            dataGatePassed: false,
+            dataCounts: {
+                homeMatches: homeN,
+                awayMatches: awayN,
+                h2hMatches: h2hN,
+            },
+            fixtureIdentity: data.fixtureIdentity,
+            providerSummaries: data.providerSummaries,
+            callLogs: data.callLogs,
+            webSearchSummary: data.webSearchSummary,
+            lambdaHome: 0,
+            lambdaAway: 0,
+            matrix: [],
+            topScorelines: [],
+            picks: [],
+            noBet: true,
+            noBetReasons: ['Dữ liệu không khả dụng: Các nhà cung cấp đều thất bại hoặc trả về rỗng.'],
+        }
+    }
+
+    // HARD ENFORCEMENT 2: INSUFFICIENT_DATA
+    // Mỗi đội cần ít nhất 5 trận hoàn thành hợp lệ trong vòng 12 tháng
+    const isInsufficient = homeN < 5 || awayN < 5
+    if (isInsufficient) {
+        return {
+            status: 'INSUFFICIENT_DATA',
+            dataGatePassed: false,
+            dataCounts: {
+                homeMatches: homeN,
+                awayMatches: awayN,
+                h2hMatches: h2hN,
+            },
+            fixtureIdentity: data.fixtureIdentity,
+            providerSummaries: data.providerSummaries,
+            callLogs: data.callLogs,
+            webSearchSummary: data.webSearchSummary,
+            lambdaHome: 0,
+            lambdaAway: 0,
+            matrix: [],
+            topScorelines: [],
+            picks: [],
+            noBet: true,
+            noBetReasons: [
+                `Dữ liệu không đủ để dự đoán: Đội nhà có ${homeN} trận, Đội khách có ${awayN} trận (yêu cầu tối thiểu 5 trận).`,
+            ],
+        }
+    }
+
     // Bước 1: λ theo dữ liệu đội
     const { lambdaHome: modelLambdaHome, lambdaAway: modelLambdaAway } = estimateLambdas(data, lgHome, lgAway)
     const lambdaModel = { home: modelLambdaHome, away: modelLambdaAway }
@@ -274,6 +344,17 @@ export function analyzeMatch(
     }
 
     return {
+        status: 'SUCCESS',
+        dataGatePassed: true,
+        dataCounts: {
+            homeMatches: homeN,
+            awayMatches: awayN,
+            h2hMatches: h2hN,
+        },
+        fixtureIdentity: data.fixtureIdentity,
+        providerSummaries: data.providerSummaries,
+        callLogs: data.callLogs,
+        webSearchSummary: data.webSearchSummary,
         lambdaHome,
         lambdaAway,
         lambdaModel,

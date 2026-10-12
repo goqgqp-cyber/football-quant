@@ -63,6 +63,7 @@ const collectSchema = z
         lg_away: z.coerce.number().positive().optional(),
         oddsLines: z.array(oddsLineSchema).max(60).default([]),
         inPlay: inPlaySchema.optional().nullable(),
+        forceRefresh: z.boolean().optional().default(false),
     })
     .strip()
 
@@ -90,7 +91,7 @@ streamApp.post('/collect/stream', async (c) => {
         }
 
         try {
-            // ---- Bước A: phân tích định lượng & thu thập số liệu (xKiro) ----
+            // ---- Bước A: phân tích định lượng & thu thập số liệu (API-Football, Search, xKiro) ----
             await step('collect', 'active')
             const matchData: MatchData = await streamCollectMatchData(
                 {
@@ -99,10 +100,19 @@ streamApp.post('/collect/stream', async (c) => {
                     league: league || undefined,
                     kickoff: input.kickoff,
                     eventId: input.eventId ?? undefined,
+                    forceRefresh: input.forceRefresh,
                 },
                 (chunk) => {
                     // Không chờ: delta chỉ để UI thấy có tiến trình
                     void stream.writeSSE({ event: 'delta', data: JSON.stringify({ text: chunk }) })
+                },
+                {
+                    onWarning: (warning) => {
+                        void stream.writeSSE({
+                            event: 'warning',
+                            data: JSON.stringify(warning),
+                        })
+                    },
                 },
             )
             await stream.writeSSE({
@@ -124,32 +134,39 @@ streamApp.post('/collect/stream', async (c) => {
                 input.lg_away ?? undefined,
                 input.inPlay ?? undefined,
             )
+            result.callLogs = matchData.callLogs
+            result.providerSummaries = matchData.providerSummaries
+            result.webSearchSummary = matchData.webSearchSummary
             await step('compute', 'done')
 
-            // ---- Bước C: xKiro viết 4 phần, số do engine cấp qua token ----
-            await step('explain', 'active')
+            // ---- Bước C: xKiro viết 4 phần, CHỈ CHẠY KHI status === 'SUCCESS' ----
             let explanation: Explanation | null = null
-            try {
-                explanation = await generateExplanation(
-                    { home, away, league },
-                    matchData,
-                    result,
-                    (chunk) => {
-                        void stream.writeSSE({
-                            event: 'delta',
-                            data: JSON.stringify({ text: chunk }),
-                        })
-                    },
-                )
-                await stream.writeSSE({
-                    event: 'explanation',
-                    data: JSON.stringify({ explanation }),
-                })
-                await step('explain', 'done')
-            } catch (e) {
-                // Bước C lỗi KHÔNG được làm hỏng kết quả tính toán đã có
-                console.error('[collect/stream] step C', e)
-                await step('explain', 'error')
+            if (result.status === 'SUCCESS') {
+                await step('explain', 'active')
+                try {
+                    explanation = await generateExplanation(
+                        { home, away, league },
+                        matchData,
+                        result,
+                        (chunk) => {
+                            void stream.writeSSE({
+                                event: 'delta',
+                                data: JSON.stringify({ text: chunk }),
+                            })
+                        },
+                    )
+                    await stream.writeSSE({
+                        event: 'explanation',
+                        data: JSON.stringify({ explanation }),
+                    })
+                    await step('explain', 'done')
+                } catch (e) {
+                    // Bước C lỗi KHÔNG được làm hỏng kết quả tính toán đã có
+                    console.error('[collect/stream] step C', e)
+                    await step('explain', 'error')
+                }
+            } else {
+                console.log(`[collect/stream] Bỏ qua bước C (narrative LLM) do trạng thái: ${result.status}`)
             }
 
             // ---- Lưu lịch sử (kèm giải thích nếu có) ----
@@ -162,6 +179,8 @@ streamApp.post('/collect/stream', async (c) => {
                     eventId: input.eventId ?? undefined,
                     inPlay: input.inPlay ?? undefined,
                 },
+                fixtureId: matchData.fixtureIdentity?.fixtureId ?? (input.eventId ?? undefined),
+                fixtureIdentity: matchData.fixtureIdentity,
                 analysis: result,
                 picks: result.picks,
                 result: null,

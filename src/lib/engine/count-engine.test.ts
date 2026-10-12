@@ -29,6 +29,8 @@ describe('Spec Section 6 & 7: Count-Based Probability Engine', () => {
             away_team: awayTeam,
             home_goals_ft: homeScore,
             away_goals_ft: awayScore,
+            source: 'api-football',
+            fetchedAt: '2026-03-01T12:00:00Z',
             verified: true,
         }
     }

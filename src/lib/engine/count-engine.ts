@@ -1,5 +1,5 @@
 import { ENGINE_CONFIG } from '../../config/engine'
-import type { Confidence, Triple } from '../types'
+import type { Confidence, Triple, MatchRecord as CommonMatchRecord } from '../types'
 
 export interface MatchRecord {
     date: string // YYYY-MM-DD
@@ -11,10 +11,75 @@ export interface MatchRecord {
     home_goals_ht?: number | null
     away_goals_ht?: number | null
     venue_note?: string | null
+    source?: string
+    fetchedAt?: string
+    provenance?: {
+        source: string
+        fetchedAt: string
+        verified?: boolean
+    }
     source_url?: string
     source_name?: string
     source_fetched_at?: string
     verified?: boolean
+}
+
+export class MissingProvenanceError extends Error {
+    constructor(message = 'Bản ghi trận đấu thiếu thông tin nguồn gốc (provenance: source, fetchedAt)') {
+        super(message)
+        this.name = 'MissingProvenanceError'
+    }
+}
+
+export class InsufficientDataError extends Error {
+    readonly homeMatches: number
+    readonly awayMatches: number
+    constructor(homeMatches: number, awayMatches: number, message?: string) {
+        super(
+            message ||
+                `Dữ liệu không đủ để dự đoán: đội nhà có ${homeMatches} trận, đội khách có ${awayMatches} trận (yêu cầu tối thiểu 5 trận).`,
+        )
+        this.name = 'InsufficientDataError'
+        this.homeMatches = homeMatches
+        this.awayMatches = awayMatches
+    }
+}
+
+export function validateMatchProvenance(record: MatchRecord | CommonMatchRecord | any): void {
+    const hasSource = Boolean(
+        record.source || record.provenance?.source || record.source_name || record.source_url,
+    )
+    const hasFetchedAt = Boolean(
+        record.fetchedAt || record.provenance?.fetchedAt || record.source_fetched_at,
+    )
+    if (!hasSource || !hasFetchedAt) {
+        const homeName = record.home_team || record.homeTeam || 'Home'
+        const awayName = record.away_team || record.awayTeam || 'Away'
+        throw new MissingProvenanceError(
+            `Bản ghi trận đấu ${homeName} vs ${awayName} ngày ${record.date} thiếu thông tin nguồn gốc (source & fetchedAt).`,
+        )
+    }
+}
+
+export function validateSampleStreamsProvenance(
+    samples: SampleStreams | MatchRecord[] | CommonMatchRecord[],
+): void {
+    if (Array.isArray(samples)) {
+        for (const m of samples) {
+            validateMatchProvenance(m)
+        }
+        return
+    }
+    const allMatches = [
+        ...samples.H_venue,
+        ...samples.H_all,
+        ...samples.A_venue,
+        ...samples.A_all,
+        ...samples.X,
+    ]
+    for (const m of allMatches) {
+        validateMatchProvenance(m)
+    }
 }
 
 export interface SampleStreams {
@@ -492,6 +557,9 @@ export function evaluateCountSelection(
     homeTeamName?: string,
     awayTeamName?: string,
 ): SelectionEvaluation {
+    // 0. Enforce Provenance on all input match records
+    validateSampleStreamsProvenance(samples)
+
     const flags: string[] = []
 
     // 1. Data Gate Check (Section 7.2)

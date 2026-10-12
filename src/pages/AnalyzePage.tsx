@@ -10,6 +10,7 @@ import { api, collectStream, type ExtractedRow } from '../lib/api'
 import { useSettings } from '../hooks/useSettings'
 import { MatchLiveStatsHub } from '../components/MatchLiveStatsHub'
 import { analyzeMatch, filterRecommendedPicks } from '../lib/engine'
+import { DataSourcePanel } from '../components/DataSourcePanel'
 import { prependLocalHistoryItem } from '../lib/historyStorage'
 import { useLiveMatchSync } from '../hooks/useLiveMatchSync'
 import {
@@ -114,6 +115,7 @@ export function AnalyzePage() {
     const [liveText, setLiveText] = useState('')
     /** true khi đã nhận dữ liệu nền từ Google Search. */
     const [grounded, setGrounded] = useState(false)
+    const [warningMsg, setWarningMsg] = useState<string | null>(null)
     const abortRef = useRef<(() => void) | null>(null)
     const latestExplanationRef = useRef<Explanation | null>(null)
     const fileInputRef = useRef<HTMLInputElement | null>(null)
@@ -249,6 +251,7 @@ export function AnalyzePage() {
             isLive?: boolean
             currentMinute?: number | null
             currentScore?: { home: number; away: number } | null
+            forceRefresh?: boolean
         }) => {
             const h = (overrides?.home !== undefined ? overrides.home : input.homeTeam).trim()
             const a = (overrides?.away !== undefined ? overrides.away : input.awayTeam).trim()
@@ -258,6 +261,7 @@ export function AnalyzePage() {
 
             setRunning(true)
             setError(null)
+            setWarningMsg(null)
             resetSteps()
             setResult(null)
             setSavedId(null)
@@ -310,6 +314,7 @@ export function AnalyzePage() {
                     lg_away: input.lg_away,
                     oddsLines: cleanOddsLines,
                     inPlay,
+                    forceRefresh: overrides?.forceRefresh ?? false,
                 },
                 (e) => {
                     switch (e.type) {
@@ -329,6 +334,9 @@ export function AnalyzePage() {
                         case 'data':
                             setData(e.matchData)
                             setGrounded(true)
+                            break
+                        case 'warning':
+                            setWarningMsg(`${e.provider.toUpperCase()}: ${e.message} (${e.group || 'Dữ liệu'})`)
                             break
                         case 'explanation':
                             setExplanation(e.explanation)
@@ -390,7 +398,7 @@ export function AnalyzePage() {
         [input, oddsLines, isLive, currentMinute, currentScore, fixtureId],
     )
 
-    const runAnalysis = () => triggerAnalysis()
+    const runAnalysis = (forceRefresh = false) => triggerAnalysis({ forceRefresh })
 
     /** Dừng luồng đang chạy. */
     const cancelAnalysis = () => {
@@ -1213,6 +1221,33 @@ export function AnalyzePage() {
                 )}
             </GlassCard>
 
+            {/* Cảnh báo luồng nếu có */}
+            {warningMsg && (
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/40 bg-amber-950/30 p-3 text-xs text-amber-300">
+                    <div className="flex items-center gap-2">
+                        <span>⚠️</span>
+                        <span>{warningMsg}</span>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={() => setWarningMsg(null)}
+                        className="text-amber-400 hover:text-white font-bold px-1"
+                    >
+                        ×
+                    </button>
+                </div>
+            )}
+
+            {/* Bảng Nguồn Dữ Liệu (Hiện trước mọi kết quả phân tích / verdict) */}
+            {(data || result) && (
+                <DataSourcePanel
+                    data={data}
+                    result={result}
+                    onForceRefresh={() => void runAnalysis(true)}
+                    isRunning={running}
+                />
+            )}
+
             {/* Stream tiến trình thật (SSE) */}
             {(running || result) && (
                 <GlassCard>
@@ -1256,59 +1291,109 @@ export function AnalyzePage() {
 
             {result && (
                 <>
-                    {qualifyingPicks.length === 0 ? (
-                        <GlassCard className="border border-white/10 p-5">
-                            <p className="text-center text-sm text-neutral-400">
-                                Chưa có mốc kèo nào được nhập. Hãy tải ảnh bảng kèo hoặc thêm kèo thủ công để phân tích.
+                    {/* HARD ENFORCEMENT: Trường hợp DATA_UNAVAILABLE */}
+                    {result.status === 'DATA_UNAVAILABLE' ? (
+                        <GlassCard className="border border-rose-500/30 bg-rose-950/20 p-5 text-center">
+                            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-rose-500/20 text-rose-400 text-2xl mb-3">
+                                ⚠️
+                            </div>
+                            <h3 className="font-display text-base font-bold text-rose-300">
+                                KHÔNG CÓ DỮ LIỆU ĐỂ PHÂN TÍCH (DATA UNAVAILABLE)
+                            </h3>
+                            <p className="mt-2 text-xs text-neutral-300 max-w-lg mx-auto">
+                                {result.noBetReasons?.[0] || 'Tất cả các nhà cung cấp dữ liệu đều thất bại hoặc không tìm thấy dữ liệu cho trận đấu này.'}
                             </p>
+                            <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-rose-500/30 bg-rose-500/10 px-3 py-1 font-mono text-xs text-rose-300">
+                                📊 Dữ liệu: {result.dataCounts?.homeMatches ?? 0} trận / đội nhà, {result.dataCounts?.awayMatches ?? 0} trận / đội khách, {result.dataCounts?.h2hMatches ?? 0} lần đối đầu
+                            </div>
+                            <div className="mt-4 flex justify-center">
+                                <Button onClick={() => void runAnalysis(true)} disabled={running}>
+                                    🔄 Thử lại (Làm mới dữ liệu)
+                                </Button>
+                            </div>
+                        </GlassCard>
+                    ) : result.status === 'INSUFFICIENT_DATA' ? (
+                        /* HARD ENFORCEMENT: Trường hợp INSUFFICIENT_DATA */
+                        <GlassCard className="border border-amber-500/30 bg-amber-950/20 p-5 text-center">
+                            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-amber-500/20 text-amber-400 text-2xl mb-3">
+                                ⛔
+                            </div>
+                            <h3 className="font-display text-base font-bold text-amber-300">
+                                DỮ LIỆU KHÔNG ĐỦ ĐIỀU KIỆN (INSUFFICIENT DATA)
+                            </h3>
+                            <p className="mt-2 text-xs text-neutral-300 max-w-lg mx-auto">
+                                {result.noBetReasons?.[0] || 'Mỗi đội cần ít nhất 5 trận hoàn thành hợp lệ trong vòng 12 tháng. Hệ thống từ chối tính toán xác suất hoặc gợi ý kèo.'}
+                            </p>
+                            <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-amber-500/30 bg-amber-500/10 px-3 py-1 font-mono text-xs text-amber-300">
+                                📊 Dữ liệu: {result.dataCounts?.homeMatches ?? 0} trận / đội nhà, {result.dataCounts?.awayMatches ?? 0} trận / đội khách, {result.dataCounts?.h2hMatches ?? 0} lần đối đầu
+                            </div>
                         </GlassCard>
                     ) : (
-                        <div className="flex flex-col gap-3">
-                            <div className="flex items-center justify-between gap-2">
-                                <h3 className="font-display text-sm font-bold text-ink-100">
-                                    KÈO TỐI ƯU KHUYẾN NGHỊ ({qualifyingPicks.length})
-                                </h3>
-                                <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-400">
-                                    Top Value Engine · Composite Score (EV + Edge)
+                        /* Trường hợp SUCCESS (Data gate passed) */
+                        <>
+                            {/* Badge số lượng trận đấu */}
+                            <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-500/20 bg-emerald-950/10 px-3 py-2 text-xs text-emerald-300">
+                                <span className="font-semibold">✓ Cổng dữ liệu: ĐỦ ĐIỀU KIỆN</span>
+                                <span className="font-mono font-medium">
+                                    Dữ liệu: {result.dataCounts?.homeMatches ?? 0} trận / đội nhà, {result.dataCounts?.awayMatches ?? 0} trận / đội khách, {result.dataCounts?.h2hMatches ?? 0} lần đối đầu
                                 </span>
                             </div>
-                            <div className="grid gap-3 md:grid-cols-2">
-                                {qualifyingPicks.map((pick, i) => (
-                                    <PickCard
-                                        key={pick.oddsLineId}
-                                        pick={pick}
-                                        bankroll={bankroll}
-                                        index={i}
-                                        homeTeam={input.homeTeam}
-                                        awayTeam={input.awayTeam}
-                                    />
-                                ))}
-                            </div>
-                        </div>
-                    )}
 
-                    {/* Top tỉ số Poisson */}
-                    <GlassCard>
-                        <p className="font-display text-sm font-bold text-ink-100">Tỉ số khả dĩ nhất (Poisson 0..10)</p>
-                        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
-                            {result.topScorelines.map((s) => (
-                                <div key={s.score} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-center">
-                                    <p className="font-display text-lg font-bold text-ink-100">{s.score}</p>
-                                    <p className="text-xs text-ink-500">{(s.p * 100).toFixed(2)}%</p>
+                            {qualifyingPicks.length === 0 ? (
+                                <GlassCard className="border border-white/10 p-5">
+                                    <p className="text-center text-sm text-neutral-400">
+                                        Chưa có mốc kèo nào được nhập. Hãy tải ảnh bảng kèo hoặc thêm kèo thủ công để phân tích.
+                                    </p>
+                                </GlassCard>
+                            ) : (
+                                <div className="flex flex-col gap-3">
+                                    <div className="flex items-center justify-between gap-2">
+                                        <h3 className="font-display text-sm font-bold text-ink-100">
+                                            KÈO TỐI ƯU KHUYẾN NGHỊ ({qualifyingPicks.length})
+                                        </h3>
+                                        <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-400">
+                                            Top Value Engine · Composite Score (EV + Edge)
+                                        </span>
+                                    </div>
+                                    <div className="grid gap-3 md:grid-cols-2">
+                                        {qualifyingPicks.map((pick, i) => (
+                                            <PickCard
+                                                key={pick.oddsLineId}
+                                                pick={pick}
+                                                bankroll={bankroll}
+                                                index={i}
+                                                homeTeam={input.homeTeam}
+                                                awayTeam={input.awayTeam}
+                                            />
+                                        ))}
+                                    </div>
                                 </div>
-                            ))}
-                        </div>
-                        <p className="mt-4 text-xs text-ink-500">
-                            λ nhà = {result.lambdaHome.toFixed(2)} · λ khách = {result.lambdaAway.toFixed(2)} · rho = -0.08
-                        </p>
-                    </GlassCard>
+                            )}
 
-                    {/* Bước C — 4 phần giải thích do Qwen viết, số do engine cấp qua token */}
-                    <ExplanationPanel
-                        explanation={explanation}
-                        loading={explaining}
-                        error={explanationError}
-                    />
+                            {/* Top tỉ số Poisson */}
+                            <GlassCard>
+                                <p className="font-display text-sm font-bold text-ink-100">Tỉ số khả dĩ nhất (Poisson 0..10)</p>
+                                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-5">
+                                    {result.topScorelines.map((s) => (
+                                        <div key={s.score} className="rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-center">
+                                            <p className="font-display text-lg font-bold text-ink-100">{s.score}</p>
+                                            <p className="text-xs text-ink-500">{(s.p * 100).toFixed(2)}%</p>
+                                        </div>
+                                    ))}
+                                </div>
+                                <p className="mt-4 text-xs text-ink-500">
+                                    λ nhà = {result.lambdaHome.toFixed(2)} · λ khách = {result.lambdaAway.toFixed(2)} · rho = -0.08
+                                </p>
+                            </GlassCard>
+
+                            {/* Bước C — 4 phần giải thích do Qwen viết, số do engine cấp qua token */}
+                            <ExplanationPanel
+                                explanation={explanation}
+                                loading={explaining}
+                                error={explanationError}
+                            />
+                        </>
+                    )}
                 </>
             )}
         </div>

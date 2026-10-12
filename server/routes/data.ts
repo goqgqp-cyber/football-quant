@@ -18,6 +18,7 @@ import type { Explanation, MatchData, OddsLine } from '../../src/lib/types.js'
 import { env } from '../env.js'
 import { generateExplanation, sanitizeCleanText } from '../services/xkiro.js'
 import { getMatchLiveStatus } from '../services/apiFootball.js'
+import { runSystemSelfTest } from './admin.js'
 
 export const dataApp = new Hono<{ Variables: Vars }>()
 
@@ -154,7 +155,7 @@ dataApp.post('/analyze', async (c) => {
     )
 
     let explanation: Explanation | null = null
-    if (input.withExplanation && env.xkiroApiKey) {
+    if (input.withExplanation && env.xkiroApiKey && result.status === 'SUCCESS') {
         try {
             explanation = await generateExplanation(
                 { home, away, league },
@@ -175,6 +176,8 @@ dataApp.post('/analyze', async (c) => {
             eventId: input.eventId ?? undefined,
             inPlay: input.inPlay ?? undefined,
         },
+        fixtureId: matchData.fixtureIdentity?.fixtureId ?? (input.eventId ?? undefined),
+        fixtureIdentity: matchData.fixtureIdentity,
         analysis: result,
         picks: result.picks,
         result: null,
@@ -292,3 +295,18 @@ dataApp.get('/stats', async (c) => {
     const stats = await computeStats(auth.userId)
     return c.json(stats)
 })
+
+/**
+ * POST /api/self-test & GET /api/self-test
+ * Endpoint tự kiểm tra kết nối các provider (API-Football, Brave, Tavily, Qwen)
+ * cho người dùng đã đăng nhập ở trang Account.
+ */
+dataApp.post('/self-test', async (c) => {
+    const report = await runSystemSelfTest()
+    return c.json(report)
+})
+
+dataApp.get('/self-test', async (c) => {
+    const report = await runSystemSelfTest()
+    return c.json(report)
+})
