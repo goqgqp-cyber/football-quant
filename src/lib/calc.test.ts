@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { scoreMatrix, estimateLambdas, impliedLambdas, blendLambdas } from '@/lib/poisson'
+import { scoreMatrix, estimateLambdas, impliedLambdas, blendLambdas, inPlayScoreMatrix } from '@/lib/poisson'
 import { tripleFor } from '@/lib/markets'
 import { evAndEdge, analyzeMatch } from '@/lib/engine'
 import { settlePick } from '@/lib/settle'
@@ -120,38 +120,30 @@ describe('settle (quarter line)', () => {
 
 import { formatPickTitle } from '../components/PickCard'
 
-describe('formatPickTitle (Formula check: Tên đội thật + mốc, không chữ Đội nhà/Đội khách)', () => {
+describe('formatPickTitle (Explicit Bet Naming Convention: [Loại Kèo] [Thời Gian] - [Đối Tượng])', () => {
+    it('renders Asian Handicap FT & H1 with explicit badges', () => {
+        const pFT = { kind: 'ah', side: 'home', line: 0.5, period: 'ft' }
+        expect(formatPickTitle(pFT, 'Hull City', 'Everton')).toBe('[Châu Á Bàn FT] Hull City (+0.5)')
 
-    it('renders home handicap as [Tên Đội Nhà] ([mốc])', () => {
-        const p = { kind: 'ah', side: 'home', line: 0.5 }
-        expect(formatPickTitle(p, 'Hull City', 'Everton')).toBe('Hull City (+0.5)')
+        const pH1 = { kind: 'ah', side: 'away', line: -0.25, period: 'h1' }
+        expect(formatPickTitle(pH1, 'Arsenal', 'Chelsea')).toBe('[Châu Á Bàn H1] Chelsea (-0.25)')
 
-        const p2 = { kind: 'ah', side: 'home', line: -0.5 }
-        expect(formatPickTitle(p2, 'Arsenal', 'Chelsea')).toBe('Arsenal (-0.5)')
+        const pZero = { kind: 'ah', side: 'home', line: 0, period: 'ft' }
+        expect(formatPickTitle(pZero, 'Hull City', 'Everton')).toBe('[Châu Á Bàn FT] Hull City (0)')
     })
 
-    it('renders away handicap as [Tên Đội Khách] ([mốc])', () => {
-        const p = { kind: 'ah', side: 'away', line: -0.5 }
-        expect(formatPickTitle(p, 'Hull City', 'Everton')).toBe('Everton (-0.5)')
+    it('renders Over/Under Goals and Corners FT & H1 with explicit badges', () => {
+        const pGoalFT = { kind: 'totals', side: 'over', line: 2.5, period: 'ft' }
+        expect(formatPickTitle(pGoalFT, 'Hull City', 'Everton')).toBe('[Tài/Xỉu Bàn FT] Tài 2.5')
 
-        const p2 = { kind: 'ah', side: 'away', line: 0.5 }
-        expect(formatPickTitle(p2, 'Arsenal', 'Chelsea')).toBe('Chelsea (+0.5)')
-    })
+        const pGoalH1 = { kind: 'totals', side: 'over', line: 0.5, period: 'h1' }
+        expect(formatPickTitle(pGoalH1, 'Hull City', 'Everton')).toBe('[Tài/Xỉu Bàn H1] Tài 0.5')
 
-    it('renders level (0) handicap as [Tên Đội] (0)', () => {
-        const pHome = { kind: 'ah', side: 'home', line: 0 }
-        expect(formatPickTitle(pHome, 'Hull City', 'Everton')).toBe('Hull City (0)')
+        const pCornerFT = { kind: 'corners', side: 'under', line: 9.5, period: 'ft' }
+        expect(formatPickTitle(pCornerFT, 'Hull City', 'Everton')).toBe('[Tài/Xỉu Góc FT] Xỉu 9.5')
 
-        const pAway = { kind: 'ah', side: 'away', line: 0 }
-        expect(formatPickTitle(pAway, 'Hull City', 'Everton')).toBe('Everton (0)')
-    })
-
-    it('renders totals as Tài [mốc] or Xỉu [mốc]', () => {
-        const pOver = { kind: 'totals', side: 'over', line: 2.5 }
-        expect(formatPickTitle(pOver, 'Hull City', 'Everton')).toBe('Tài 2.5')
-
-        const pUnder = { kind: 'totals', side: 'under', line: 2.75 }
-        expect(formatPickTitle(pUnder, 'Hull City', 'Everton')).toBe('Xỉu 2.75')
+        const pCornerH1 = { kind: 'corners', side: 'over', line: 4.5, period: 'h1' }
+        expect(formatPickTitle(pCornerH1, 'Hull City', 'Everton')).toBe('[Tài/Xỉu Góc H1] Tài 4.5')
     })
 })
 
@@ -208,5 +200,12 @@ describe('anti-bias market anchoring & blending engine', () => {
         expect(res.picks.length).toBe(2)
         const totalStake = res.picks[0].stakePct + res.picks[1].stakePct
         expect(totalStake).toBeLessThanOrEqual(0.025 + 1e-6)
+    })
+
+    it('inPlayScoreMatrix retains safety floor > 0 for remaining lambdas even at minute 90', () => {
+        const decayed = inPlayScoreMatrix(1.5, 1.2, 90, { home: 1, away: 0 })
+        expect(decayed.lambdaRemHome).toBeGreaterThanOrEqual(0.08)
+        expect(decayed.lambdaRemAway).toBeGreaterThanOrEqual(0.08)
+        expect(decayed.decayFactor).toBeGreaterThanOrEqual(0.05)
     })
 })

@@ -89,4 +89,9 @@ describe('verifyNumbers', () => {
     it('bỏ qua số thứ tự phần (1..4) và 0', () => {
         expect(verifyNumbers('phần 2 có 3 kèo, còn 0 rủi ro', facts)).toEqual([])
     })
+
+    it('không báo lỗi cho các tham số engine hợp lệ: -0.08, 2026, -1, 2.5', () => {
+        const text = 'Mô hình Dixon-Coles hiệu chỉnh rho = -0.08 vào mùa giải 2026 với kèo chấp -1 và Tài Xỉu 2.5'
+        expect(verifyNumbers(text, facts)).toEqual([])
+    })
 })

@@ -22,7 +22,10 @@ import type {
 import { buildFacts, factLabels, substituteFacts, verifyNumbers } from '../../src/lib/explain.js'
 import { extractValidJson } from '../../src/lib/json-cleaner.js'
 import { findFixture, getFixtureH2H } from './apiFootball.js'
-import { getMatchGrounding, type SearchGroundingResponse } from './search.js'
+import {
+    fetchLiveMatchGrounding,
+    type SearchGroundingResponse,
+} from './search.js'
 
 
 
@@ -38,6 +41,8 @@ export interface ExtractedRow {
     odds: number
     confidence: number
     note?: string
+    period?: 'ft' | 'ht' | '1h' | string
+    object?: 'goals' | 'corners' | string
 }
 
 /** Thông tin trận đọc được. */
@@ -265,15 +270,25 @@ Nhiệm vụ: Phân tích ảnh chụp màn hình bảng kèo nhà cái và bóc
    - currentScore: object { "home": number, "away": number } (tỉ số hiện tại nếu trận đang đá, ví dụ { "home": 0, "away": 0 }).
    - period: string ("1st Half", "2nd Half", "Halftime", hoặc "Pre-match").
 3. Bảng kèo cá cược:
-   - odds: mảng các đối tượng { "type": "hdp" | "ou" | "1x2", "target": "home" | "away" | "over" | "under", "line": number, "odds": number }.
+   - odds: mảng các đối tượng { "type": "hdp" | "ou" | "1x2", "target": "home" | "away" | "over" | "under", "line": number, "odds": number, "period": "FT" | "H1", "object": "goals" | "corners" }.
      * type="hdp": Kèo chấp Asian Handicap (target="home" hoặc "away", line là mốc chấp từ góc nhìn đội đó, ví dụ -0.5 hoặc +0.5 hoặc 0, odds là tỷ lệ ăn thập phân).
-     * type="ou": Kèo Tài/Xỉu Over/Under (target="over" hoặc "under", line là mốc bàn thắng ví dụ 2.5, odds là tỷ lệ ăn).
+     * type="ou": Kèo Tài/Xỉu Over/Under (target="over" hoặc "under", line là mốc ví dụ 2.5 hoặc 0.5, odds là tỷ lệ ăn).
      * type="1x2": Kèo Châu Âu 1X2 (target="home" hoặc "away", line=0, odds là tỷ lệ ăn).
-   - rows: mảng chuẩn hóa { "kind": "totals" | "ah", "side": "over" | "under" | "home" | "away", "line": number, "odds": number, "confidence": number }.
+     * period: "FT" (Toàn trận / Fulltime) hoặc "H1" (Hiệp 1 / First Half).
+     * object: "goals" (Bàn thắng) hoặc "corners" (Phạt góc).
+   - rows: mảng chuẩn hóa:
+     * kind: "totals" | "ah"
+     * side: "over" | "under" | "home" | "away"
+     * line: number
+     * odds: number
+     * period: "FT" | "H1"
+     * object: "goals" | "corners"
+     * confidence: number
 
 QUY TẮC BẮT BUỘC:
-1. Chỉ trích xuất số liệu nhìn thấy thật trong ảnh. TUYỆT ĐỐI không mặc định Arsenal hay Chelsea nếu ảnh không phải trận đó.
-2. BẮT BUỘC trả về DUY NHẤT một chuỗi JSON thuần, KHÔNG bọc trong markdown code block (TUYỆT ĐỐI KHÔNG dùng \`\`\`json hoặc \`\`\`), KHÔNG có bất kỳ văn bản hay lời chào nào ngoài JSON.
+1. Phân biệt RÕ RÀNG kèo Bàn Thắng ("goals") và Phạt Góc ("corners"), cũng như Toàn Trận ("FT") và Hiệp 1 ("H1"). TUYỆT ĐỐI không để trống hoặc nhầm lẫn giữa phạt góc và bàn thắng!
+2. Chỉ trích xuất số liệu nhìn thấy thật trong ảnh. TUYỆT ĐỐI không mặc định Arsenal hay Chelsea nếu ảnh không phải trận đó.
+3. BẮT BUỘC trả về DUY NHẤT một chuỗi JSON thuần, KHÔNG bọc trong markdown code block (TUYỆT ĐỐI KHÔNG dùng \`\`\`json hoặc \`\`\`), KHÔNG có bất kỳ văn bản hay lời chào nào ngoài JSON.
 
 CẤU TRÚC JSON MẪU BẮT BUỘC:
 {
@@ -285,16 +300,16 @@ CẤU TRÚC JSON MẪU BẮT BUỘC:
   "currentScore": { "home": 0, "away": 0 },
   "period": "Pre-match",
   "odds": [
-    { "type": "ou", "target": "over", "line": 2.5, "odds": 1.95 },
-    { "type": "ou", "target": "under", "line": 2.5, "odds": 1.90 },
-    { "type": "hdp", "target": "home", "line": -0.25, "odds": 2.02 },
-    { "type": "hdp", "target": "away", "line": 0.25, "odds": 1.88 }
+    { "type": "ou", "target": "over", "line": 2.5, "odds": 1.95, "period": "FT", "object": "goals" },
+    { "type": "ou", "target": "under", "line": 2.5, "odds": 1.90, "period": "FT", "object": "goals" },
+    { "type": "hdp", "target": "home", "line": -0.25, "odds": 2.02, "period": "FT", "object": "goals" },
+    { "type": "hdp", "target": "away", "line": 0.25, "odds": 1.88, "period": "FT", "object": "goals" }
   ],
   "rows": [
-    { "kind": "totals", "side": "over", "line": 2.5, "odds": 1.95, "confidence": 0.95 },
-    { "kind": "totals", "side": "under", "line": 2.5, "odds": 1.90, "confidence": 0.95 },
-    { "kind": "ah", "side": "home", "line": -0.25, "odds": 2.02, "confidence": 0.92 },
-    { "kind": "ah", "side": "away", "line": 0.25, "odds": 1.88, "confidence": 0.92 }
+    { "kind": "totals", "side": "over", "line": 2.5, "odds": 1.95, "confidence": 0.95, "period": "FT", "object": "goals" },
+    { "kind": "totals", "side": "under", "line": 2.5, "odds": 1.90, "confidence": 0.95, "period": "FT", "object": "goals" },
+    { "kind": "ah", "side": "home", "line": -0.25, "odds": 2.02, "confidence": 0.92, "period": "FT", "object": "goals" },
+    { "kind": "ah", "side": "away", "line": 0.25, "odds": 1.88, "confidence": 0.92, "period": "FT", "object": "goals" }
   ],
   "note": "Bóc tách thành công"
 }`
@@ -413,12 +428,17 @@ export async function extractOddsFromImages(
         const confidence = clamp01(num(r.confidence) ?? 0.85)
         if (confidence < 0.3) continue
 
+        const period = typeof r.period === 'string' ? r.period.toLowerCase() : undefined
+        const object = typeof r.object === 'string' ? r.object.toLowerCase() : undefined
+
         rows.push({
             kind,
             side,
             line,
             odds,
             confidence,
+            period,
+            object,
             note: typeof r.note === 'string' ? r.note.slice(0, 160) : undefined,
         })
     }
@@ -428,6 +448,8 @@ export async function extractOddsFromImages(
         target: 'home' | 'away' | 'over' | 'under'
         line: number
         odds: number
+        period?: string
+        object?: string
     }> = []
 
     for (const raw of Array.isArray(parsed.odds) ? parsed.odds : []) {
@@ -437,7 +459,9 @@ export async function extractOddsFromImages(
         const line = num(o.line) ?? 0
         const oddsVal = num(o.odds)
         if (oddsVal === null || oddsVal <= 1.01 || oddsVal > 500) continue
-        oddsList.push({ type, target, line, odds: oddsVal })
+        const period = typeof o.period === 'string' ? o.period.toLowerCase() : undefined
+        const object = typeof o.object === 'string' ? o.object.toLowerCase() : undefined
+        oddsList.push({ type, target, line, odds: oddsVal, period, object })
     }
 
     // Nếu có odds nhưng rows trống, map odds sang rows để tương thích UI
@@ -450,6 +474,8 @@ export async function extractOddsFromImages(
                     line: o.line,
                     odds: o.odds,
                     confidence: 0.9,
+                    period: o.period,
+                    object: o.object,
                 })
             } else if (o.type === 'hdp') {
                 rows.push({
@@ -458,6 +484,8 @@ export async function extractOddsFromImages(
                     line: o.line,
                     odds: o.odds,
                     confidence: 0.9,
+                    period: o.period,
+                    object: o.object,
                 })
             }
         }
@@ -548,7 +576,7 @@ Thị trường cược là nguồn thông tin mạnh: không được coi mình
 
 CỔNG DỮ LIỆU & QUY TẮC BẮT BUỘC:
 1. Dữ liệu thật: Phong độ 6-10 trận gần nhất, xG/xGA (Expected Goals For / Against), bàn thắng/thua thực tế, lịch sử đối đầu (H2H), đội hình và chấn thương/treo giò.
-2. Đối chiếu >= 2 nguồn. Nếu có mâu thuẫn thì nêu rõ trong trường "conflicts", không chọn đại.
+2. Đối chiếu số liệu từ DỮ LIỆU TÌM KIẾM WEB được cung cấp bên dưới. Nếu không có dữ liệu tìm kiếm web, "conflicts" PHẢI LÀ MẢNG RỖNG [] và "missing" ghi nhận các trường thiếu. TUYỆT ĐỐI CẤM AI tự bịa ra tên các trang web như Sofascore, Flashscore, WhoScored hay bịa tin đồn!
 3. Không có số thì ghi "không có dữ liệu" trong trường "missing". Tuyệt đối CẤM điền từ trí nhớ.
 4. Xác nhận đúng đội 1 hay đội trẻ (U19/U21) và đúng giải đấu.
 5. Dưới 5 trận gần đây có dữ liệu cho một đội, hoặc giải nhỏ thiếu dữ liệu: ghi rõ trong "missing".
@@ -678,46 +706,70 @@ export async function streamCollectMatchData(
     // Đối soát đa tầng thời gian thực: API-Football H2H + Multi-Tier Waterfall Search (Serper -> Tavily -> Brave -> DuckDuckGo)
     let h2hText = ''
     let fixtureId = hint.eventId ?? undefined
-    let searchGrounding: SearchGroundingResponse | null = null
+    let searchGrounding: (SearchGroundingResponse & { providerUsed: import('./search.js').SearchProvider; snippets: string[] }) | null = null
 
     try {
-        const [fixtureRes, searchRes] = await Promise.allSettled([
+        console.log("[SEARCH] Querying real web grounding for:", cleanHome, "vs", cleanAway)
+        const [fixtureRes, searchData] = await Promise.all([
             (async () => {
-                const fixtureItem = await findFixture(cleanHome, cleanAway, fixtureId)
-                if (fixtureItem) {
-                    const fixId = fixtureItem.fixture.id
-                    const homeId = fixtureItem.teams?.home?.id
-                    const awayId = fixtureItem.teams?.away?.id
-                    if (homeId && awayId) {
-                        const h2hRes = await getFixtureH2H(homeId, awayId)
-                        return { fixtureId: fixId, h2hText: h2hRes?.h2hText || '' }
+                try {
+                    const fixtureItem = await findFixture(cleanHome, cleanAway, fixtureId)
+                    if (fixtureItem) {
+                        const fixId = fixtureItem.fixture.id
+                        const homeId = fixtureItem.teams?.home?.id
+                        const awayId = fixtureItem.teams?.away?.id
+                        if (homeId && awayId) {
+                            const h2hRes = await getFixtureH2H(homeId, awayId)
+                            return { fixtureId: fixId, h2hText: h2hRes?.h2hText || '' }
+                        }
+                        return { fixtureId: fixId, h2hText: '' }
                     }
-                    return { fixtureId: fixId, h2hText: '' }
+                } catch {
+                    /* ignore fixture H2H lookup error */
                 }
                 return { fixtureId, h2hText: '' }
             })(),
-            getMatchGrounding(cleanHome, cleanAway, {
-                league: cleanLeague,
-                kickoff: cleanKickoff,
-            }),
+            fetchLiveMatchGrounding(cleanHome, cleanAway, cleanLeague),
         ])
 
-        if (fixtureRes.status === 'fulfilled' && fixtureRes.value) {
-            if (fixtureRes.value.fixtureId) fixtureId = fixtureRes.value.fixtureId
-            if (fixtureRes.value.h2hText) h2hText = fixtureRes.value.h2hText
-        }
+        if (fixtureRes?.fixtureId) fixtureId = fixtureRes.fixtureId
+        if (fixtureRes?.h2hText) h2hText = fixtureRes.h2hText
 
-        if (searchRes.status === 'fulfilled' && searchRes.value) {
-            searchGrounding = searchRes.value
-            const pName = searchGrounding.provider.toUpperCase()
+        searchGrounding = searchData
+        console.log("[SEARCH] Provider used:", searchData.providerUsed, "Found snippets:", searchData.snippets.length)
+
+        if (searchGrounding.snippets.length > 0) {
+            const pName = searchGrounding.providerUsed.toUpperCase()
             const tier = searchGrounding.tier
             const ms = searchGrounding.latencyMs
             const cnt = searchGrounding.sources.length
             onDelta(`🔍 [Multi-Tier Search Grounding] Tier ${tier} (${pName}) hoàn tất trong ${ms}ms (${cnt} nguồn tin xác thực).\n`)
         }
-    } catch {
-        /* ignore grounding collection failure */
+    } catch (err) {
+        console.error("[SEARCH] Grounding collection error:", err)
     }
+
+    const hasSearchSnippets = Boolean(searchGrounding && searchGrounding.snippets && searchGrounding.snippets.length > 0)
+    const searchPromptBlock = hasSearchSnippets && searchGrounding
+        ? [
+              '',
+              '=== DỮ LIỆU TÌM KIẾM BỔ SUNG THỜI GIAN THỰC (REAL-TIME SEARCH GROUNDING) ===',
+              `Nguồn tin: Tier ${searchGrounding.tier} [${searchGrounding.providerUsed.toUpperCase()}] (Truy vấn: "${searchGrounding.query}")`,
+              searchGrounding.groundingText,
+              '',
+              'Trích đoạn tin tức thực tế (Snippets):',
+              searchGrounding.snippets.map((s, idx) => `[${idx + 1}] ${s}`).join('\n'),
+              '',
+              'QUY TẮC BẮT BUỘC VỀ ĐỘI HÌNH & CHẤN THƯƠNG:',
+              '- Nếu tin tức cho thấy đội hình chính thức đã công bố: đặt "lineup_confirmed": true. Nếu chưa có hoặc chỉ là dự kiến: đặt "lineup_confirmed": false.',
+              '- Trích xuất danh sách chấn thương/vắng mặt chính xác vào mảng "injuries" của đội tương ứng từ các trích đoạn tìm kiếm trên. TUYỆT ĐỐI KHÔNG bịa cầu thủ vắng mặt từ trí nhớ!',
+              '- Chỉ ghi nhận trong "conflicts" nếu có mâu thuẫn rõ ràng giữa các trích đoạn tin tức thực tế ở trên. TUYỆT ĐỐI CẤM AI tự bịa ra các nguồn như Sofascore, Flashscore nếu không có trong ngữ cảnh.',
+              '=========================================================================',
+          ].join('\n')
+        : [
+              '',
+              'DỮ LIỆU TÌM KIẾM WEB: Không tìm thấy tin tức trực tuyến cho trận này. CẤM AI tự bịa ra các nguồn như Sofascore, Flashscore hay tin đồn chuyển nhượng nếu không có trong ngữ cảnh. Đặt trường "conflicts": [] (mảng rỗng).',
+          ].join('\n')
 
     const userPrompt = [
         `Phân tích định lượng toàn diện cho trận đấu:`,
@@ -733,19 +785,7 @@ export async function streamCollectMatchData(
                   'QUY TẮC BẮT BUỘC VỀ ĐỐI ĐẦU: Sử dụng CHÍNH XÁC số liệu từ THỰC TẾ LỊCH SỬ ĐỐI ĐẦU (H2H API-Football) ở trên để điền trường "h2h": { "n", "avg_goals", "btts_rate" }. TUYỆT ĐỐI CẤM bịa đặt hoặc đoán mò lịch sử đối đầu từ trí nhớ!',
               ].join('\n')
             : '',
-        searchGrounding && searchGrounding.results.length > 0
-            ? [
-                  '',
-                  '=== DỮ LIỆU TÌM KIẾM BỔ SUNG THỜI GIAN THỰC (REAL-TIME SEARCH GROUNDING) ===',
-                  `Nguồn tin: Tier ${searchGrounding.tier} [${searchGrounding.provider.toUpperCase()}] (Truy vấn: "${searchGrounding.query}")`,
-                  searchGrounding.groundingText,
-                  '',
-                  'QUY TẮC BẮT BUỘC VỀ ĐỘI HÌNH & CHẤN THƯƠNG:',
-                  '- Nếu tin tức cho thấy đội hình chính thức đã công bố: đặt "lineup_confirmed": true. Nếu chưa có hoặc chỉ là dự kiến: đặt "lineup_confirmed": false.',
-                  '- Trích xuất danh sách chấn thương/vắng mặt chính xác vào mảng "injuries" của đội tương ứng từ các trích đoạn tìm kiếm trên. TUYỆT ĐỐI KHÔNG bịa cầu thủ vắng mặt từ trí nhớ!',
-                  '=========================================================================',
-              ].join('\n')
-            : '',
+        searchPromptBlock,
         '',
         `Yêu cầu: Dựa trên mô hình Poisson, thống kê xG (xgf, xga), tỷ lệ ép sân/áp lực tấn công và kỳ vọng phạt góc, xuất ra đối tượng JSON chuẩn xác theo đúng schema.`,
     ].filter(Boolean).join('\n')
@@ -833,6 +873,8 @@ DANH SÁCH KIỂM TRA CHỐNG THIÊN LỆCH:
 - Không thiên về đội lớn mà không có số liệu; không thiên về kèo Tài vì cảm tính; không bỏ qua kịch bản hòa hoặc tỉ số thấp (0-0, 1-0, 1-1).
 - Luôn nêu rõ kịch bản thực tế khiến pick bị thua.
 - Quản trị vốn: 1.0% - 2.5% tổng vốn, không all-in hay gấp thếp.
+- TUYỆT ĐỐI CẤM AI tự bịa ra các nguồn tin như Sofascore, Flashscore hay tin đồn chuyển nhượng nếu không có trong dữ liệu cung cấp.
+- QUY TẮC LAMBDA & XÁC SUẤT: λ_FINAL luôn là số dương phản ánh kỳ vọng bàn thắng (kể cả trong trận đấu). Tuyệt đối không nhận định λ bị kéo về 0 hoặc bằng 0, và không bao giờ khẳng định tỷ lệ thắng 100%.
 
 BỐN PHẦN CẦN TRÌNH BÀY (mỗi phần 2–4 câu):
 (1) Đối soát chỉ số: xG/xGA (kèm nguồn), variance (vượt/hụt kỳ vọng), sân nhà - sân khách, H2H. Nêu rõ trường thiếu dữ liệu và mâu thuẫn nguồn.

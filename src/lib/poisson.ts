@@ -147,9 +147,10 @@ export function inPlayScoreMatrix(
     currentScore: { home: number; away: number },
     rho = DC_RHO,
 ): { matrix: number[][]; lambdaRemHome: number; lambdaRemAway: number; decayFactor: number } {
-    const decayFactor = Math.max(0, (90 - currentMinute) / 90)
-    const lambdaRemHome = lambdaHome * decayFactor
-    const lambdaRemAway = lambdaAway * decayFactor
+    const clampedMinute = Math.min(88, Math.max(0, currentMinute))
+    const decayFactor = Math.max(0.05, (90 - clampedMinute) / 90)
+    const lambdaRemHome = Math.max(0.08, Number((lambdaHome * decayFactor).toFixed(4)))
+    const lambdaRemAway = Math.max(0.08, Number((lambdaAway * decayFactor).toFixed(4)))
 
     // Mô phỏng số bàn thắng còn lại bằng Dixon-Coles
     const remMatrix = scoreMatrix(lambdaRemHome, lambdaRemAway, rho)

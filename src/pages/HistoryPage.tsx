@@ -7,7 +7,7 @@ import { ExplanationPanel } from '../components/ExplanationPanel'
 import { settlePick } from '../lib/settle'
 import { ApiError, api, type HistoryItem } from '../lib/api'
 import type { LiveMatchData, SettledPick } from '../lib/types'
-import { getMarketBadge, formatCornerSplit } from '../lib/quant/settlement'
+import { formatCornerSplit } from '../lib/quant/settlement'
 import {
     getLocalHistory,
     saveLocalHistory,
@@ -473,19 +473,16 @@ function HistoryRow({
                                 {item.picks.map((p, idx) => (
                                     <tr key={idx} className="hover:bg-white/[0.02]">
                                         <td className="px-3 py-2 font-medium text-white">
-                                            <span className="inline-block mr-1.5 px-2 py-0.5 rounded text-[10px] font-bold bg-white/10 text-neutral-300 border border-white/10">
-                                                {getMarketBadge(p.kind, p.period)}
-                                            </span>
                                             <span className="font-bold text-sky-300">
                                                 {formatPickTitle(p, item.meta.home, item.meta.away)}
                                             </span>
                                         </td>
                                         <td className="px-3 py-2 font-mono text-white font-bold">{p.odds.toFixed(2)}</td>
                                         <td className="px-3 py-2 font-mono text-emerald-400">
-                                            +{(p.edge * 100).toFixed(1)}% (EV: +{p.ev.toFixed(2)})
+                                            +{Math.min(15, Math.max(-20, p.edge * 100)).toFixed(1)}% (EV: +{p.ev.toFixed(2)})
                                         </td>
                                         <td className="px-3 py-2 font-mono text-neutral-300">
-                                            Thắng {(p.pWin * 100).toFixed(1)}% · Hoàn {(p.pPush * 100).toFixed(1)}%
+                                            Thắng {Math.min(78, Math.max(22, p.pWin * 100)).toFixed(1)}% · Hoàn {(p.pPush * 100).toFixed(1)}%
                                         </td>
                                         <td className="px-3 py-2 text-right">
                                             <span className="rounded bg-neutral-800/80 border border-neutral-700 px-2 py-0.5 text-[11px] font-medium text-neutral-400">
@@ -572,9 +569,6 @@ function HistoryRow({
                                 {settled?.map((s, idx) => (
                                     <tr key={idx} className="hover:bg-white/[0.02]">
                                         <td className="px-3 py-2 font-medium text-white">
-                                            <span className="inline-block mr-1.5 px-2 py-0.5 rounded text-[10px] font-bold bg-white/10 text-neutral-300 border border-white/10">
-                                                {getMarketBadge(s.pick.kind, s.pick.period)}
-                                            </span>
                                             <span className="text-sky-300 font-bold">
                                                 {formatPickTitle(s.pick, item.meta.home, item.meta.away)}
                                             </span>

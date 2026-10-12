@@ -51,6 +51,8 @@ export interface SearchGroundingResponse {
     sources: Source[]
     lineupConfirmedHint: boolean
     injuriesHint: string[]
+    providerUsed: SearchProvider
+    snippets: string[]
 }
 
 const PROVIDER_TIMEOUT_MS = 6000
@@ -581,6 +583,8 @@ export async function performMultiTierSearch(
                     sources,
                     lineupConfirmedHint: analysis.lineupConfirmed,
                     injuriesHint: analysis.injuries,
+                    providerUsed: tier.provider,
+                    snippets: results.map((r) => r.snippet),
                 }
 
                 // Lưu cache
@@ -626,6 +630,8 @@ export async function performMultiTierSearch(
         sources: [],
         lineupConfirmedHint: false,
         injuriesHint: [],
+        providerUsed: 'duckduckgo',
+        snippets: [],
     }
 
     return emptyResponse
@@ -650,4 +656,21 @@ export async function getMatchGrounding(
         .join(' ')
 
     return performMultiTierSearch(query, options)
+}
+
+/**
+ * API đối soát trực tiếp theo cặp trận đấu:
+ * Tự động tạo truy vấn, gọi waterfall search và trả về cấu trúc snippets & providerUsed.
+ */
+export async function fetchLiveMatchGrounding(
+    homeTeam: string,
+    awayTeam: string,
+    league?: string,
+): Promise<SearchGroundingResponse & { providerUsed: SearchProvider; snippets: string[] }> {
+    const res = await getMatchGrounding(homeTeam, awayTeam, { league })
+    return {
+        ...res,
+        providerUsed: res.provider,
+        snippets: res.snippets || res.results.map((r) => r.snippet),
+    }
 }

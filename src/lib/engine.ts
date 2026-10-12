@@ -160,8 +160,8 @@ export function analyzeMatch(
         const curScore = inPlay.currentScore ?? { home: 0, away: 0 }
         const decayed = inPlayScoreMatrix(blended.lambdaHome, blended.lambdaAway, inPlay.currentMinute, curScore)
         matrix = decayed.matrix
-        lambdaHome = decayed.lambdaRemHome
-        lambdaAway = decayed.lambdaRemAway
+        lambdaHome = Math.max(0.08, decayed.lambdaRemHome)
+        lambdaAway = Math.max(0.08, decayed.lambdaRemAway)
     } else {
         // Bước 4: Ma trận Dixon-Coles rho=-0.08 từ lambda_final
         matrix = scoreMatrix(blended.lambdaHome, blended.lambdaAway)
@@ -172,8 +172,27 @@ export function analyzeMatch(
 
     for (const line of oddsLines) {
         const opposite = findOpposite(oddsLines, line)
-        const triple = tripleFor(matrix, line.kind, line.line, line.side)
-        const { ev, edge } = evAndEdge(triple, line.odds)
+        const rawTriple = tripleFor(matrix, line.kind, line.line, line.side)
+        const { edge: rawEdge } = evAndEdge(rawTriple, line.odds)
+
+        // HARD SANITY CAP (ABSOLUTE BAN ON 100.0% WIN RATES):
+        // 1. Khóa trần xác suất thắng trong khoảng [22%, 78%] (tuyệt đối không để 100%)
+        const finalWinProb = Math.min(0.78, Math.max(0.22, rawTriple.win))
+        // 2. Khóa trần Edge trong khoảng [-20%, 15%]
+        const finalEdge = Math.min(0.15, Math.max(-0.20, rawEdge))
+        // 3. Tính toán lại EV theo xác suất chuẩn: (finalWinProb * odds) - 1
+        const finalEV = Number(((finalWinProb * line.odds) - 1).toFixed(3))
+
+        const finalPush = rawTriple.push
+        const finalLose = Math.max(0, 1 - finalWinProb - finalPush)
+
+        const triple: Triple = {
+            win: finalWinProb,
+            push: finalPush,
+            lose: finalLose,
+        }
+        const ev = finalEV
+        const edge = finalEdge
         const imp = pImplied(line.odds)
         const impNoVig = pImpliedNoVig(line.odds, opposite)
         const marketDelta = Math.abs(triple.win - imp)
@@ -209,6 +228,8 @@ export function analyzeMatch(
         picks.push({
             oddsLineId: line.id,
             kind: line.kind,
+            period: line.period,
+            object: line.object,
             side: line.side,
             line: line.line,
             odds: line.odds,

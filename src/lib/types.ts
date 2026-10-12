@@ -77,6 +77,72 @@ export interface OddsLine {
     line: number
     /** Tỉ lệ cược thập phân (>= 1.01) */
     odds: number
+    /** Hiệp thi đấu: 'h1' | 'ft' (mặc định 'ft') */
+    period?: 'ft' | 'ht' | '1h' | string
+    /** Đối tượng kèo: 'goals' (bàn thắng) | 'corners' (phạt góc) */
+    object?: 'goals' | 'corners' | string
+}
+
+/**
+ * Hierarchy of Truth for Match Minute & Clamping Guard:
+ * 1. Primary: OCR Minute from screenshot (nếu đọc được phút thật)
+ * 2. Secondary: API-Football fixture.status.elapsed
+ * 3. TUYỆT ĐỐI KHÔNG dùng Date.now() - kickoffTime cho trận đang đá (tránh lệch múi giờ sinh ra 128')
+ * 4. Kẹp chặn: Trận thông thường không thể vượt quá 100 phút (trừ hiệp phụ AET / PEN)
+ */
+export function resolveMatchMinute(
+    ocrMinute?: number | string | null,
+    apiElapsed?: number | string | null,
+    fixtureStatus?: string | null,
+): number | string {
+    const statusUpper = (fixtureStatus || '').toUpperCase()
+    if (statusUpper === 'FT' || statusUpper === 'AET' || statusUpper === 'PEN' || statusUpper === 'FINISHED') {
+        return 'FT'
+    }
+    if (statusUpper === 'HT') {
+        return 'HT'
+    }
+
+    const parseMin = (val: unknown): number | null => {
+        if (typeof val === 'number' && !isNaN(val)) return val
+        if (typeof val === 'string') {
+            const clean = val.replace(/[^0-9]/g, '').trim()
+            if (clean) {
+                const n = parseInt(clean, 10)
+                if (!isNaN(n)) return n
+            }
+        }
+        return null
+    }
+
+    // 1. Primary: OCR Minute from screenshot
+    const ocrParsed = parseMin(ocrMinute)
+    const apiParsed = parseMin(apiElapsed)
+
+    let minVal: number | null = null
+    if (ocrParsed != null && ocrParsed > 0) {
+        minVal = ocrParsed
+    } else if (apiParsed != null && apiParsed > 0) {
+        // 2. Secondary: API-Football fixture.status.elapsed
+        minVal = apiParsed
+    }
+
+    if (minVal != null) {
+        // Clamping guard: Regular match cannot exceed 100 minutes
+        if (minVal > 100 && statusUpper !== 'AET' && statusUpper !== 'PEN') {
+            minVal = 90
+        }
+        return minVal
+    }
+
+    if (typeof ocrMinute === 'string' && (ocrMinute.toUpperCase() === 'HT' || ocrMinute.toUpperCase() === 'FT')) {
+        return ocrMinute.toUpperCase()
+    }
+    if (typeof apiElapsed === 'string' && (apiElapsed.toUpperCase() === 'HT' || apiElapsed.toUpperCase() === 'FT')) {
+        return apiElapsed.toUpperCase()
+    }
+
+    return '—'
 }
 
 /** Bộ ba xác suất của một kèo. */
@@ -92,7 +158,8 @@ export type Confidence = 'high' | 'medium' | 'low'
 export interface Pick {
     oddsLineId: string
     kind: MarketKind
-    period?: 'ft' | 'ht' | string
+    period?: 'ft' | 'ht' | '1h' | string
+    object?: 'goals' | 'corners' | string
     side: string
     line: number
     odds: number

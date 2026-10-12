@@ -445,6 +445,8 @@ export interface ExtractedRow {
     /** 0..1 — dưới 0.8 UI sẽ cảnh báo người dùng kiểm tra lại. */
     confidence: number
     note?: string
+    period?: 'ft' | 'ht' | '1h' | string
+    object?: 'goals' | 'corners' | string
 }
 
 export interface ExtractedOddsItem {
@@ -452,6 +454,8 @@ export interface ExtractedOddsItem {
     target: 'home' | 'away' | 'over' | 'under'
     line: number
     odds: number
+    period?: string
+    object?: string
 }
 
 export interface ExtractResponse {

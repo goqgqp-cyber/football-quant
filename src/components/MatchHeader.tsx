@@ -15,8 +15,9 @@ interface MatchHeaderProps {
 }
 
 function TeamLogo({ name, logoUrl, isHome }: { name: string; logoUrl?: string; isHome: boolean }) {
-    const [imgFailed, setImgFailed] = useState(false)
+    const [failedUrl, setFailedUrl] = useState<string | null>(null)
     const initial = (name.trim()[0] || (isHome ? 'H' : 'A')).toUpperCase()
+    const imgFailed = logoUrl ? failedUrl === logoUrl : true
 
     if (!logoUrl || imgFailed) {
         return (
@@ -37,7 +38,8 @@ function TeamLogo({ name, logoUrl, isHome }: { name: string; logoUrl?: string; i
             <img
                 src={logoUrl}
                 alt={name}
-                onError={() => setImgFailed(true)}
+                referrerPolicy="no-referrer"
+                onError={() => setFailedUrl(logoUrl)}
                 className="h-full w-full object-contain filter drop-shadow-[0_2px_6px_rgba(0,0,0,0.6)]"
                 loading="lazy"
             />
@@ -46,7 +48,8 @@ function TeamLogo({ name, logoUrl, isHome }: { name: string; logoUrl?: string; i
 }
 
 function FormBadgeList({ form, isHome }: { form?: string[]; isHome: boolean }) {
-    const list = (form && form.length > 0 ? form : ['W', 'D', 'W', 'L', 'D']).slice(-5)
+    if (!form || form.length === 0) return null
+    const list = form.slice(-5)
 
     return (
         <div className={`flex items-center gap-1 ${isHome ? 'justify-start' : 'justify-end'}`}>
@@ -105,8 +108,15 @@ export function MatchHeader({
     const minuteLabel = (() => {
         if (minute === 'FT' || status === 'finished') return 'Hết giờ (FT)'
         if (minute === 'HT') return 'Nghỉ giữa hiệp (HT)'
-        if (typeof minute === 'number') return `Phút ${minute}'`
-        if (typeof minute === 'string' && minute && minute !== '—') return minute
+        if (typeof minute === 'number') {
+            const clamped = minute > 100 ? 90 : minute
+            return `Phút ${clamped}'`
+        }
+        if (typeof minute === 'string' && minute && minute !== '—') {
+            const parsed = parseInt(minute.replace(/[^0-9]/g, ''), 10)
+            if (!isNaN(parsed) && parsed > 100) return "Phút 90'"
+            return minute
+        }
         return status === 'inprogress' ? 'Đang đá' : 'Chưa đấu'
     })()
 

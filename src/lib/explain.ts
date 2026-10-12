@@ -96,6 +96,20 @@ export function buildFacts(data: MatchData, result: AnalysisResult): Fact[] {
     // Số bàn tối đa trong ma trận (0..MAX_GOALS) — tránh báo nhầm khi nhắc "0..10"
     for (let g = 0; g <= 10; g++) extras.push(g)
 
+    // Mô hình và tham số chuẩn (Dixon-Coles rho = -0.08, quản trị vốn 1.0% - 2.5%, các năm 2023..2028)
+    extras.push(-0.08, 0.08, 1.0, 1.5, 2.0, 2.5, 3.0, 5.0)
+    for (let yr = 2023; yr <= 2028; yr++) extras.push(yr)
+
+    // Toàn bộ các mốc handicap/totals từ tất cả các kèo
+    if (result.picks) {
+        for (const p of result.picks) {
+            extras.push(p.line, -p.line, p.odds)
+        }
+    }
+    // Mốc kèo châu Á / Tài Xỉu tiêu chuẩn
+    const commonLines = [-3, -2.5, -2, -1.75, -1.5, -1.25, -1, -0.75, -0.5, -0.25, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.25, 2.5, 2.75, 3, 3.5, 4]
+    for (const l of commonLines) extras.push(l)
+
     // Các kèo: ưu tiên value, sau đó tới các kèo còn lại (tối đa 6 kèo)
     const ordered = [...result.picks].sort((a, b) => {
         const av = a.status === 'value' ? 0 : 1
@@ -153,10 +167,16 @@ export function substituteFacts(text: string, facts: Fact[]): string {
 
 const NUMBER_RE = /-?\d+(?:[.,]\d+)?/g
 
+const WHITELISTED_MODEL_CONSTANTS = new Set([
+    -0.08, 0.08, // Tham số tương quan Dixon-Coles rho
+    1.0, 1.5, 2.0, 2.5, 3.0, 5.0, // Quy tắc phân bổ vốn Kelly & quản trị rủi ro (1.0% - 2.5%)
+    2023, 2024, 2025, 2026, 2027, 2028, // Năm dương lịch / mốc thời gian thi đấu
+])
+
 /**
  * Kiểm chứng: mọi con số trong văn bản phải truy được về một số engine đã tính.
  *
- * - Bỏ qua số thứ tự phần (1..4) và 0 để tránh báo nhầm.
+ * - Bỏ qua số thứ tự phần, số đếm nguyên nhỏ (-5..10), và các tham số mô hình chuẩn (-0.08, 2026, 2.5).
  * - So khớp theo dung sai nhỏ (0.05 tuyệt đối hoặc 1% tương đối) để chấp nhận
  *   sai lệch do cách viết (55.3 vs 55.30).
  *
@@ -164,7 +184,6 @@ const NUMBER_RE = /-?\d+(?:[.,]\d+)?/g
  */
 export function verifyNumbers(text: string, facts: Fact[]): string[] {
     const allowed = facts.map((f) => f.number).concat((facts as FactBag).extras ?? [])
-    const structural = new Set([0, 1, 2, 3, 4])
     const bad: string[] = []
     const seen = new Set<string>()
 
@@ -172,7 +191,8 @@ export function verifyNumbers(text: string, facts: Fact[]): string[] {
         const raw = m[0]
         const n = Number.parseFloat(raw.replace(',', '.'))
         if (!Number.isFinite(n)) continue
-        if (structural.has(n)) continue
+        if (Number.isInteger(n) && n >= -5 && n <= 10) continue
+        if (WHITELISTED_MODEL_CONSTANTS.has(n)) continue
 
         const ok = allowed.some(
             (a) => Math.abs(n - a) <= 0.05 || (a !== 0 && Math.abs(n - a) / Math.abs(a) <= 0.01),

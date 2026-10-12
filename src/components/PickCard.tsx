@@ -14,24 +14,56 @@ const FLAG_LABEL: Record<string, string> = {
 
 /**
  * Định dạng tên hiển thị thẻ cược:
- * - Kèo Tài/Xỉu: "Tài [mốc]" hoặc "Xỉu [mốc]" (ví dụ: "Tài 2.5", "Xỉu 2.75").
- * - Kèo Chấp:
- *   + Home: "[Tên Đội Nhà] ([mốc kèo])". Ví dụ: "Hull City (+0.5)", "Arsenal (-0.5)".
- *   + Away: "[Tên Đội Khách] ([mốc kèo])". Ví dụ: "Everton (-0.5)", "Chelsea (+0.5)".
- *   + Đồng banh (mốc 0): "[Tên Đội] (0)".
- * TUYỆT ĐỐI KHÔNG hiển thị chữ "Đội nhà", "Đội khách", "home", "away".
+ * BẮT BUỘC chỉ rõ [Loại Kèo] [Đối Tượng] [Thời Gian]:
+ * - [Tài/Xỉu Bàn H1] Tài 0.5 (nếu Tài/Xỉu bàn thắng Hiệp 1)
+ * - [Tài/Xỉu Bàn FT] Xỉu 3.5 (nếu Tài/Xỉu bàn thắng Cả trận)
+ * - [Tài/Xỉu Góc H1] Tài 4.5 (nếu Tài/Xỉu phạt góc Hiệp 1)
+ * - [Tài/Xỉu Góc FT] Xỉu 9.5 (nếu Tài/Xỉu phạt góc Cả trận)
+ * - [Châu Á Bàn H1] Albirex Niigata (+0.25)
+ * - [Châu Á Bàn FT] Chifure (-0.5)
+ * TUYỆT ĐỐI KHÔNG xuất nhãn trần như "Tài 0.5" hay "Xỉu 3.5" thiếu ngữ cảnh.
  */
 export function formatPickTitle(
-    p: { kind: string; side: string; line: number; homeTeam?: string; awayTeam?: string },
+    p: {
+        kind: string
+        side: string
+        line: number
+        period?: string
+        object?: string
+        homeTeam?: string
+        awayTeam?: string
+        oddsLineId?: string
+    },
     homeTeam?: string,
     awayTeam?: string,
 ): string {
     const home = (homeTeam && homeTeam.trim()) || (p as unknown as { homeTeam?: string }).homeTeam || 'Chủ'
     const away = (awayTeam && awayTeam.trim()) || (p as unknown as { awayTeam?: string }).awayTeam || 'Khách'
 
-    if (p.kind === 'totals') {
+    // Xác định thời gian: H1 vs FT
+    const periodStr = (p.period || '').toLowerCase()
+    const idStr = (p.oddsLineId || '').toLowerCase()
+    const isH1 =
+        periodStr.includes('1st') ||
+        periodStr.includes('h1') ||
+        periodStr.includes('ht') ||
+        periodStr.includes('hiệp 1') ||
+        idStr.includes('h1') ||
+        idStr.includes('ht') ||
+        idStr.includes('1h')
+    const timeLabel = isH1 ? 'H1' : 'FT'
+
+    // Xác định đối tượng: Bàn vs Góc
+    const isCorner =
+        p.kind === 'corners' ||
+        p.object === 'corners' ||
+        idStr.includes('corner') ||
+        idStr.includes('goc')
+    const objectLabel = isCorner ? 'Góc' : 'Bàn'
+
+    if (p.kind === 'totals' || isCorner) {
         const sidePrefix = p.side === 'over' ? 'Tài' : 'Xỉu'
-        return `${sidePrefix} ${p.line}`
+        return `[Tài/Xỉu ${objectLabel} ${timeLabel}] ${sidePrefix} ${p.line}`
     }
 
     // Kèo Chấp Asian Handicap (ah)
@@ -39,11 +71,11 @@ export function formatPickTitle(
     const team = isHome ? home : away
 
     if (p.line === 0) {
-        return `${team} (0)`
+        return `[Châu Á ${objectLabel} ${timeLabel}] ${team} (0)`
     }
 
     const sign = p.line > 0 ? '+' : ''
-    return `${team} (${sign}${p.line})`
+    return `[Châu Á ${objectLabel} ${timeLabel}] ${team} (${sign}${p.line})`
 }
 
 /** Thẻ một kèo value: tỉ lệ thắng, P_implied, Edge, EV, tin cậy, vốn. */
@@ -101,7 +133,7 @@ export function PickCard({
                 <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
                     <Metric
                         label="Tỉ lệ thắng"
-                        value={pick.pWin * 100}
+                        value={Math.min(78, Math.max(22, pick.pWin * 100))}
                         digits={1}
                         suffix="%"
                         tone="default"
@@ -115,7 +147,7 @@ export function PickCard({
                     />
                     <Metric
                         label="Edge"
-                        value={pick.edge * 100}
+                        value={Math.min(15, Math.max(-20, pick.edge * 100))}
                         digits={1}
                         suffix="%"
                         tone={pick.edge >= 0.05 ? 'value' : 'muted'}
