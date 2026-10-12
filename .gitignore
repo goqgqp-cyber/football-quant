@@ -22,6 +22,7 @@ npm-debug.log*
 .vercel/
 server/dist/
 .worktree/
+scratch/
 
 # Lưu ý: api/index.js là bundle function Vercel được COMMIT (không ignore)
 # để Vercel luôn thấy handler, kể cả khi build step bị bỏ qua.

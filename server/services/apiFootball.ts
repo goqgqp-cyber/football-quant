@@ -9,7 +9,14 @@
 
 import { env } from '../env.js'
 import { keys, redis } from '../redis.js'
-import type { LiveMatchData, DetailedMatchStatistics, MatchEventItem } from '../../src/lib/types.js'
+import type {
+    LiveMatchData,
+    DetailedMatchStatistics,
+    MatchEventItem,
+    MatchRecord,
+    ExternalCallLog,
+    ProviderStatusCode,
+} from '../../src/lib/types.js'
 
 export const API_FOOTBALL_BASE_URL = 'https://v3.football.api-sports.io'
 
@@ -78,8 +85,8 @@ export interface ApiFootballEventItem {
     team: { id: number; name: string; logo?: string }
     player?: { id?: number | null; name?: string | null }
     assist?: { id?: number | null; name?: string | null }
-    type: string // "Goal", "Card", "subst", "Var"
-    detail: string // "Normal Goal", "Yellow Card", "Red Card", "Penalty", etc.
+    type: string
+    detail: string
     comments?: string | null
 }
 
@@ -106,7 +113,7 @@ export interface MatchStatistics {
 }
 
 export interface H2HResult {
-    eventId: number
+    eventId?: number
     events: ApiFootballFixtureItem[]
     h2hText: string
     n: number
@@ -132,17 +139,86 @@ export function isTeamMatch(target: string, candidate: string): boolean {
     return t === c || t.includes(c) || c.includes(t)
 }
 
+// Short TTLs per specification:
+export const TTL_MATCH_RESULTS = 6 * 3600 // 6 hours (21600s)
+export const TTL_LINEUPS_INJURIES = 30 * 60 // 30 minutes (1800s)
+export const TTL_LIVE_STATUS = 30 // 30 seconds
+
+export interface ApiFootballQuota {
+    remaining: number | null
+    limit: number | null
+    perMinute: number | null
+    lastUpdated: number
+    isSuspended: boolean
+    message?: string
+    suspendedMessage?: string
+}
+
+let currentQuota: ApiFootballQuota = {
+    remaining: null,
+    limit: null,
+    perMinute: null,
+    lastUpdated: 0,
+    isSuspended: false,
+}
+
+export function getApiFootballQuota(): ApiFootballQuota {
+    return { ...currentQuota }
+}
+
+export function setApiFootballQuota(update: Partial<ApiFootballQuota>): void {
+    currentQuota = { ...currentQuota, ...update, lastUpdated: Date.now() }
+}
+
+export function resetApiFootballQuota(): void {
+    currentQuota = {
+        remaining: null,
+        limit: null,
+        perMinute: null,
+        lastUpdated: 0,
+        isSuspended: false,
+    }
+}
+
+/** Kiểm tra xem trận đấu có trong vòng 3 giờ trước/sau giờ thi đấu hay không */
+export function isWithin3HoursOfKickoff(kickoff?: string | null): boolean {
+    if (!kickoff) return false
+    const t = new Date(kickoff).getTime()
+    if (isNaN(t)) return false
+    const diff = t - Date.now()
+    return diff <= 3 * 3600 * 1000 && diff >= -3 * 3600 * 1000
+}
+
+export interface ApiFootballFetchOptions {
+    params?: Record<string, string | number>
+    ttlSec?: number
+    forceRefresh?: boolean
+    kickoff?: string | null
+    purpose?: string
+    auditLogger?: (log: ExternalCallLog) => void
+}
+
+export interface ApiFootballCallResult<T> {
+    data: T | null
+    success: boolean
+    status: ProviderStatusCode
+    statusCode?: number
+    errorMessage?: string
+    resultsCount: number
+    servedFromCache: boolean
+    fetchedAt: string
+}
+
 /**
- * Gọi API-Football với cache Upstash Redis.
+ * Gọi API-Football với kiểm tra lỗi payload, quota tracking, và quản lý cache nghiêm ngặt.
  */
-export async function fetchApiFootball<T = unknown>(
+export async function fetchApiFootballDetailed<T = unknown>(
     endpoint: string,
-    params: Record<string, string | number> = {},
-    ttlSec = 60,
-): Promise<T | null> {
+    options: ApiFootballFetchOptions = {},
+): Promise<ApiFootballCallResult<T>> {
     const cleanEndpoint = endpoint.replace(/^\/+/, '')
     const searchParams = new URLSearchParams()
-    for (const [k, v] of Object.entries(params)) {
+    for (const [k, v] of Object.entries(options.params || {})) {
         if (v !== undefined && v !== null && v !== '') {
             searchParams.set(k, String(v))
         }
@@ -150,54 +226,546 @@ export async function fetchApiFootball<T = unknown>(
     const queryString = searchParams.toString()
     const pathWithQuery = queryString ? `${cleanEndpoint}?${queryString}` : cleanEndpoint
     const cacheKey = keys.footballCache(pathWithQuery)
+    const startTime = Date.now()
+    const fetchedAt = new Date().toISOString()
+    const ttlSec = options.ttlSec ?? 60
 
-    // 1. Kiểm tra cache Redis
-    try {
-        const cached = await redis.get<T>(cacheKey)
-        if (cached) {
-            return cached
+    // 0. Quota Guard: Nếu quota bằng 0, dừng gọi ngay lập tức
+    if (currentQuota.remaining !== null && currentQuota.remaining <= 0) {
+        const errorMsg = 'Hết quota API-Football (0 requests remaining)'
+        const res: ApiFootballCallResult<T> = {
+            data: null,
+            success: false,
+            status: 'ERROR',
+            errorMessage: errorMsg,
+            resultsCount: 0,
+            servedFromCache: false,
+            fetchedAt,
         }
-    } catch {
-        /* bỏ qua lỗi cache */
+        options.auditLogger?.({
+            provider: 'api-football',
+            purpose: options.purpose || cleanEndpoint,
+            requestSummary: pathWithQuery,
+            startTime,
+            durationMs: 0,
+            resultCount: 0,
+            errorMessage: errorMsg,
+            servedFromCache: false,
+        })
+        return res
     }
 
-    // 2. Gọi API-Football
+    // 1. Kiểm tra cache Redis (Bỏ qua cache nếu forceRefresh hoặc trận trong vòng 3h kickoff)
+    const shouldBypassCache = Boolean(options.forceRefresh || isWithin3HoursOfKickoff(options.kickoff))
+    if (!shouldBypassCache) {
+        try {
+            const cached = await redis.get<T>(cacheKey)
+            if (cached !== null && cached !== undefined) {
+                const resultsCount = Array.isArray(cached) ? cached.length : 1
+                const res: ApiFootballCallResult<T> = {
+                    data: cached,
+                    success: true,
+                    status: 'OK',
+                    resultsCount,
+                    servedFromCache: true,
+                    fetchedAt,
+                }
+                options.auditLogger?.({
+                    provider: 'api-football',
+                    purpose: options.purpose || cleanEndpoint,
+                    requestSummary: pathWithQuery,
+                    startTime,
+                    durationMs: Date.now() - startTime,
+                    httpStatus: 200,
+                    resultCount: resultsCount,
+                    servedFromCache: true,
+                })
+                return res
+            }
+        } catch {
+            /* bỏ qua lỗi cache */
+        }
+    }
+
+    // 2. Chuẩn bị gọi API-Football
     const apiKey = (env.apiFootballKey || '32ef4117471d08b60402e551a089faff').trim()
     const url = `${API_FOOTBALL_BASE_URL}/${pathWithQuery}`
 
+    let httpStatus: number | undefined
+    let rawResponse: Response | null = null
+    let retryAttempts = 0
+    const maxRetries = 1
+
+    while (retryAttempts <= maxRetries) {
+        try {
+            rawResponse = await fetch(url, {
+                headers: {
+                    'x-apisports-key': apiKey,
+                    Accept: 'application/json',
+                },
+            })
+            httpStatus = rawResponse.status
+
+            // Retry CHỈ khi gặp 429 hoặc 5xx
+            if ((httpStatus === 429 || httpStatus >= 500) && retryAttempts < maxRetries) {
+                retryAttempts++
+                await new Promise((r) => setTimeout(r, 600 * retryAttempts))
+                continue
+            }
+            break
+        } catch (netErr) {
+            if (retryAttempts < maxRetries) {
+                retryAttempts++
+                await new Promise((r) => setTimeout(r, 600 * retryAttempts))
+                continue
+            }
+            const errMsg = netErr instanceof Error ? netErr.message : String(netErr)
+            const failResult: ApiFootballCallResult<T> = {
+                data: null,
+                success: false,
+                status: 'ERROR',
+                errorMessage: `Lỗi kết nối API-Football: ${errMsg}`,
+                resultsCount: 0,
+                servedFromCache: false,
+                fetchedAt,
+            }
+            options.auditLogger?.({
+                provider: 'api-football',
+                purpose: options.purpose || cleanEndpoint,
+                requestSummary: pathWithQuery,
+                startTime,
+                durationMs: Date.now() - startTime,
+                resultCount: 0,
+                errorMessage: failResult.errorMessage,
+                servedFromCache: false,
+            })
+            return failResult
+        }
+    }
+
+    if (!rawResponse) {
+        return {
+            data: null,
+            success: false,
+            status: 'ERROR',
+            errorMessage: 'Không nhận được phản hồi từ API-Football',
+            resultsCount: 0,
+            servedFromCache: false,
+            fetchedAt,
+        }
+    }
+
+    // 3. Đọc quota headers từ response
+    const remainingHdr = rawResponse.headers.get('x-ratelimit-requests-remaining')
+    const limitHdr = rawResponse.headers.get('x-ratelimit-requests-limit')
+    const perMinuteHdr = rawResponse.headers.get('x-ratelimit-remaining-minute')
+    if (remainingHdr !== null) {
+        const rem = parseInt(remainingHdr, 10)
+        const lim = limitHdr ? parseInt(limitHdr, 10) : null
+        const pm = perMinuteHdr ? parseInt(perMinuteHdr, 10) : null
+        setApiFootballQuota({
+            remaining: isNaN(rem) ? null : rem,
+            limit: lim !== null && !isNaN(lim) ? lim : null,
+            perMinute: pm !== null && !isNaN(pm) ? pm : null,
+        })
+    }
+
+    if (!rawResponse.ok) {
+        const errorText = await rawResponse.text().catch(() => '')
+        const errorMsg = `API-Football HTTP ${rawResponse.status}: ${errorText.slice(0, 150)}`
+        options.auditLogger?.({
+            provider: 'api-football',
+            purpose: options.purpose || cleanEndpoint,
+            requestSummary: pathWithQuery,
+            startTime,
+            durationMs: Date.now() - startTime,
+            httpStatus: rawResponse.status,
+            resultCount: 0,
+            errorMessage: errorMsg,
+            servedFromCache: false,
+        })
+        return {
+            data: null,
+            success: false,
+            status: 'ERROR',
+            statusCode: rawResponse.status,
+            errorMessage: errorMsg,
+            resultsCount: 0,
+            servedFromCache: false,
+            fetchedAt,
+        }
+    }
+
+    let parsedBody: ApiFootballResponse<T>
     try {
-        const res = await fetch(url, {
-            headers: {
-                'x-apisports-key': apiKey,
-                Accept: 'application/json',
-            },
+        parsedBody = (await rawResponse.json()) as ApiFootballResponse<T>
+    } catch {
+        const errorMsg = 'Lỗi parse JSON phản hồi từ API-Football'
+        return {
+            data: null,
+            success: false,
+            status: 'ERROR',
+            errorMessage: errorMsg,
+            resultsCount: 0,
+            servedFromCache: false,
+            fetchedAt,
+        }
+    }
+
+    // 4. BẮT BUỘC: Xử lý HTTP 200 kèm payload errors là FAILURE
+    const rawErrors = parsedBody.errors as unknown
+    const hasErrors = Boolean(
+        rawErrors &&
+            ((typeof rawErrors === 'object' && Object.keys(rawErrors as object).length > 0) ||
+                (Array.isArray(rawErrors) && rawErrors.length > 0) ||
+                (typeof rawErrors === 'string' && (rawErrors as string).trim().length > 0)),
+    )
+
+    if (hasErrors) {
+        let errMessage = ''
+        if (typeof rawErrors === 'object' && rawErrors !== null && !Array.isArray(rawErrors)) {
+            const errObj = rawErrors as Record<string, unknown>
+            errMessage = Object.entries(errObj)
+                .map(([k, v]) => `${k}: ${v}`)
+                .join(', ')
+            if (errObj.access && String(errObj.access).toLowerCase().includes('suspended')) {
+                setApiFootballQuota({ isSuspended: true, message: String(errObj.access) })
+            }
+        } else if (Array.isArray(rawErrors)) {
+            errMessage = rawErrors.join(', ')
+        } else {
+            errMessage = String(rawErrors)
+        }
+
+        console.warn(`[api-football] Provider error payload:`, errMessage)
+
+        // TUYỆT ĐỐI KHÔNG ghi cache lỗi (hoặc tối đa không lưu)
+        options.auditLogger?.({
+            provider: 'api-football',
+            purpose: options.purpose || cleanEndpoint,
+            requestSummary: pathWithQuery,
+            startTime,
+            durationMs: Date.now() - startTime,
+            httpStatus: 200,
+            resultCount: 0,
+            errorMessage: errMessage,
+            servedFromCache: false,
         })
 
-        if (!res.ok) {
-            console.warn(`[api-football] HTTP ${res.status} khi gọi ${url}`)
-            return null
+        return {
+            data: null,
+            success: false,
+            status: 'ERROR',
+            errorMessage: errMessage,
+            resultsCount: 0,
+            servedFromCache: false,
+            fetchedAt,
         }
+    }
 
-        const data = (await res.json()) as ApiFootballResponse<T>
-        if (data.errors && Object.keys(data.errors).length > 0) {
-            console.warn(`[api-football] Lỗi phản hồi từ API-Football:`, data.errors)
+    // 5. Kiểm tra kết quả rỗng (results == 0)
+    const resultsCount = parsedBody.results ?? (Array.isArray(parsedBody.response) ? parsedBody.response.length : 0)
+    if (resultsCount === 0) {
+        // TUYỆT ĐỐI KHÔNG cache kết quả rỗng
+        options.auditLogger?.({
+            provider: 'api-football',
+            purpose: options.purpose || cleanEndpoint,
+            requestSummary: pathWithQuery,
+            startTime,
+            durationMs: Date.now() - startTime,
+            httpStatus: 200,
+            resultCount: 0,
+            servedFromCache: false,
+        })
+        return {
+            data: parsedBody.response,
+            success: false,
+            status: 'EMPTY',
+            resultsCount: 0,
+            errorMessage: 'Không tìm thấy dữ liệu trên API-Football (results: 0)',
+            servedFromCache: false,
+            fetchedAt,
         }
+    }
 
-        const payload = data.response
+    // 6. Ghi cache kết quả thành công hợp lệ
+    const payload = parsedBody.response
+    if (payload !== undefined && payload !== null) {
+        try {
+            await redis.set(cacheKey, payload, { ex: ttlSec })
+        } catch {
+            /* bỏ qua lỗi set cache */
+        }
+    }
 
-        // 3. Ghi cache Redis nếu có dữ liệu hợp lệ
-        if (payload !== undefined && payload !== null) {
-            try {
-                await redis.set(cacheKey, payload, { ex: ttlSec })
-            } catch {
-                /* bỏ qua lỗi set cache */
+    options.auditLogger?.({
+        provider: 'api-football',
+        purpose: options.purpose || cleanEndpoint,
+        requestSummary: pathWithQuery,
+        startTime,
+        durationMs: Date.now() - startTime,
+        httpStatus: 200,
+        resultCount: resultsCount,
+        servedFromCache: false,
+    })
+
+    return {
+        data: payload,
+        success: true,
+        status: 'OK',
+        resultsCount,
+        servedFromCache: false,
+        fetchedAt,
+    }
+}
+
+/** Wrapper giữ tương thích ngược */
+export async function fetchApiFootball<T = unknown>(
+    endpoint: string,
+    params: Record<string, string | number> = {},
+    ttlSec = 60,
+): Promise<T | null> {
+    const res = await fetchApiFootballDetailed<T>(endpoint, { params, ttlSec })
+    return res.data
+}
+
+/**
+ * Chuyển đổi đối tượng Fixture từ API-Football thành MatchRecord chuẩn hóa có Provenance.
+ * Chỉ nhận các trận đã kết thúc (FT, AET, PEN). Bỏ qua hoãn/hủy (PPD, CANC, ABD).
+ */
+export function fixtureToMatchRecord(
+    item: ApiFootballFixtureItem,
+    fetchedAt = new Date().toISOString(),
+): MatchRecord | null {
+    const statusShort = (item.fixture?.status?.short || '').toUpperCase()
+    // Chỉ tính các trận đã hoàn thành
+    const isFinished = ['FT', 'AET', 'PEN'].includes(statusShort)
+    if (!isFinished) return null
+
+    const ftHome = Number(item.goals?.home ?? item.score?.fulltime?.home ?? 0)
+    const ftAway = Number(item.goals?.away ?? item.score?.fulltime?.away ?? 0)
+    const htHome = item.score?.halftime?.home != null ? Number(item.score.halftime.home) : undefined
+    const htAway = item.score?.halftime?.away != null ? Number(item.score.halftime.away) : undefined
+
+    let gender: 'men' | 'women' | undefined
+    let ageGroup: 'senior' | 'u19' | 'u21' | 'u23' | undefined
+
+    const combinedName = `${item.league?.name || ''} ${item.teams?.home?.name || ''} ${item.teams?.away?.name || ''}`.toLowerCase()
+    if (combinedName.includes('women') || combinedName.includes(' w') || combinedName.includes('(w)') || combinedName.includes('females')) {
+        gender = 'women'
+    } else {
+        gender = 'men'
+    }
+
+    if (combinedName.includes('u19') || combinedName.includes('u-19') || combinedName.includes('under 19')) {
+        ageGroup = 'u19'
+    } else if (combinedName.includes('u21') || combinedName.includes('u-21')) {
+        ageGroup = 'u21'
+    } else if (combinedName.includes('u23') || combinedName.includes('u-23')) {
+        ageGroup = 'u23'
+    } else {
+        ageGroup = 'senior'
+    }
+
+    return {
+        id: item.fixture.id,
+        date: item.fixture.date?.split('T')[0] || item.fixture.date,
+        competition: item.league?.name || 'Unknown Competition',
+        homeTeam: item.teams?.home?.name || 'Home Team',
+        awayTeam: item.teams?.away?.name || 'Away Team',
+        homeTeamId: item.teams?.home?.id,
+        awayTeamId: item.teams?.away?.id,
+        gender,
+        ageGroup,
+        ftScore: { home: ftHome, away: ftAway },
+        htScore: htHome != null && htAway != null ? { home: htHome, away: htAway } : undefined,
+        status: statusShort,
+        source: 'api-football',
+        provenance: {
+            source: `api-football:fixtures?id=${item.fixture.id}`,
+            fetchedAt,
+            verified: true,
+        },
+    }
+}
+
+/**
+ * Khử trùng lặp danh sách trận đấu giữa API-Football và Web:
+ * Khử trùng theo (date, team ids). Ưu tiên tỷ số từ API-Football;
+ * đánh dấu verified = true khi nguồn web đối soát đồng thuận về tỷ số.
+ */
+export function deduplicateMatchRecords(records: MatchRecord[]): MatchRecord[] {
+    const map = new Map<string, MatchRecord>()
+    for (const r of records) {
+        const teamKey = r.homeTeamId && r.awayTeamId
+            ? `${r.homeTeamId}_${r.awayTeamId}`
+            : `${normalizeTeam(r.homeTeam)}_${normalizeTeam(r.awayTeam)}`
+        const key = `${r.date}_${teamKey}`
+
+        const existing = map.get(key)
+        if (!existing) {
+            map.set(key, { ...r })
+        } else {
+            // Khi cả API-Football và web cùng có trận này:
+            if (existing.source === 'api-football' && r.source !== 'api-football') {
+                if (
+                    r.ftScore &&
+                    existing.ftScore &&
+                    r.ftScore.home === existing.ftScore.home &&
+                    r.ftScore.away === existing.ftScore.away
+                ) {
+                    existing.provenance.verified = true
+                }
+            } else if (existing.source !== 'api-football' && r.source === 'api-football') {
+                const webAgrees = Boolean(
+                    existing.ftScore &&
+                    r.ftScore &&
+                    existing.ftScore.home === r.ftScore.home &&
+                    existing.ftScore.away === r.ftScore.away
+                )
+                const updated = { ...r }
+                if (webAgrees) {
+                    updated.provenance.verified = true
+                }
+                map.set(key, updated)
             }
         }
+    }
+    return Array.from(map.values())
+}
 
-        return payload
-    } catch (e) {
-        console.warn(`[api-football] Lỗi kết nối ${url}:`, e instanceof Error ? e.message : e)
-        return null
+/**
+ * Lấy danh sách trận đấu gần đây đã kết thúc của một đội (theo teamId) từ API-Football.
+ * Tự động thích ứng với giới hạn plan: nếu `last` bị từ chối, chuyển sang query theo mùa giải.
+ */
+export async function getTeamRecentFixtures(
+    teamId: number,
+    options: {
+        season?: number
+        kickoff?: string | null
+        forceRefresh?: boolean
+        auditLogger?: (log: ExternalCallLog) => void
+    } = {},
+): Promise<{
+    matches: MatchRecord[]
+    excludedMatches?: Array<{ id: number; date: string; status: string; teams: string; reason: string }>
+    fetchedAt: string
+    status: ProviderStatusCode
+    errorMessage?: string
+}> {
+    const fetchedAt = new Date().toISOString()
+    if (!teamId || teamId <= 0) {
+        return { matches: [], excludedMatches: [], fetchedAt, status: 'NOT_CALLED' }
+    }
+
+    const currentYear = options.season || (options.kickoff ? new Date(options.kickoff).getFullYear() : new Date().getFullYear())
+
+    // 1. Thử gọi với team + status: FT theo mùa giải (tương thích cả Free lẫn Pro plans)
+    let callRes = await fetchApiFootballDetailed<ApiFootballFixtureItem[]>('fixtures', {
+        params: { team: teamId, season: currentYear, status: 'FT' },
+        ttlSec: TTL_MATCH_RESULTS,
+        forceRefresh: options.forceRefresh,
+        kickoff: options.kickoff,
+        purpose: `team_${teamId}_recent_fixtures`,
+        auditLogger: options.auditLogger,
+    })
+
+    // 2. Nếu mùa giải hiện tại chưa có trận (e.g. đầu năm), thử mùa giải trước đó
+    if ((!callRes.success || callRes.resultsCount === 0) && !callRes.errorMessage?.includes('suspended')) {
+        const prevYear = currentYear - 1
+        const fallbackRes = await fetchApiFootballDetailed<ApiFootballFixtureItem[]>('fixtures', {
+            params: { team: teamId, season: prevYear, status: 'FT' },
+            ttlSec: TTL_MATCH_RESULTS,
+            forceRefresh: options.forceRefresh,
+            kickoff: options.kickoff,
+            purpose: `team_${teamId}_fallback_prev_season`,
+            auditLogger: options.auditLogger,
+        })
+        if (fallbackRes.success && fallbackRes.resultsCount > 0) {
+            callRes = fallbackRes
+        }
+    }
+
+    if (!callRes.success || !callRes.data || !Array.isArray(callRes.data)) {
+        return {
+            matches: [],
+            excludedMatches: [],
+            fetchedAt,
+            status: callRes.status,
+            errorMessage: callRes.errorMessage,
+        }
+    }
+
+    // Chuyển đổi và phân loại trận đã hoàn thành vs trận bị hoãn/hủy
+    const records: MatchRecord[] = []
+    const excludedMatches: Array<{ id: number; date: string; status: string; teams: string; reason: string }> = []
+
+    for (const item of callRes.data) {
+        const statusShort = (item.fixture?.status?.short || '').toUpperCase()
+        if (['FT', 'AET', 'PEN'].includes(statusShort)) {
+            const rec = fixtureToMatchRecord(item, callRes.fetchedAt)
+            if (rec) records.push(rec)
+        } else if (['PPD', 'CANC', 'ABD', 'AWD', 'WO', 'INT'].includes(statusShort)) {
+            let reason = 'Không hoàn thành'
+            if (statusShort === 'PPD') reason = 'Hoãn thi đấu (Postponed)'
+            else if (statusShort === 'CANC') reason = 'Hủy trận (Cancelled)'
+            else if (statusShort === 'ABD') reason = 'Bị gián đoạn giữa chừng (Abandoned)'
+            excludedMatches.push({
+                id: item.fixture.id,
+                date: item.fixture.date?.split('T')[0] || item.fixture.date,
+                status: statusShort,
+                teams: `${item.teams?.home?.name || 'Home'} vs ${item.teams?.away?.name || 'Away'}`,
+                reason,
+            })
+        }
+    }
+
+    // Sắp xếp thời gian giảm dần (mới nhất lên đầu), lấy tối đa 10 trận
+    records.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    const slice = records.slice(0, 10)
+
+    return {
+        matches: slice,
+        excludedMatches,
+        fetchedAt: callRes.fetchedAt,
+        status: slice.length > 0 ? 'OK' : 'EMPTY',
+    }
+}
+
+/**
+ * Lấy bảng xếp hạng (Standings) từ API-Football:
+ * Chỉ áp dụng cho các giải đấu cấp cao (senior leagues), bỏ qua các giải trẻ/giao hữu không có BXH.
+ */
+export async function getLeagueStandings(
+    leagueId: number,
+    season: number,
+    isSeniorLeague = true,
+    options: {
+        forceRefresh?: boolean
+        auditLogger?: (log: ExternalCallLog) => void
+    } = {},
+): Promise<{
+    data: unknown | null
+    status: ProviderStatusCode
+    errorMessage?: string
+    fetchedAt: string
+}> {
+    const fetchedAt = new Date().toISOString()
+    if (!isSeniorLeague || !leagueId || !season) {
+        return { data: null, status: 'NOT_CALLED', fetchedAt }
+    }
+    const res = await fetchApiFootballDetailed('standings', {
+        params: { league: leagueId, season },
+        ttlSec: TTL_MATCH_RESULTS,
+        forceRefresh: options.forceRefresh,
+        purpose: `league_${leagueId}_standings`,
+        auditLogger: options.auditLogger,
+    })
+    return {
+        data: res.data,
+        status: res.status,
+        errorMessage: res.errorMessage,
+        fetchedAt: res.fetchedAt,
     }
 }
 
@@ -205,18 +773,30 @@ export async function fetchApiFootball<T = unknown>(
  * Tìm kiếm Fixture trên API-Football:
  * 1. Nếu có fixtureId cụ thể: gọi /fixtures?id=...
  * 2. Tìm trong các trận đang Live (/fixtures?live=all)
- * 3. Tìm trong các trận ngày hôm nay (/fixtures?date=YYYY-MM-DD)
- * 4. Tìm kiếm đội bóng (/teams?search=...) rồi lấy H2H
+ * 3. Tìm trong lịch thi đấu ngày kickoff (hoặc hôm nay/hôm qua)
+ * Trả về fixture item kèm các ID định danh để tái sử dụng.
  */
 export async function findFixture(
     home: string,
     away: string,
     preferredFixtureId?: number,
+    options: {
+        kickoff?: string | null
+        forceRefresh?: boolean
+        auditLogger?: (log: ExternalCallLog) => void
+    } = {},
 ): Promise<ApiFootballFixtureItem | null> {
-    // 1. Nếu có ID cụ thể, tra cứu trực tiếp
+    // 1. Nếu có ID cụ thể, tra cứu trực tiếp bằng ID
     if (preferredFixtureId && preferredFixtureId > 0) {
-        const list = await fetchApiFootball<ApiFootballFixtureItem[]>('fixtures', { id: preferredFixtureId }, 30)
-        if (list && list.length > 0) return list[0]
+        const res = await fetchApiFootballDetailed<ApiFootballFixtureItem[]>('fixtures', {
+            params: { id: preferredFixtureId },
+            ttlSec: TTL_LIVE_STATUS,
+            forceRefresh: options.forceRefresh,
+            kickoff: options.kickoff,
+            purpose: `fixture_lookup_id_${preferredFixtureId}`,
+            auditLogger: options.auditLogger,
+        })
+        if (res.success && res.data && res.data.length > 0) return res.data[0]
     }
 
     const cleanHome = home.trim()
@@ -224,9 +804,15 @@ export async function findFixture(
     if (!cleanHome && !cleanAway) return null
 
     // 2. Tra cứu trong các trận đang Live
-    const liveList = await fetchApiFootball<ApiFootballFixtureItem[]>('fixtures', { live: 'all' }, 30)
-    if (liveList && liveList.length > 0) {
-        for (const item of liveList) {
+    const liveRes = await fetchApiFootballDetailed<ApiFootballFixtureItem[]>('fixtures', {
+        params: { live: 'all' },
+        ttlSec: TTL_LIVE_STATUS,
+        forceRefresh: options.forceRefresh,
+        purpose: 'fixtures_live_all',
+        auditLogger: options.auditLogger,
+    })
+    if (liveRes.success && liveRes.data && liveRes.data.length > 0) {
+        for (const item of liveRes.data) {
             const hName = item.teams?.home?.name || ''
             const aName = item.teams?.away?.name || ''
             if (isTeamMatch(cleanHome, hName) && isTeamMatch(cleanAway, aName)) {
@@ -235,11 +821,39 @@ export async function findFixture(
         }
     }
 
-    // 3. Tra cứu trong lịch thi đấu hôm nay
+    // 3. Tra cứu theo ngày kickoff (nếu có ngày kickoff cụ thể)
+    if (options.kickoff) {
+        const kDate = options.kickoff.split('T')[0]
+        const kRes = await fetchApiFootballDetailed<ApiFootballFixtureItem[]>('fixtures', {
+            params: { date: kDate },
+            ttlSec: TTL_MATCH_RESULTS,
+            forceRefresh: options.forceRefresh,
+            kickoff: options.kickoff,
+            purpose: `fixtures_date_${kDate}`,
+            auditLogger: options.auditLogger,
+        })
+        if (kRes.success && kRes.data && kRes.data.length > 0) {
+            for (const item of kRes.data) {
+                const hName = item.teams?.home?.name || ''
+                const aName = item.teams?.away?.name || ''
+                if (isTeamMatch(cleanHome, hName) && isTeamMatch(cleanAway, aName)) {
+                    return item
+                }
+            }
+        }
+    }
+
+    // 4. Tra cứu trong lịch thi đấu hôm nay
     const today = new Date().toISOString().split('T')[0]
-    const todayList = await fetchApiFootball<ApiFootballFixtureItem[]>('fixtures', { date: today }, 60)
-    if (todayList && todayList.length > 0) {
-        for (const item of todayList) {
+    const todayRes = await fetchApiFootballDetailed<ApiFootballFixtureItem[]>('fixtures', {
+        params: { date: today },
+        ttlSec: 60,
+        forceRefresh: options.forceRefresh,
+        purpose: `fixtures_date_today`,
+        auditLogger: options.auditLogger,
+    })
+    if (todayRes.success && todayRes.data && todayRes.data.length > 0) {
+        for (const item of todayRes.data) {
             const hName = item.teams?.home?.name || ''
             const aName = item.teams?.away?.name || ''
             if (isTeamMatch(cleanHome, hName) && isTeamMatch(cleanAway, aName)) {
@@ -248,11 +862,17 @@ export async function findFixture(
         }
     }
 
-    // 4. Tra cứu theo ngày hôm qua (cho các trận vừa kết thúc cần đối soát)
+    // 5. Tra cứu theo ngày hôm qua
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0]
-    const yesterdayList = await fetchApiFootball<ApiFootballFixtureItem[]>('fixtures', { date: yesterday }, 120)
-    if (yesterdayList && yesterdayList.length > 0) {
-        for (const item of yesterdayList) {
+    const yesterdayRes = await fetchApiFootballDetailed<ApiFootballFixtureItem[]>('fixtures', {
+        params: { date: yesterday },
+        ttlSec: 120,
+        forceRefresh: options.forceRefresh,
+        purpose: `fixtures_date_yesterday`,
+        auditLogger: options.auditLogger,
+    })
+    if (yesterdayRes.success && yesterdayRes.data && yesterdayRes.data.length > 0) {
+        for (const item of yesterdayRes.data) {
             const hName = item.teams?.home?.name || ''
             const aName = item.teams?.away?.name || ''
             if (isTeamMatch(cleanHome, hName) && isTeamMatch(cleanAway, aName)) {
@@ -262,6 +882,70 @@ export async function findFixture(
     }
 
     return null
+}
+
+/**
+ * Lấy thông tin đội hình (Lineups) của trận đấu từ API-Football
+ */
+export async function getFixtureLineups(
+    fixtureId: number,
+    options: {
+        forceRefresh?: boolean
+        kickoff?: string | null
+        auditLogger?: (log: ExternalCallLog) => void
+    } = {},
+): Promise<{
+    data: unknown | null
+    status: ProviderStatusCode
+    errorMessage?: string
+    fetchedAt: string
+}> {
+    const res = await fetchApiFootballDetailed('fixtures/lineups', {
+        params: { fixture: fixtureId },
+        ttlSec: TTL_LINEUPS_INJURIES,
+        forceRefresh: options.forceRefresh,
+        kickoff: options.kickoff,
+        purpose: `fixture_${fixtureId}_lineups`,
+        auditLogger: options.auditLogger,
+    })
+    return {
+        data: res.data,
+        status: res.status,
+        errorMessage: res.errorMessage,
+        fetchedAt: res.fetchedAt,
+    }
+}
+
+/**
+ * Lấy thông tin danh sách chấn thương (Injuries) của trận đấu từ API-Football
+ */
+export async function getFixtureInjuries(
+    fixtureId: number,
+    options: {
+        forceRefresh?: boolean
+        kickoff?: string | null
+        auditLogger?: (log: ExternalCallLog) => void
+    } = {},
+): Promise<{
+    data: unknown | null
+    status: ProviderStatusCode
+    errorMessage?: string
+    fetchedAt: string
+}> {
+    const res = await fetchApiFootballDetailed('injuries', {
+        params: { fixture: fixtureId },
+        ttlSec: TTL_LINEUPS_INJURIES,
+        forceRefresh: options.forceRefresh,
+        kickoff: options.kickoff,
+        purpose: `fixture_${fixtureId}_injuries`,
+        auditLogger: options.auditLogger,
+    })
+    return {
+        data: res.data,
+        status: res.status,
+        errorMessage: res.errorMessage,
+        fetchedAt: res.fetchedAt,
+    }
 }
 
 /**
@@ -726,31 +1410,71 @@ export async function getMatchLiveStatus(
     }
 }
 
+export interface DetailedH2HResult extends H2HResult {
+    matches: MatchRecord[]
+    status: ProviderStatusCode
+    errorMessage?: string
+    fetchedAt: string
+}
+
 /**
  * Lấy lịch sử đối đầu (H2H) từ API-Football:
  * Endpoint: /fixtures/headtohead?h2h={team1}-{team2}
  */
-export async function getFixtureH2H(team1Id: number, team2Id: number): Promise<H2HResult> {
-    const emptyResult: H2HResult = {
+export async function getFixtureH2H(
+    team1Id: number,
+    team2Id: number,
+    options: {
+        kickoff?: string | null
+        forceRefresh?: boolean
+        auditLogger?: (log: ExternalCallLog) => void
+    } = {},
+): Promise<DetailedH2HResult> {
+    const fetchedAt = new Date().toISOString()
+    const emptyResult: DetailedH2HResult = {
         eventId: 0,
         events: [],
+        matches: [],
         h2hText: 'THỰC TẾ LỊCH SỬ ĐỐI ĐẦU (H2H API-Football):\n- Chưa có dữ liệu đối đầu gần đây trên API-Football.',
         n: 0,
         avgGoals: 0,
         bttsRate: 0,
+        status: 'EMPTY',
+        fetchedAt,
     }
 
-    if (!team1Id || !team2Id) return emptyResult
+    if (!team1Id || !team2Id) {
+        return { ...emptyResult, status: 'NOT_CALLED' }
+    }
 
     const pair = `${team1Id}-${team2Id}`
-    const rawEvents = await fetchApiFootball<ApiFootballFixtureItem[]>('fixtures/headtohead', { h2h: pair }, 3600)
-    const list = (rawEvents || []).slice(0, 10)
+    const callRes = await fetchApiFootballDetailed<ApiFootballFixtureItem[]>('fixtures/headtohead', {
+        params: { h2h: pair },
+        ttlSec: TTL_MATCH_RESULTS,
+        forceRefresh: options.forceRefresh,
+        kickoff: options.kickoff,
+        purpose: `h2h_${team1Id}_vs_${team2Id}`,
+        auditLogger: options.auditLogger,
+    })
 
-    if (list.length === 0) return emptyResult
+    if (!callRes.success || !callRes.data || !Array.isArray(callRes.data)) {
+        return {
+            ...emptyResult,
+            status: callRes.status,
+            errorMessage: callRes.errorMessage,
+            fetchedAt: callRes.fetchedAt,
+        }
+    }
+
+    const list = callRes.data.slice(0, 10)
+    if (list.length === 0) {
+        return { ...emptyResult, status: 'EMPTY', fetchedAt: callRes.fetchedAt }
+    }
 
     let totalGoals = 0
     let bttsCount = 0
     const lines: string[] = ['THỰC TẾ LỊCH SỬ ĐỐI ĐẦU (H2H API-Football):']
+    const matches: MatchRecord[] = []
 
     for (const item of list) {
         const dateStr = item.fixture?.date ? item.fixture.date.split('T')[0] : 'Gần đây'
@@ -769,6 +1493,9 @@ export async function getFixtureH2H(team1Id: number, team2Id: number): Promise<H
         }
 
         lines.push(`- ${dateStr} ${league}: ${hName} ${ftHome} - ${ftAway} ${aName} (HT: ${htHome} - ${htAway})`)
+
+        const rec = fixtureToMatchRecord(item, callRes.fetchedAt)
+        if (rec) matches.push(rec)
     }
 
     const n = list.length
@@ -778,10 +1505,13 @@ export async function getFixtureH2H(team1Id: number, team2Id: number): Promise<H
     return {
         eventId: list[0]?.fixture?.id || 0,
         events: list,
+        matches,
         h2hText: lines.join('\n'),
         n,
         avgGoals,
         bttsRate,
+        status: 'OK',
+        fetchedAt: callRes.fetchedAt,
     }
 }
 
@@ -814,4 +1544,39 @@ export async function searchFootballMatch(
     }
 
     return null
+}
+
+/**
+ * Kiểm tra kết nối API-Football (dùng cho nút Self-Test).
+ */
+export async function testApiFootballConnection(): Promise<{
+    success: boolean
+    latencyMs: number
+    quota?: ApiFootballQuota
+    error?: string
+}> {
+    const startTime = Date.now()
+    try {
+        const res = await fetchApiFootballDetailed('status', { ttlSec: 0, forceRefresh: true, purpose: 'self_test' })
+        if (!res.success) {
+            return {
+                success: false,
+                latencyMs: Date.now() - startTime,
+                quota: getApiFootballQuota(),
+                error: res.errorMessage || 'Không thể kết nối API-Football',
+            }
+        }
+        return {
+            success: true,
+            latencyMs: Date.now() - startTime,
+            quota: getApiFootballQuota(),
+        }
+    } catch (e) {
+        return {
+            success: false,
+            latencyMs: Date.now() - startTime,
+            quota: getApiFootballQuota(),
+            error: e instanceof Error ? e.message : String(e),
+        }
+    }
 }

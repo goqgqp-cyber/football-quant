@@ -29,6 +29,7 @@ export interface HistoryRecord {
         } | null
     }
     fixtureId?: number | null
+    fixtureIdentity?: import('../src/lib/types.js').FixtureIdentity
     homeTeam?: string
     awayTeam?: string
     kickoffTimestamp?: number | null
@@ -76,6 +77,7 @@ export async function saveHistory(
             createdAt: existing.createdAt,
             picks: qualifiedPicks,
             fixtureId: targetFixId ? Number(targetFixId) : existing.fixtureId,
+            fixtureIdentity: record.fixtureIdentity || existing.fixtureIdentity,
             homeTeam: record.homeTeam || record.meta.home,
             awayTeam: record.awayTeam || record.meta.away,
             kickoffTimestamp: record.kickoffTimestamp || existing.kickoffTimestamp,
